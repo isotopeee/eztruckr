@@ -24,6 +24,7 @@ import {
   TPC_WITHOUT_BROKER_MESSAGE,
   type AssignCrewInput,
   type CreateShipmentInput,
+  type GasRateContext,
   type Page,
   type SetGasRateOverrideInput,
   type Shipment,
@@ -294,10 +295,13 @@ export class ShipmentsService {
   /**
    * Records a per-shipment gas deduction rate, or clears it.
    *
-   * Stored on `appliedGasDeductionRate`, the same column the computation
-   * freezes into. Before computation it reads as "the rate this trip will
-   * use"; afterwards it is the rate it did use. `gasRateOverrideReason` being
-   * set is what distinguishes an override from the frozen default.
+   * Writes the INPUT column only. `appliedGasDeductionRate` is an output and
+   * belongs to the engine — setting an override does not retroactively change
+   * what an earlier computation used, and the shipment will report itself
+   * stale until somebody recomputes.
+   *
+   * A null rate clears the override and the reason together; the schema
+   * refuses either one alone, and a CHECK backs that up in the database.
    */
   async setGasRateOverride(id: string, input: SetGasRateOverrideInput): Promise<Shipment> {
     const current = await this.load(id);
@@ -308,7 +312,7 @@ export class ShipmentsService {
       await this.shipments.update({
         where: { id },
         data: {
-          appliedGasDeductionRate: input.rate,
+          gasRateOverride: input.rate,
           gasRateOverrideReason: input.reason,
         },
         include: SHIPMENT_INCLUDE,
@@ -316,14 +320,15 @@ export class ShipmentsService {
     );
   }
 
-  /** The gas rate a shipment will use, and the default it is measured against. */
-  async gasRateContext(id: string): Promise<{
-    systemDefault: string;
-    applied: string;
-    isOverride: boolean;
-    reason: string | null;
-    frozen: boolean;
-  }> {
+  /**
+   * The three rates that matter to this shipment, kept distinct.
+   *
+   * `effective` is what the next computation WILL use; `frozen` is what the
+   * last one DID. They differ whenever the override changed after computing,
+   * which is exactly the moment a screen needs to say so rather than showing
+   * one number and hoping it is the right one.
+   */
+  async gasRateContext(id: string): Promise<GasRateContext> {
     const shipment = await this.load(id);
     const setting = await this.prisma.client.systemSetting.findFirst({
       where: { id: 'singleton' },
@@ -331,14 +336,15 @@ export class ShipmentsService {
     });
 
     const systemDefault = setting?.gasExpenseDeductionRate.toString() ?? '0.2500';
-    const override = decimalToString(shipment.appliedGasDeductionRate);
+    const override = decimalToString(shipment.gasRateOverride);
 
     return {
       systemDefault,
-      applied: override ?? systemDefault,
-      isOverride: shipment.gasRateOverrideReason !== null,
+      override,
       reason: shipment.gasRateOverrideReason,
-      frozen: shipment.commissionsComputedAt !== null,
+      isOverride: override !== null,
+      effective: override ?? systemDefault,
+      frozen: decimalToString(shipment.appliedGasDeductionRate),
     };
   }
 
@@ -654,8 +660,9 @@ export function toShipment(row: ShipmentRow): Shipment {
     netRate: row.netRate.toString(),
     appliedTpcRate: decimalToString(row.appliedTpcRate),
 
-    appliedGasDeductionRate: decimalToString(row.appliedGasDeductionRate),
+    gasRateOverride: decimalToString(row.gasRateOverride),
     gasRateOverrideReason: row.gasRateOverrideReason,
+    appliedGasDeductionRate: decimalToString(row.appliedGasDeductionRate),
     commissionableCharges: decimalToString(row.commissionableCharges),
     grossForCommission: decimalToString(row.grossForCommission),
     gasDeductionAmount: decimalToString(row.gasDeductionAmount),

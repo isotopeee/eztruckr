@@ -231,27 +231,23 @@ export class CommissionService {
 
   /**
    * The per-shipment override if one was recorded, otherwise the system-wide
-   * default. Whichever it is gets frozen onto the shipment by the caller, so a
-   * later change to the setting cannot move this trip's base.
+   * default. Whichever it is gets frozen onto `appliedGasDeductionRate` by the
+   * caller, so a later change to the setting cannot move this trip's base.
    *
-   * THE SUBTLETY IS ON RECOMPUTE. `appliedGasDeductionRate` is both the
-   * override a user set beforehand and the value frozen afterwards, so after
-   * one computation the column alone cannot say which it is.
-   * `gasRateOverrideReason` can: it is non-null only for a deliberate
-   * override, because the API refuses one without a reason.
+   * Reads the INPUT column, never the frozen output. That is what makes this
+   * correct on a recompute: a deliberate override survives, because it is
+   * still sitting in `gasRateOverride`, while a shipment that simply took the
+   * default picks up today's default rather than the copy frozen last time.
+   * A corrected system rate can therefore reach a shipment when somebody asks
+   * for it, and only then.
    *
-   * So an override survives a recompute, and a frozen copy of the default does
-   * not — it is re-read. Freezing still holds, because the frozen value never
-   * moves on its own; it moves only when somebody explicitly asks for the
-   * commissions to be computed again, which is the one moment they are asking
-   * for today's inputs. The alternative would mean a corrected system rate
-   * could never reach a shipment, even on request.
+   * These were one column until the split migration, with the reason string
+   * left to tell the two cases apart. Reading the input directly means the
+   * distinction is structural and this method no longer has to infer it.
    */
   private async resolveGasDeductionRate(shipment: ShipmentWithChain): Promise<string> {
-    const isDeliberateOverride = shipment.gasRateOverrideReason !== null;
-
-    if (isDeliberateOverride && shipment.appliedGasDeductionRate !== null) {
-      return shipment.appliedGasDeductionRate.toString();
+    if (shipment.gasRateOverride !== null) {
+      return shipment.gasRateOverride.toString();
     }
 
     const setting = await this.prisma.client.systemSetting.findFirst({

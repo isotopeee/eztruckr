@@ -96,11 +96,17 @@ export function RateChainCard({ shipment }: { shipment: Shipment }) {
                 label="Gas expense deduction"
                 value={shipment.gasDeductionAmount}
                 operator="−"
+                // The rate this computation used, stated plainly and nothing
+                // more. It deliberately does NOT say whether that rate came
+                // from an override: `gasRateOverrideReason` describes the
+                // override in force *now*, which may have been set after this
+                // computation ran, so annotating from it would be a claim this
+                // card cannot substantiate. The gas card below owns that
+                // distinction, and shows the frozen and effective rates side
+                // by side when they differ.
                 note={
                   shipment.appliedGasDeductionRate
-                    ? `${formatRate(shipment.appliedGasDeductionRate)}${
-                        shipment.gasRateOverrideReason ? ', overridden' : ''
-                      }`
+                    ? formatRate(shipment.appliedGasDeductionRate)
                     : undefined
                 }
               />

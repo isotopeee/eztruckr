@@ -197,7 +197,17 @@ at display time via `formatDateTime` in `apps/web/src/lib/format.ts`.
 When a commission is computed, the rate values actually used are copied onto the
 shipment and the commission, so a later edit to a setting or a rule can never
 retroactively alter a figure already computed. Anything named `applied*` is one
-of these frozen copies.
+of these frozen copies, written only by the engine and never by a request.
+
+Inputs and outputs stay in separate columns even when they hold the same kind
+of value. `Shipment.gasRateOverride` is what somebody asked this trip to use;
+`Shipment.appliedGasDeductionRate` is what the engine froze. They were briefly
+one column, with the reason string left to tell the two apart — which decoded
+correctly but could not be enforced by a CHECK, because the database had the
+same missing information. Splitting them made
+`shipment_gas_rate_override_needs_reason` expressible, and let recomputation
+resolve the rate as `gasRateOverride ?? systemDefault` instead of inferring
+intent from whether an explanation happened to be present.
 
 A commission rule is flat per role and scope: a rate, a fixed amount, or a
 formula, chosen by its method. Rates that vary by trip value in _bands_ are

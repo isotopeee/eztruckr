@@ -723,13 +723,35 @@ model Shipment {
   /// agreed as a flat amount. Frozen at computation.
   appliedTpcRate Decimal? @db.Decimal(5, 4)
 
+  // --- the gas deduction rate: one input, one output --------------------
+  //
+  // These are deliberately separate columns, and the separation is the point.
+  // They were briefly one: `appliedGasDeductionRate` served as both the rate a
+  // person had asked for and the rate the engine froze, with
+  // `gasRateOverrideReason` left to disambiguate the two. That encoding worked
+  // but was a convention rather than a constraint — no CHECK could enforce it,
+  // because the database had the same missing information — and it made
+  // recomputation depend on whether a reason string happened to be present.
+  // Money behaviour should not rest on that.
+
+  /// INPUT. What somebody deliberately asked this shipment to use, instead of
+  /// the system-wide default. Null means "use the default".
+  ///
+  /// A reason is mandatory alongside it and a CHECK requires the two to travel
+  /// together: an unexplained override is indistinguishable from a typo when
+  /// somebody reviews the payout months later, and this rate moves the
+  /// commission base for every crew member on the trip.
+  gasRateOverride       Decimal? @db.Decimal(5, 4)
+  gasRateOverrideReason String?
+
   // --- commission inputs, frozen at computation time --------------------
-  /// The gas deduction rate actually used. Copied from SystemSetting, or from
-  /// a per-shipment override.
+  /// OUTPUT. The rate the last computation actually used — the override above
+  /// if there was one, otherwise the system default as it stood at that
+  /// moment. Null until commissions are computed.
+  ///
+  /// Like every other applied* column, this is written only by the engine and
+  /// never by a request.
   appliedGasDeductionRate Decimal? @db.Decimal(5, 4)
-  /// Required by the service layer whenever appliedGasDeductionRate differs
-  /// from the system default.
-  gasRateOverrideReason   String?
 
   // --- commission chain; every step stored, each rounded to 2dp ----------
   /// Sum of billable expenses and additional charges flagged commissionable.

@@ -39,7 +39,7 @@ export function GasRateOverrideCard({ shipment }: { shipment: Shipment }) {
 
   useEffect(() => {
     if (!context.data) return;
-    setRate(context.data.isOverride ? context.data.applied : '');
+    setRate(context.data.override ?? '');
     setReason(context.data.reason ?? '');
   }, [context.data]);
 
@@ -80,13 +80,32 @@ export function GasRateOverrideCard({ shipment }: { shipment: Shipment }) {
             <dl className="grid grid-cols-2 gap-2">
               <dt className="text-muted-foreground">System default</dt>
               <dd className="tabular-nums">{formatRate(data.systemDefault)}</dd>
-              <dt className="text-muted-foreground">Applied to this shipment</dt>
+
+              <dt className="text-muted-foreground">This shipment will use</dt>
               <dd className="tabular-nums">
-                {formatRate(data.applied)}
+                {formatRate(data.effective)}
                 {data.isOverride ? (
                   <span className="text-muted-foreground ml-2 text-xs">overridden</span>
                 ) : null}
               </dd>
+
+              {/* Shown separately because it can differ from the line above:
+                  changing the override after computing leaves the frozen rate
+                  behind until somebody recomputes. Collapsing the two would
+                  make the card quietly wrong about one of them. */}
+              {data.frozen !== null ? (
+                <>
+                  <dt className="text-muted-foreground">Last computed with</dt>
+                  <dd className="tabular-nums">
+                    {formatRate(data.frozen)}
+                    {data.frozen !== data.effective ? (
+                      <span className="ml-2 text-xs text-amber-600">
+                        recompute to apply {formatRate(data.effective)}
+                      </span>
+                    ) : null}
+                  </dd>
+                </>
+              ) : null}
             </dl>
 
             {data.isOverride && data.reason ? (

@@ -294,6 +294,88 @@ describe('code CHECK constraints', () => {
     ).rejects.toThrow();
   });
 
+  /**
+   * The gas rate override and its reason must travel together.
+   *
+   * This pair used to be one column plus a convention: `appliedGasDeductionRate`
+   * held both the requested rate and the frozen result, and the reason string
+   * was the only thing distinguishing them. No CHECK could enforce that,
+   * because the database had the same missing information — so an override
+   * written without a reason would silently read as a frozen default and be
+   * overwritten on the next recompute, paying the crew a different figure.
+   *
+   * Splitting the input from the output made the rule expressible. These two
+   * assertions are what "structural rather than conventional" actually buys:
+   * the guarantee now holds against raw SQL, not just against the one endpoint
+   * that happens to validate it.
+   */
+  it('refuses a gas rate override with no reason', async () => {
+    if (!available) return;
+
+    await expect(
+      withActor({ userId: adminId }, async () =>
+        prisma.shipment.create({
+          data: {
+            id: testId('sd-override-noreason'),
+            shipmentNumber: testId('SD-ONR'),
+            clientId,
+            origin: 'Manila',
+            destination: 'Clark',
+            grossRate: '15000.0000',
+            gasRateOverride: '0.3000',
+            gasRateOverrideReason: null,
+          },
+        }),
+      ),
+    ).rejects.toThrow(/gas_rate_override_needs_reason/i);
+  });
+
+  it('refuses a reason with no gas rate override', async () => {
+    if (!available) return;
+
+    await expect(
+      withActor({ userId: adminId }, async () =>
+        prisma.shipment.create({
+          data: {
+            id: testId('sd-reason-norate'),
+            shipmentNumber: testId('SD-RNR'),
+            clientId,
+            origin: 'Manila',
+            destination: 'Clark',
+            grossRate: '15000.0000',
+            gasRateOverride: null,
+            gasRateOverrideReason: 'orphaned explanation',
+          },
+        }),
+      ),
+    ).rejects.toThrow(/gas_rate_override_needs_reason/i);
+  });
+
+  it('leaves the frozen applied rate free of that pairing rule', async () => {
+    if (!available) return;
+
+    // The output column is written by the engine on every computation,
+    // including the ordinary case where no override existed. Tying it to a
+    // reason would make the common path impossible.
+    const shipment = await withActor({ userId: adminId }, async () =>
+      prisma.shipment.create({
+        data: {
+          id: testId('sd-frozen-default'),
+          shipmentNumber: testId('SD-FRZ'),
+          clientId,
+          origin: 'Manila',
+          destination: 'Clark',
+          grossRate: '15000.0000',
+          appliedGasDeductionRate: '0.2500',
+        },
+      }),
+    );
+
+    expect(shipment.appliedGasDeductionRate?.toString()).toBe('0.25');
+    expect(shipment.gasRateOverride).toBeNull();
+    expect(shipment.gasRateOverrideReason).toBeNull();
+  });
+
   it('rejects an invalid crew role inside the eligibleRoles array', async () => {
     if (!available) return;
 

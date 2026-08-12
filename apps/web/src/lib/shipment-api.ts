@@ -6,6 +6,7 @@ import type {
   CreateAdditionalChargeInput,
   CreateBillableExpenseInput,
   CreateShipmentInput,
+  GasRateContext,
   Page,
   RuleCoverageReport,
   Shipment,
@@ -38,14 +39,6 @@ export interface ShipmentFilters {
   page: number;
   search: string;
   status?: ShipmentStatus;
-}
-
-export interface GasRateContext {
-  systemDefault: string;
-  applied: string;
-  isOverride: boolean;
-  reason: string | null;
-  frozen: boolean;
 }
 
 export function listShipments(filters: ShipmentFilters): Promise<Page<Shipment>> {

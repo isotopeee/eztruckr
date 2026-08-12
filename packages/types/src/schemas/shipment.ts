@@ -109,9 +109,13 @@ export const shipmentSchema = auditFieldsSchema.extend({
   netRate: z.string(),
   appliedTpcRate: z.string().nullable(),
 
-  // The commission chain. Null until commissions are computed.
-  appliedGasDeductionRate: z.string().nullable(),
+  /** Input: the rate somebody asked this trip to use. Null means the default. */
+  gasRateOverride: z.string().nullable(),
   gasRateOverrideReason: z.string().nullable(),
+
+  // The commission chain. Null until commissions are computed.
+  /** Output: the rate the last computation actually used. */
+  appliedGasDeductionRate: z.string().nullable(),
   commissionableCharges: z.string().nullable(),
   grossForCommission: z.string().nullable(),
   gasDeductionAmount: z.string().nullable(),
@@ -225,6 +229,29 @@ export const transitionShipmentSchema = z.object({
 export type TransitionShipmentInput = z.infer<typeof transitionShipmentSchema>;
 
 /**
+ * The gas rate as it stands on one shipment.
+ *
+ * Three separate numbers, deliberately not collapsed into one: what the
+ * company uses by default, what this trip was told to use, and what the last
+ * computation actually used. The last two diverge whenever an override is
+ * changed after computing, and a screen that showed a single "rate" would have
+ * to pick one and be silently wrong about the other.
+ */
+export const gasRateContextSchema = z.object({
+  systemDefault: z.string(),
+  /** Null when this shipment simply takes the default. */
+  override: z.string().nullable(),
+  reason: z.string().nullable(),
+  isOverride: z.boolean(),
+  /** What the next computation will use: override, or the default. */
+  effective: z.string(),
+  /** What the last computation did use. Null until commissions are computed. */
+  frozen: z.string().nullable(),
+});
+
+export type GasRateContext = z.infer<typeof gasRateContextSchema>;
+
+/**
  * Overriding the gas deduction rate for one shipment.
  *
  * A reason is mandatory, and that is the whole point of the endpoint: the rate
@@ -232,6 +259,10 @@ export type TransitionShipmentInput = z.infer<typeof transitionShipmentSchema>;
  * unexplained override is indistinguishable from a typo when someone reviews
  * the payout months later. Sending a null rate reverts to the system default
  * and clears the reason with it.
+ *
+ * Both halves of that rule are also a database CHECK
+ * (`shipment_gas_rate_override_needs_reason`), so the pairing survives any
+ * write path, not just this one.
  */
 export const setGasRateOverrideSchema = z
   .object({

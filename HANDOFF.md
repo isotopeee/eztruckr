@@ -325,9 +325,11 @@ wrong. It is on the detail response only; the list does not pay for the extra qu
 
 A second, related bug: `resolveGasDeductionRate` read the frozen
 `appliedGasDeductionRate` on recompute, so a corrected system default could never reach a
-shipment. `gasRateOverrideReason` distinguishes a deliberate override (survives recompute)
-from a frozen copy of the default (re-read). Freezing still holds — the value only moves
-when somebody explicitly asks for recomputation.
+shipment. The first fix branched on `gasRateOverrideReason`; **the column was then split
+into an input and an output** (see resolved question 7), so resolution is now
+`gasRateOverride ?? systemDefault` and the distinction is structural rather than inferred
+from a reason string. Freezing still holds — `appliedGasDeductionRate` only moves when
+somebody explicitly asks for recomputation.
 
 ### The two coverage gaps from Phase 3, closed
 
@@ -374,13 +376,13 @@ visible, own detail 200, colleague's commissions 403, all writes 403.
 ## Current verified state (end of Phase 4)
 
 - **`pnpm run check`**: 14/14 tasks passing, uncached.
-- **187 tests**, all passing (was 82):
+- **190 tests**, all passing (was 82):
 
-  | Workspace        | Count | Added in Phase 4                                       |
-  | ---------------- | ----- | ------------------------------------------------------ |
-  | `packages/types` | 67    | `formula-syntax` [47] — mostly what the parser REFUSES |
-  | `packages/db`    | 41    | unchanged; drift guard now confirms status codes 1–7   |
-  | `apps/api`       | 79    | `commission-engine` [38], `formula-evaluator` [19]     |
+  | Workspace        | Count | Added in Phase 4                                                                   |
+  | ---------------- | ----- | ---------------------------------------------------------------------------------- |
+  | `packages/types` | 67    | `formula-syntax` [47] — mostly what the parser REFUSES                             |
+  | `packages/db`    | 44    | drift guard now confirms status codes 1–7; 3 assert the gas-override pairing CHECK |
+  | `apps/api`       | 79    | `commission-engine` [38], `formula-evaluator` [19]                                 |
 
 - **The brief's required assertions pass, in unit tests and again live:**
   - `netRate 16200`, no commissionable charges, gas 25% → gasDeduction **4050.00**, base
@@ -408,10 +410,10 @@ visible, own detail 200, colleague's commissions 403, all writes 403.
   worksheet, the FORMULA commission showing its frozen expression and resolved field
   values, the gas override showing 30% against the 25% system default with its reason,
   and both charge lists.
-- `prisma migrate status`: 6 migrations applied, no drift. Seed still idempotent.
+- `prisma migrate status`: 7 migrations applied, no drift. Seed still idempotent.
 - **The migration chain was replayed from scratch** into a throwaway database
-  (`eztruckr_migrationtest`, since dropped) — worth doing because Phase 4's migration is
-  largely hand-written SQL. All six applied cleanly and the invariants held on a virgin
+  (`eztruckr_migrationtest`, since dropped) — worth doing because Phase 4's migrations are
+  largely hand-written SQL. All seven applied cleanly and the invariants held on a virgin
   schema: 0 enum types, 0 float columns, 0 naive timestamps, 26 tables, 5 payout
   triggers, 16 partial unique indexes, 21 `_created_by_required` CHECKs,
   `shipment_status_code_valid` accepting 1–7, and `commission.appliedRate` as
@@ -421,7 +423,8 @@ visible, own detail 200, colleague's commissions 403, all writes 403.
 
 Phase 4 verification created rows in the local Postgres. A fresh volume is unaffected.
 
-- `SH-2026-0001`, closed, with commissions and one additional charge.
+- `SH-2026-0001`, closed, with commissions and one additional charge, and `SH-2026-0002`,
+  pending liquidation — used to prove the gas-rate split end to end.
 - A client-scoped FORMULA rule (`Northport driver formula`) and a replacement
   `Default helper commission` rule — the seeded original was soft-deleted while proving
   the removal guard.
@@ -518,12 +521,31 @@ Phase 5 is allowance, liquidation and receipts. Everything it depends on exists.
 
 ### New in Phase 4, worth your confirmation
 
-7. **The gas override reuses `appliedGasDeductionRate`.** There is no separate
-   "requested override" column, so before computation that field means "the rate this
-   trip will use" and afterwards "the rate it did use". `gasRateOverrideReason` is what
-   distinguishes a deliberate override from a frozen copy of the default, and the API
-   makes the reason mandatory precisely so that stays true. It works, but if you would
-   rather the two concepts were separate columns, now is the cheap moment.
+7. ~~**The gas override reuses `appliedGasDeductionRate`.**~~ — **RESOLVED (user
+   decision): split into an input and an output.** Migration
+   `20260812181020_split_gas_rate_override_from_applied`.
+
+   The single column held both the rate a person asked for and the rate the engine
+   froze, with `gasRateOverrideReason` left to tell them apart. That decoded correctly
+   but only by convention — **no CHECK could enforce it, because Postgres had the same
+   missing information** — and it made recomputation depend on a reason _string_ being
+   present. Any future write path setting a rate without a reason would have turned an
+   override into a "frozen default" and had it overwritten on the next recompute, paying
+   the crew a different figure with nothing raising.
+
+   Now: `gasRateOverride` (input, what somebody asked for) · `gasRateOverrideReason`
+   (why) · `appliedGasDeductionRate` (output, what the engine froze — like every other
+   `applied*` column, written only by the engine). Resolution collapses to
+   `gasRateOverride ?? systemDefault` with no branching on the reason, and
+   `shipment_gas_rate_override_needs_reason` enforces the pairing **in both directions**
+   against raw SQL, not just at the endpoint that validates it. Backfilled from the
+   reason column; the one existing shipment came through correctly.
+
+   `GET /shipments/:id/gas-rate` now returns `systemDefault`, `override`, `effective`
+   (what the next computation will use) and `frozen` (what the last one did) as separate
+   fields, because the last two diverge whenever the override or the system default
+   changes after computing. The card shows both and prompts a recompute when they differ.
+
 8. **`Commission.appliedRate` is nullable and no longer bounded to `[0,1]` for the fixed
    and formula methods.** See the schema section above. The alternative was refusing to
    record a legitimate flat fee on a zero-rated backhaul because the _reporting_ rate is
