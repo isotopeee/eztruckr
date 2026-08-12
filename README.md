@@ -5,10 +5,11 @@ freight rates, third-party broker commissions, crew assignment, cash advances
 and liquidation, client charges, crew commissions, commission payouts, and
 profit and loss.
 
-> **Status: Phase 3 (Auth and master data).** The monorepo, containers and both
-> apps are up, the complete domain schema is migrated and seeded, and you can
-> sign in and manage every master data table with role-based access. Still to
-> come: the commission engine, shipments and liquidation, and payouts.
+> **Status: Phase 4 (Shipments and the money engine).** The monorepo, containers
+> and both apps are up, the complete domain schema is migrated and seeded, and
+> you can sign in, manage master data, book and dispatch a shipment, record its
+> charges, and compute crew commissions against any of five commission methods.
+> Still to come: allowance and liquidation, payout runs, and P&L.
 
 ---
 
@@ -198,8 +199,10 @@ shipment and the commission, so a later edit to a setting or a rule can never
 retroactively alter a figure already computed. Anything named `applied*` is one
 of these frozen copies.
 
-Commission rates are flat per role and scope. Rates that vary by trip value are
-deliberately not supported.
+A commission rule is flat per role and scope: a rate, a fixed amount, or a
+formula, chosen by its method. Rates that vary by trip value in _bands_ are
+deliberately not supported — a `FORMULA` rule can express a value-dependent
+amount arithmetically, but there is no tiered-band feature.
 
 ### Enumerated values are integer codes, not Postgres enums
 
@@ -410,5 +413,56 @@ tables with reference-aware removal; admin-only system settings with a change
 history written to `AuditLog`; and the web app — login, role-aware app shell,
 management screens and a crew portal.
 
-Not yet built: Better Auth, roles and crew scoping, and the domain model
-(shipments, crew, charges, liquidation, commissions, payout runs, P&L).
+## Phase 4 scope
+
+Built: shipment CRUD with the gross → TPC → net rate chain; the status
+lifecycle; crew assignment with driver-licence validation; billable expenses
+and additional charges with commissionable flags; the per-shipment gas
+deduction override; and the commission engine — five methods behind one
+dispatch table, rule resolution with no fallback, and every applied rate frozen
+onto the rows it produced.
+
+Not yet built: allowance and liquidation (Phase 5), payout runs, and P&L.
+
+### The commission formula language
+
+A `CommissionRule` using the `FORMULA` method carries an expression over a fixed
+catalog of shipment fields, e.g. `commissionable_base * 0.15`.
+
+**This is a security boundary and is treated as one.** The expression is parsed
+by hand into an AST and walked — never handed to `eval`, `Function`, `vm`, or
+any third-party evaluator. The entire grammar is:
+
+```
+expression := term (('+' | '-') term)*
+term       := factor (('*' | '/') factor)*
+factor     := '-' factor | primary
+primary    := NUMBER | FIELD | '(' expression ')'
+```
+
+There are no function calls, no property access, no strings, and no identifier
+outside the catalog. Anything else is rejected **at save time**, with a message
+naming the offending token, so a rule that failed to parse is never stored.
+
+Fields: `gross_rate`, `tpc_amount`, `net_rate`, `billable_expenses`,
+`additional_charges`, `commissionable_charges`, `gas_deduction_rate`,
+`gas_deduction_amount`, `commissionable_base`. `GET /api/commissions/formula-fields`
+serves them with descriptions.
+
+**The double-counting trap.** `commissionable_base` already has the gas
+deduction applied — subtracting `gas_deduction_amount` from it deducts fuel
+twice, and no evaluator can tell that apart from a deliberate choice. Likewise
+`commissionable_charges` is a _subset_ of the two charge totals, not a third
+category. Composing a correct expression is the rule author's job; the catalog
+descriptions exist so the trap is visible where they write it.
+
+Arithmetic is exact. The evaluator walks the AST in BigInt rationals
+(`apps/api/src/commission/rational.ts`) and rounds **once**, at the end, to 2dp
+half-up. It does not use currency.js, because currency.js is fixed at precision
+2 and a formula has no stored intermediates to round — the literal `0.075`
+alone would become `0.08`. The rounding rule is matched to currency.js
+deliberately, so `commissionable_base * 0.075` and a `PERCENT_OF_BASE` rule at
+7.5% agree to the centavo.
+
+Divide-by-zero and a negative result are errors surfaced to the user, never
+clamped to zero.

@@ -36,6 +36,9 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
   {
     title: 'Operations',
     items: [
+      // Crew see this too: it is their own trip list, scoped server-side to
+      // the shipments they actually worked.
+      { href: '/shipments', label: 'Shipments', roles: [...OFFICE_ROLES, UserRole.CREW] },
       { href: '/trucks', label: 'Trucks', roles: OFFICE_ROLES },
       { href: '/crew-members', label: 'Crew members', roles: OFFICE_ROLES },
       { href: '/clients', label: 'Clients', roles: OFFICE_ROLES },

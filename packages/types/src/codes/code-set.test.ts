@@ -9,6 +9,7 @@ import {
   UserRole,
   isCommissionMethod,
   isImplementedCommissionMethod,
+  IMPLEMENTED_COMMISSION_METHODS,
   isShipmentStatus,
   shipmentStatusAtLeast,
   SHIPMENT_STATUS_LABELS,
@@ -25,14 +26,24 @@ import {
  * expectation — it is to restore the original value and append instead.
  */
 describe('code sets are permanent', () => {
+  /**
+   * Renumbered once, in Phase 4, by explicit decision.
+   *
+   * PENDING_LIQUIDATION was specified from the start and omitted in Phase 2,
+   * which left LIQUIDATED on 5 and CLOSED on 6. They moved to 6 and 7 while
+   * the `shipment` table was still empty, so no stored row changed meaning —
+   * which is the only circumstance in which the rule above does not apply.
+   * Shipments exist now, so this map is frozen for good.
+   */
   it('pins every ShipmentStatus code', () => {
     expect(ShipmentStatus).toEqual({
       DRAFT: 1,
       DISPATCHED: 2,
       IN_TRANSIT: 3,
       DELIVERED: 4,
-      LIQUIDATED: 5,
-      CLOSED: 6,
+      PENDING_LIQUIDATION: 5,
+      LIQUIDATED: 6,
+      CLOSED: 7,
     });
   });
 
@@ -58,13 +69,18 @@ describe('code sets are permanent', () => {
     });
   });
 
-  it('pins every CommissionMethod code, including the reserved one', () => {
+  /**
+   * Code 5 was renamed from TIERED to FORMULA in Phase 4. TIERED was never
+   * specified — it was a leftover from a reverted feature — and no rule row
+   * ever used it, so only an unused code's meaning changed.
+   */
+  it('pins every CommissionMethod code', () => {
     expect(CommissionMethod).toEqual({
       PERCENT_OF_BASE: 1,
       FIXED_PER_TRIP: 2,
       FIXED_PER_ROUTE: 3,
       PERCENT_OF_NET_RATE: 4,
-      TIERED: 5,
+      FORMULA: 5,
     });
   });
 
@@ -106,7 +122,9 @@ describe('code guards', () => {
   it('accepts valid codes and rejects everything else', () => {
     expect(isShipmentStatus(ShipmentStatus.CLOSED)).toBe(true);
     expect(isShipmentStatus(0)).toBe(false);
-    expect(isShipmentStatus(7)).toBe(false);
+    // One past the highest allocated code, so this moves whenever one is
+    // appended — which is the point of asserting it at all.
+    expect(isShipmentStatus(8)).toBe(false);
     expect(isShipmentStatus(2.5)).toBe(false);
     expect(isShipmentStatus('2')).toBe(false);
     expect(isShipmentStatus(null)).toBe(false);
@@ -142,12 +160,23 @@ describe('order-dependent logic', () => {
   });
 });
 
-describe('CommissionMethod reservations', () => {
-  it('treats TIERED as a valid code but an unimplemented method', () => {
-    // The DB CHECK guards the code set, not the feature set — so the code is
-    // storable, and refusing it is the service layer's job.
-    expect(isCommissionMethod(CommissionMethod.TIERED)).toBe(true);
-    expect(isImplementedCommissionMethod(CommissionMethod.TIERED)).toBe(false);
-    expect(isImplementedCommissionMethod(CommissionMethod.PERCENT_OF_BASE)).toBe(true);
+describe('CommissionMethod', () => {
+  it('implements every allocated method as of Phase 4', () => {
+    // Code 5 briefly held a TIERED method no specification asked for, left
+    // over from a reverted feature. It is FORMULA, which the brief always
+    // named there, and all five now have strategies.
+    for (const method of Object.values(CommissionMethod)) {
+      expect(isCommissionMethod(method)).toBe(true);
+      expect(isImplementedCommissionMethod(method)).toBe(true);
+    }
+
+    expect(CommissionMethod.FORMULA).toBe(5);
+  });
+
+  it('keeps the check available for a future reserved code', () => {
+    // The DB CHECK guards the code set, not the feature set, so a code can be
+    // appended before its strategy exists. Refusing it stays the service
+    // layer's job, via this list.
+    expect(IMPLEMENTED_COMMISSION_METHODS).toHaveLength(Object.values(CommissionMethod).length);
   });
 });

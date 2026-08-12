@@ -9,6 +9,7 @@ import { HealthModule } from './health/health.module';
 import { MasterDataModule } from './master-data/master-data.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { SettingsModule } from './settings/settings.module';
+import { ShipmentsModule } from './shipments/shipments.module';
 import { StorageModule } from './storage/storage.module';
 import { UsersModule } from './users/users.module';
 
@@ -22,6 +23,7 @@ import { UsersModule } from './users/users.module';
     UsersModule,
     MasterDataModule,
     SettingsModule,
+    ShipmentsModule,
   ],
   providers: [
     // Order matters: authentication decides who you are, then roles decide

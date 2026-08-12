@@ -1,16 +1,26 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import type { Prisma } from '@eztruckr/db';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma } from '@eztruckr/db';
 import {
   AMOUNT_METHOD_MISMATCH_MESSAGE,
+  CREW_ROLE_LABELS,
   EFFECTIVE_WINDOW_MESSAGE,
   hasAmountMatchingMethod,
   hasOrderedEffectiveWindow,
+  hasRouteForRouteMethod,
   isCommissionMethod,
   isCrewRole,
   isImplementedCommissionMethod,
+  ROUTE_METHOD_NEEDS_ROUTE_MESSAGE,
   UNIMPLEMENTED_METHOD_MESSAGE,
   type CommissionRule,
   type CreateCommissionRuleInput,
+  type CrewRole,
+  type FormulaParams,
   type MasterDataListQuery,
   type Page,
   type RemovalResult,
@@ -76,6 +86,7 @@ export class CommissionRulesService {
         method: input.method,
         rate: input.rate,
         fixedAmount: input.fixedAmount,
+        params: input.params ?? Prisma.DbNull,
         clientId: input.clientId,
         routeId: input.routeId,
         priority: input.priority,
@@ -106,6 +117,10 @@ export class CommissionRulesService {
       throw badRequest('rate', AMOUNT_METHOD_MISMATCH_MESSAGE);
     }
 
+    if (!hasRouteForRouteMethod(merged)) {
+      throw badRequest('routeId', ROUTE_METHOD_NEEDS_ROUTE_MESSAGE);
+    }
+
     if (!hasOrderedEffectiveWindow(merged)) {
       throw badRequest('effectiveTo', EFFECTIVE_WINDOW_MESSAGE);
     }
@@ -115,7 +130,35 @@ export class CommissionRulesService {
       input.routeId === undefined ? null : input.routeId,
     );
 
-    return toCommissionRule(await this.rules.update({ where: { id }, data: input }));
+    // A rule losing its last live sibling stops commissions computing for that
+    // role, and deactivating one is as effective at that as deleting it.
+    if (input.isActive === false && current.isActive) {
+      await this.assertRoleKeepsCoverage(id, current.role);
+    }
+
+    // Written out field by field rather than spread. Prisma's update input is
+    // a union of the checked and unchecked forms, and a spread containing a
+    // nullable scalar foreign key like `clientId` matches neither cleanly.
+    const data: Prisma.CommissionRuleUncheckedUpdateInput = {};
+
+    if (input.name !== undefined) data.name = input.name;
+    if (input.role !== undefined) data.role = input.role;
+    if (input.method !== undefined) data.method = input.method;
+    if (input.rate !== undefined) data.rate = input.rate;
+    if (input.fixedAmount !== undefined) data.fixedAmount = input.fixedAmount;
+    if (input.clientId !== undefined) data.clientId = input.clientId;
+    if (input.routeId !== undefined) data.routeId = input.routeId;
+    if (input.priority !== undefined) data.priority = input.priority;
+    if (input.effectiveFrom !== undefined) data.effectiveFrom = input.effectiveFrom;
+    if (input.effectiveTo !== undefined) data.effectiveTo = input.effectiveTo;
+    if (input.isActive !== undefined) data.isActive = input.isActive;
+
+    // `params` is a JSON column: `undefined` means "leave alone", while an
+    // explicit null has to be spelled DbNull or Prisma stores the JSON value
+    // `null` instead of clearing the column.
+    if (input.params !== undefined) data.params = input.params ?? Prisma.DbNull;
+
+    return toCommissionRule(await this.rules.update({ where: { id }, data }));
   }
 
   /**
@@ -123,15 +166,48 @@ export class CommissionRulesService {
    * the rate it actually used onto itself, so removing the rule cannot move
    * money that has already been computed. Nothing holds a foreign key to it,
    * so an unreferenced rule simply soft-deletes.
+   *
+   * What removing one CAN break is the future. There is no fallback rate in
+   * this system, so a role left with no live rule stops computing altogether —
+   * and the failure lands at month-end, on a shipment, far from the click that
+   * caused it. Removing the last rule for a role is therefore refused outright
+   * rather than reported as an outcome: unlike deactivate-instead-of-delete,
+   * there is no lesser action that leaves the system working.
    */
   async remove(id: string): Promise<RemovalResult> {
-    await this.get(id);
+    const rule = await this.get(id);
+
+    await this.assertRoleKeepsCoverage(id, rule.role);
 
     return removeRecord({
       probes: [],
       deactivate: () => this.rules.update({ where: { id }, data: { isActive: false } }),
       softDelete: () => this.rules.softDelete({ id }),
     });
+  }
+
+  /**
+   * Refuses to leave a role with no live, active rule at all.
+   *
+   * Deliberately a coarse check — "is there at least one other" — rather than
+   * a scope-aware one. A precise answer would have to enumerate every client
+   * and route combination that could ever be shipped, which is not knowable
+   * from the rules table. Coverage across scopes is the job of
+   * `CommissionCoverageService`, which reports gaps as warnings; this only
+   * stops the one case that is unambiguously fatal.
+   */
+  private async assertRoleKeepsCoverage(id: string, role: CrewRole): Promise<void> {
+    const survivors = await this.rules.count({
+      where: { role, isActive: true, id: { not: id } },
+    });
+
+    if (survivors === 0) {
+      throw new ConflictException(
+        `This is the last active commission rule for the ${CREW_ROLE_LABELS[role].toLowerCase()}. ` +
+          `Removing it would stop commissions computing for every future shipment, and there is no ` +
+          `default rate to fall back on. Create a replacement rule first.`,
+      );
+    }
   }
 
   /**
@@ -156,6 +232,24 @@ export class CommissionRulesService {
   }
 }
 
+/**
+ * Narrows the JSON column to the one shape the API declares.
+ *
+ * A CHECK constraint already requires FORMULA rules to carry a non-empty
+ * `expression`, so this is about the type rather than the data: `Prisma.Json`
+ * is `any`-shaped, and returning it unchecked would let an unexpected column
+ * value reach the client as though it had been validated.
+ */
+function toFormulaParams(value: Prisma.JsonValue): FormulaParams | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const expression = (value as Record<string, unknown>).expression;
+
+  return typeof expression === 'string' ? { expression } : null;
+}
+
 function badRequest(path: string, message: string): BadRequestException {
   return new BadRequestException({
     message: 'Validation failed',
@@ -178,6 +272,7 @@ function toCommissionRule(row: CommissionRuleRow): CommissionRule {
     method: row.method,
     rate: decimalToString(row.rate),
     fixedAmount: decimalToString(row.fixedAmount),
+    params: toFormulaParams(row.params),
     clientId: row.clientId,
     routeId: row.routeId,
     priority: row.priority,

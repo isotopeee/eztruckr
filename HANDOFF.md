@@ -1,16 +1,18 @@
 # EZTruckr — Session Handoff
 
-Trucking management system for a Philippine hauling company. Turborepo monorepo, built in phases. This document summarizes everything completed through **Phase 3** so a new session can continue without replaying history.
+Trucking management system for a Philippine hauling company. Turborepo monorepo, built in phases. This document summarizes everything completed through **Phase 4** so a new session can continue without replaying history.
 
-**Git.** Branch `main`, 5 commits through the end of Phase 3, working tree clean. No remote configured.
+**Git.** Branch `main`, no remote configured.
 
-| Commit    | What                                                    |
-| --------- | ------------------------------------------------------- |
-| `3af269a` | Phase 1 foundation + Phase 2 data model                 |
-| `61195ff` | Handoff formatting, git init recorded                   |
-| `fdd7a52` | Phase 3 — auth, role guards, master data                |
-| `56b371d` | System settings made administrator-only, read included  |
-| `b399139` | CommissionRule becomes the only source of truth for pay |
+| Commit           | What                                                    |
+| ---------------- | ------------------------------------------------------- |
+| `3af269a`        | Phase 1 foundation + Phase 2 data model                 |
+| `61195ff`        | Handoff formatting, git init recorded                   |
+| `fdd7a52`        | Phase 3 — auth, role guards, master data                |
+| `56b371d`        | System settings made administrator-only, read included  |
+| `b399139`        | CommissionRule becomes the only source of truth for pay |
+| `8af6c76`        | Handoff brought current for a Phase 4 session           |
+| _(this session)_ | Phase 4 — shipments, the money engine, FORMULA          |
 
 ---
 
@@ -70,6 +72,7 @@ Entities: `User`, `UserProfile`, `Truck`, `CrewMember`, `Client`, `ThirdParty`, 
 - Every enumerated column is `Int @db.SmallInt`.
 - Code sets declared **once each** in `packages/types/src/codes/*.ts` as frozen `as const` objects + derived union types + label maps + a `defineCodeSet()` helper providing `isValid`/`schema` (Zod).
 - Code sets defined: `ShipmentStatus` (1-6), `LiquidationStatus` (1-3), `CrewRole` (1-2), `AdjustmentDirection` (1-2), `UserRole` (1-5), `CommissionMethod` (1-5, where 5=TIERED is **reserved/unimplemented** — `isImplementedCommissionMethod()` rejects it at the service layer, not the DB), and `PayoutRunStatus` (1-4, added beyond the brief because "PAID is terminal" needs a lifecycle).
+  - ⚠️ **Two of these were corrected in Phase 4** and this line describes the Phase 2 state only. `ShipmentStatus` is now 1-7 (`PENDING_LIQUIDATION` had been wrongly omitted) and code 5 of `CommissionMethod` is `FORMULA`, not `TIERED`. See the Phase 4 section for the reasoning and the approval.
 - **Codes are permanent**: never renumbered, never reused, append-only. Enforced by convention + `code-set.test.ts` pinning every value.
 - **Order-dependent logic uses declared sequences, never raw number comparison** — e.g. `shipmentStatusAtLeast(candidate, reference)` looks up position in `SHIPMENT_STATUS_SEQUENCE`, not `candidate >= reference`.
 - Each code column has a **CHECK constraint** (migration `20260812135900_code_constraints_and_comments`) listing valid codes explicitly (not `BETWEEN`, since codes aren't guaranteed contiguous) and a SQL `COMMENT ON COLUMN` decoding it.
@@ -181,51 +184,262 @@ A fifth was added in Phase 3:
 
 ---
 
-## Current verified state (end of Phase 3)
+## Phase 4 — Shipments and the money engine ✅
 
-- **`pnpm run check`**: 14/14 tasks passing, uncached (format-check, lint, typecheck, test across all workspaces).
-- **82 tests**, all passing:
-  | Workspace        | Count | Files                                                                                                                        |
-  | ---------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
-  | `packages/db`    | 41    | `payout-idempotency` [7], `soft-delete` [13], `code-constraints` [14], `relations` [7] — the first three hit a real Postgres |
-  | `apps/api`       | 22    | `guards` [11], `removal` [7], `zod-validation.pipe` [4]                                                                      |
-  | `packages/types` | 19    | code-set and money unit tests                                                                                                |
-- **Schema invariants re-verified against the live database at the end of Phase 3** (not carried over from Phase 2): 0 enum types, 0 float columns, 0 naive timestamps, 26 tables (23 soft-deletable business + 3 Better Auth infra), 16 partial unique indexes, 21 `_created_by_required` CHECKs, 5 triggers, 5 migrations applied, and `prisma migrate status` reports no drift.
-- The narrowed `system_setting_rate_ranges` CHECK was confirmed to still bite after the fallback migration: `UPDATE ... SET "gasExpenseDeductionRate" = 1.5` is rejected by Postgres.
-- Live verification against the **containerised** stack: unauthenticated read → 401, HTTP sign-up → 403, admin sign-in → 200, `/me` → 200, master data → 200; `GET /settings` returns only the gas rate, a dropped field is rejected 400, out-of-range 400.
-- Role matrix verified live: OPERATIONS can write trucks but not expense categories, users or settings; ADMINISTRATOR 200 / OPERATIONS 403 on all three settings routes; CREW can read only its own crew record; a deactivated user's existing session is refused on the next request.
-- Browser-verified: login, dashboard, master data CRUD, all three removal outcomes reported in the UI, settings history, the gas rate edited on the commission rules screen and reflected on the settings screen, the crew portal, and a crew account refused on `/trucks` with the API's own message.
-- `docker compose up -d --build` is self-contained: migrations and the seed run on boot, so a fresh volume gives you an administrator to sign in as.
+The commission engine, the shipment lifecycle, charges, and the screens over them.
+
+### Two code-set corrections, approved before anything was built on them
+
+Both were deviations from the brief introduced in Phase 2, and both collided with the
+"codes are permanent, append only" rule. The user chose to correct rather than append,
+on the reasoning that the rule protects **stored rows**, and the tables were empty
+(verified: 0 shipments, 0 commissions, no rule using method 5).
+
+| Set                | Was                    | Now                                           |
+| ------------------ | ---------------------- | --------------------------------------------- |
+| `ShipmentStatus`   | 5 LIQUIDATED, 6 CLOSED | 5 PENDING_LIQUIDATION, 6 LIQUIDATED, 7 CLOSED |
+| `CommissionMethod` | 5 TIERED (reserved)    | 5 FORMULA                                     |
+
+`PENDING_LIQUIDATION` had simply been omitted in Phase 2. `TIERED` was never in any
+brief — it was a leftover from the tiered-rates feature that was implemented and then
+fully reverted; the brief always named FORMULA at code 5.
+
+**The rule is back in force.** Shipments exist now. Both code sets are frozen, and the
+pinning tests in `code-set.test.ts` carry a comment explaining the one-time exception so
+nobody reads it as precedent.
+
+### The money engine
+
+`apps/api/src/commission/` — pure, DB-free pieces plus one service that connects them:
+
+| File                             | Owns                                                                       |
+| -------------------------------- | -------------------------------------------------------------------------- |
+| `commission-chain.ts`            | The rate chain and the commission chain, as arithmetic. Each step rounds.  |
+| `commission-strategies.ts`       | All five methods as a dispatch table. Returns `{ effectiveRate, amount }`. |
+| `rule-resolver.ts`               | Which rule wins, and the refusal when none does.                           |
+| `formula-evaluator.ts`           | Walks a parsed formula against real values.                                |
+| `rational.ts`                    | Exact BigInt rational arithmetic, used only by the evaluator.              |
+| `commission.service.ts`          | Loads, computes, freezes. The only place that writes a commission.         |
+| `commission-coverage.service.ts` | Proactive "will the next shipment be payable?" check.                      |
+
+**Nothing else in the codebase multiplies a base by a rate.**
+
+#### Why there is a BigInt rational module in a currency.js project
+
+currency.js is configured once at precision 2, which is correct for the commission
+chain — every step there is a stored value, so every step rounds. A **formula** is
+different: it has no stored intermediates, and the brief says division "defines its own
+precision" with one round at the end. Running those intermediates through a 2dp type
+destroys them — the literal `0.075` alone becomes `0.08`.
+
+So `rational.ts` walks the AST in exact fractions (no float anywhere) and rounds exactly
+once, at the boundary, into money. Its tie rule is half-toward-+∞ **because that is what
+`Math.round` does and therefore what currency.js does** — the two have to agree or
+FORMULA and PERCENT_OF_BASE would disagree on the same figure. Asserted directly:
+995.625 → 995.63 down both paths.
+
+`decimal.js` was not used because it is not a dependency and `packages/types` cannot
+import `@eztruckr/db` (wrong direction). Exact rationals need no dependency at all.
+
+#### The FORMULA method, and why it is split across two packages
+
+- **`packages/types/src/commission/formula-syntax.ts`** — catalog, tokenizer,
+  recursive-descent parser, AST, `validateFormulaExpression`. Pure syntax: no money, no
+  shipment.
+- **`apps/api/src/commission/formula-evaluator.ts`** — walks the AST against real values.
+
+The split is structural, not stylistic. "All financial computation lives in the backend"
+holds because there is nothing in the shared package the web app _could_ compute a peso
+figure with, while the authoring screen can still check an expression as it is typed.
+
+Security properties, all asserted:
+
+- No `eval`, `Function`, `vm`, or third-party evaluator. Hand-written parser, hand-walked AST.
+- Node types are exactly: number literal, catalog field, `+ - * /`, unary minus, parens.
+- Validated **on save** — a rule that failed to parse is never persisted — and re-parsed
+  at computation, because the column is mutable and re-parsing costs microseconds.
+- Bounded: 500 characters, 32 nesting levels, so a pathological expression cannot
+  overflow the stack.
+- Divide-by-zero and a negative result are errors surfaced to the user, never clamped.
+
+#### Rule resolution has no fallback
+
+Candidates are active, undeleted, role-matching, in a half-open `[effectiveFrom,
+effectiveTo)` window, scope-matching. Winner by specificity (client+route ▸ client ▸
+route ▸ unscoped), then priority, then latest `effectiveFrom`, then id.
+
+If nothing matches the engine **raises a 422 naming the role and the date**, per the
+Phase 3 decision. Verified live.
+
+The date tested is `dispatchedAt` (falling back to `createdAt`): the rate in force when
+the crew set off, not when the paperwork caught up.
+
+### Schema changes (migration `20260812170815_phase4_formula_and_status_codes`)
+
+- `CommissionRule.params` JSON, with a CHECK: FORMULA needs a non-empty
+  `params->>'expression'`; every other method must leave it null.
+- `Commission.appliedFormulaExpression` + `appliedFormulaFields`, with a CHECK tying both
+  to `appliedMethod = 5` and forbidding them elsewhere. A formula is the one method whose
+  logic lives in editable data, so without these the amount stops being reproducible the
+  moment someone edits the rule.
+- **`Commission.appliedRate` widened to `Decimal(9,4)` and made nullable.** It was
+  `(5,4) NOT NULL` bounded to `[0,1]`, which is right for a stored percentage and wrong
+  for what it now holds. For the two percent methods it is still the rule's rate and
+  still an operand. For fixed and formula methods no rate produced the amount, so it is
+  **derived for reporting** — and a flat fee on a small backhaul is legitimately several
+  hundred percent of its base. Null means "no meaningful figure" (zero denominator);
+  storing 0 would have read as "earned nothing". Two CHECKs keep it honest: the tight
+  `[0,1]` bound still applies to methods 1 and 4, and those two may not leave it null.
+- `shipment_status_code_valid` widened to 1–7, with the COMMENT rewritten.
+
+### Shipment lifecycle
+
+`DRAFT → DISPATCHED → IN_TRANSIT → DELIVERED → PENDING_LIQUIDATION → LIQUIDATED → CLOSED`
+
+Two steps are not requestable, and the transition table says so:
+
+- **DELIVERED is written through to PENDING_LIQUIDATION in the same statement.** Asking
+  for status 4 stores 5. A delivered trip is never left in a state nobody queries.
+- **LIQUIDATED is earned, not requested** — it needs an approved liquidation _and_
+  computed commissions, and the service applies it when the second of the two lands.
+  Phase 4 owns the commissions half; Phase 5 will own the other.
+
+Forward only. Nothing reopens a shipment, because the frozen rates and computed
+commissions behind it have no defined behaviour in reverse.
+
+Guard rails: dispatch needs a driver and a truck; **close needs computed commissions and,
+if any allowance was advanced, an approved liquidation**.
+
+### The bug worth knowing about: computed vs paid
+
+First cut locked charges, crew and the gas override the moment `commissionsComputedAt`
+was set. That is a dead end — a charge discovered late is exactly what a recomputation
+exists to absorb, and the user could neither fix the charge nor make the recompute say
+anything different.
+
+The line that actually matters is **paid**, not computed. `assertNothingPaid` now guards
+all three, and a computed-but-unpaid commission goes stale instead of blocking.
+`Shipment.commissionsStale` is **derived** by comparing `commissionsComputedAt` against
+charge `updatedAt` — no column, because a stored flag is one more thing that can be
+wrong. It is on the detail response only; the list does not pay for the extra queries.
+
+A second, related bug: `resolveGasDeductionRate` read the frozen
+`appliedGasDeductionRate` on recompute, so a corrected system default could never reach a
+shipment. `gasRateOverrideReason` distinguishes a deliberate override (survives recompute)
+from a frozen copy of the default (re-read). Freezing still holds — the value only moves
+when somebody explicitly asks for recomputation.
+
+### The two coverage gaps from Phase 3, closed
+
+1. **Removing the last rule for a role is refused** (409), not reported as an outcome —
+   unlike deactivate-instead-of-delete, no lesser action leaves the system working. The
+   check also fires when an update sets `isActive: false`.
+2. **`CommissionCoverageService`** reports gaps that exist now and gaps opening within a
+   horizon (default 30 days), surfaced as a banner on the commission rules screen. It
+   only checks **unscoped** baselines — a scoped rule covers one client or route, and the
+   combinations nobody thought of are not enumerable from the table.
+
+The division of labour is deliberate and was verified live: the coarse removal guard
+stops the unambiguously fatal case; the coverage report catches the expiry the coarse
+check cannot see; the engine's refusal remains the thing that guarantees correctness.
+
+### API surface added
+
+| Route                                                                              | Roles                                                      |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `GET/POST /shipments`, `PATCH /shipments/:id`                                      | read: office + crew (scoped) · write: ADMIN/OPS            |
+| `PATCH /shipments/:id/crew`                                                        | ADMIN/OPS                                                  |
+| `PATCH /shipments/:id/status`                                                      | union, then per-target from `ROLES_BY_TRANSITION`          |
+| `GET/PATCH /shipments/:id/gas-rate`                                                | read: office · write: ADMIN/ACCOUNTING                     |
+| `GET/POST/PATCH/DELETE /shipments/:id/billable-expenses` and `/additional-charges` | read: office · write: ADMIN/ACCOUNTING                     |
+| `GET/POST /shipments/:id/commissions`                                              | read: office + crew (own only) · compute: ADMIN/ACCOUNTING |
+| `GET /commissions/crew/:crewMemberId`                                              | office; crew may only ask about itself                     |
+| `GET /commissions/rule-coverage`                                                   | office                                                     |
+| `GET /commissions/formula-fields`                                                  | ADMIN/ACCOUNTING                                           |
+
+`ROLES_BY_TRANSITION` exists because the route guard cannot see the request body. The
+`@Roles` on `/status` is the union of everyone who may move a shipment at all; the
+controller then applies the per-target policy, so operations cannot close a trip and
+accounting cannot dispatch one.
+
+### Crew scoping, verified end to end
+
+A crew session's shipment list filter is **overwritten**, not validated — there is no
+query string that widens it. Detail reads are refused unless they worked the trip, and
+commissions on a shared trip are filtered to their own row. Verified live: 1 shipment
+visible, own detail 200, colleague's commissions 403, all writes 403.
 
 ---
 
-## Open questions / decisions flagged to user, not yet resolved
+## Current verified state (end of Phase 4)
 
-1. **Vehicles/trucks** were added by me (not in original brief's domain concepts list) — confirmed reasonable, no objection raised, but never explicitly confirmed as "correct."
-2. **`Shipment.appliedTpcRate` semantics** (nullable = flat TPC amount agreed, set = percentage of gross) — my design choice, flagged for confirmation, no response yet.
-3. ~~**`CommissionRule` vs `SystemSetting` fallback overlap**~~ — **RESOLVED (user decision).** `CommissionRule` is now the only source of truth for crew pay. `SystemSetting.driverCommissionRate` / `helperCommissionRate` were dropped (migration `20260813000000_drop_commission_rate_fallback`). The deciding argument: the fallback was strictly _less expressive_ than the thing it backed up — no effective window, no scope, no priority — so it could not answer "what was the helper rate in March?", the very question `CommissionRule.effectiveFrom` exists for. It also failed silently: an expired or mis-scoped rule would quietly pay the default. Nothing was lost, because the seeded unscoped priority-0 rules already carried the same values (0.1500 / 0.0750).
-   - **`gasExpenseDeductionRate` stays on `SystemSetting`** — it is not per-role, so it has no rule equivalent, and putting it on a per-role rule would let the driver rule and helper rule disagree about the commissionable base of the same shipment. It is surfaced on **both** the settings screen and the commission rules screen via one shared component (`components/settings/gas-deduction-rate-card.tsx`) reading and writing the same row through the same query key. Surfaced twice, stored once.
-   - **Consequence for Phase 4**: a shipment matching no rule must be an **error the engine raises**, not a number it invents.
-4. **`CrewDeduction` partial recovery across multiple payout runs** — current model has one nullable `payoutLineId` + a `recovered` running total, which can't fully represent a debt clawed back across >1 run. Flagged; would need a join table if that's a real scenario.
-5. ~~**1:1 relations modeled as 1:many**~~ — **RESOLVED (user decision).** Keep the partial-unique-backed arrays; added `liveOne()` / `liveOneOrThrow()` in `packages/db/src/relations.ts`, which assert-and-unwrap the single live row so call sites read as 1:1 without the schema lying. More than one survivor throws, because that means the partial unique index is gone. Used in `UsersService.currentUser`.
-6. ~~**`user.email` only partially unique**~~ — **RESOLVED.** Better Auth's Prisma adapter uses `findFirst`, not `findUnique`, so it never assumes total uniqueness. No change needed.
+- **`pnpm run check`**: 14/14 tasks passing, uncached.
+- **187 tests**, all passing (was 82):
 
-### Still open after Phase 3
+  | Workspace        | Count | Added in Phase 4                                       |
+  | ---------------- | ----- | ------------------------------------------------------ |
+  | `packages/types` | 67    | `formula-syntax` [47] — mostly what the parser REFUSES |
+  | `packages/db`    | 41    | unchanged; drift guard now confirms status codes 1–7   |
+  | `apps/api`       | 79    | `commission-engine` [38], `formula-evaluator` [19]     |
 
-- Items 1, 2 and 4 above remain open. Item 3 is resolved (see above).
-- **Two gaps opened by removing the fallback, both for Phase 4.** With no fallback, losing the baseline rule stops commissions computing — correctly, but nothing guards it today:
-  1. `CommissionRulesService.remove()` passes `probes: []`, so soft-deleting or deactivating the **last live unscoped rule for a role** is frictionless. It needs a probe, or an explicit refusal.
-  2. A baseline rule whose `effectiveTo` passes leaves the same hole with a timer on it. Rule coverage should be checked **proactively** — at dispatch, or as a dashboard warning — so a gap surfaces on a calm Tuesday rather than as a hard failure at month-end.
-- **Crew scoping is only exercised on `CrewMember`** so far, because that is the only crew-facing resource Phase 3 built. The mechanism (`crewMemberId` on `RequestUser`, checked server-side) is in place for shipments and payouts in a later phase.
-- **No API-level e2e tests.** Guards and the removal rule are unit-tested; wiring (Better Auth mounting, CORS ordering, session resolution) was verified live by hand rather than by an automated suite. A supertest harness would be worth adding before this grows.
+- **The brief's required assertions pass, in unit tests and again live:**
+  - `netRate 16200`, no commissionable charges, gas 25% → gasDeduction **4050.00**, base
+    **12150.00**, driver **1822.50**, helper **911.25**
+  - with a 1500 commissionable charge → base **13275.00**, driver **1991.25**, helper
+    **995.63** (995.625 half-up — asserted explicitly, both through
+    PERCENT_OF_BASE and through an equivalent FORMULA)
+
+- **Live, against the containerised stack**, in order: created SH-2026-0001 at 18,000
+  gross / 10% TPC → net 16,200; refused a helper in the driver slot and the same person
+  in both slots; dispatched → in transit → **asked for DELIVERED (4) and got
+  PENDING_LIQUIDATION (5)**; added the extra drop fee; computed; flipped the fee to
+  commissionable and saw `commissionsStale: true`; recomputed to 995.63; overrode the gas
+  rate to 30% with a reason (and was refused without one); created a client-scoped
+  FORMULA rule and watched it beat the unscoped baseline for the driver only; inserted an
+  approved liquidation and watched computation advance the shipment to LIQUIDATED; closed
+  it; was refused on closing it twice.
+- **Formula injection refused at the API boundary**, each with a specific message:
+  `net_rate; process.exit(1)`, `require("fs")`, `net_rate.constructor`, `` `${net_rate}` ``,
+  `net_rate ** 2`, `globalThis`, `net_rate = 1`, and an unknown field.
+- **The no-fallback path proved live**: with only an expired helper baseline left, the
+  coverage report warned first, and computing then failed 422 with a message naming the
+  role, the date and the fix.
+- **Browser-verified**: the shipment list, the detail page rendering the rate chain as a
+  worksheet, the FORMULA commission showing its frozen expression and resolved field
+  values, the gas override showing 30% against the 25% system default with its reason,
+  and both charge lists.
+- `prisma migrate status`: 6 migrations applied, no drift. Seed still idempotent.
+- **The migration chain was replayed from scratch** into a throwaway database
+  (`eztruckr_migrationtest`, since dropped) — worth doing because Phase 4's migration is
+  largely hand-written SQL. All six applied cleanly and the invariants held on a virgin
+  schema: 0 enum types, 0 float columns, 0 naive timestamps, 26 tables, 5 payout
+  triggers, 16 partial unique indexes, 21 `_created_by_required` CHECKs,
+  `shipment_status_code_valid` accepting 1–7, and `commission.appliedRate` as
+  `numeric(9,4)`.
+
+### Test data left in the development database
+
+Phase 4 verification created rows in the local Postgres. A fresh volume is unaffected.
+
+- `SH-2026-0001`, closed, with commissions and one additional charge.
+- A client-scoped FORMULA rule (`Northport driver formula`) and a replacement
+  `Default helper commission` rule — the seeded original was soft-deleted while proving
+  the removal guard.
+- **One hand-inserted `liquidation` row (`itest-liq-1`)**, written with raw SQL to
+  exercise the LIQUIDATED transition, since Phase 5 owns liquidation. It has
+  `totalLiquidated = 0` and no lines. Delete it or reset the volume before building
+  Phase 5 against it.
+- `driver@eztruckr.ph`'s password was reset to `eztruckr-dev-crew` to test crew scoping.
 
 ---
 
 ## Tech stack confirmed in use (per brief, no substitutions)
 
-Turborepo · Docker + docker compose · Next.js App Router + TypeScript · shadcn/ui + Tailwind v4 · TanStack Query · NestJS + TypeScript · Prisma · PostgreSQL 16 · currency.js (configured once in `packages/types/src/money/money.ts`, `{ symbol: '₱', precision: 2 }`) · MinIO (S3-compatible) · Prettier (root-level Turborepo task `//#format:check`).
+Turborepo · Docker + docker compose · Next.js App Router + TypeScript · shadcn/ui + Tailwind v4 · TanStack Query · NestJS + TypeScript · Prisma · PostgreSQL 16 · currency.js (configured once in `packages/types/src/money/money.ts`, `{ symbol: '₱', precision: 2 }`) · MinIO (S3-compatible) · Prettier (root-level Turborepo task `//#format:check`) · Better Auth 1.6.26.
 
-**Better Auth 1.6.26** is now integrated (Phase 3). `express` was added as a direct API dependency, since `main.ts` mounts the auth handler and the body parsers itself.
+**No dependency was added in Phase 4.** The exact arithmetic the formula evaluator needs
+is a ~140-line BigInt rational module rather than a library, so currency.js remains the
+only money dependency and the boundary rule is unchanged.
 
 ---
 
@@ -237,63 +451,83 @@ Seeded on `docker compose up`. Development only.
 | ------------------- | -------------------- | ------------- |
 | `admin@eztruckr.ph` | `eztruckr-dev-admin` | Administrator |
 
-`ops@eztruckr.ph` (Operations) and `driver@eztruckr.ph` (Crew, linked to a crew member) exist in the local database from this session's role testing but are **not** created by the seed — a fresh volume will have the administrator only.
+`ops@eztruckr.ph` (Operations) and `driver@eztruckr.ph` (Crew, linked to Joel Bautista,
+password reset to `eztruckr-dev-crew` during Phase 4 testing) exist in the local database
+but are **not** created by the seed — a fresh volume has the administrator only.
 
 ---
 
-## Phase 4 — what a new session needs to know
+## Phase 5 — what a new session needs to know
 
-Phase 4 is the commission engine and/or shipments and liquidation. Everything it
-depends on exists; nothing about it has been started. Read this section before
-writing any of it.
+Phase 5 is allowance, liquidation and receipts. Everything it depends on exists.
 
-### Decisions already made that constrain the engine
+### The contract Phase 4 leaves for it
 
-- **`CommissionRule` is the only source of truth for crew pay.** There is no
-  fallback. A shipment matching no rule **must be an error the engine raises**,
-  not a number it invents. This was an explicit user decision — do not
-  reintroduce a default "so computation never fails".
-- **Resolution order is already specified** in the `CommissionRule` docblock in
-  `schema.prisma`: candidates are active, undeleted rules where the role
-  matches, the shipment date falls in `[effectiveFrom, effectiveTo)`, and the
-  scope matches (a null `clientId`/`routeId` matches anything). The winner is
-  chosen by specificity (client+route ▸ client ▸ route ▸ unscoped), then
-  priority (higher first), then `effectiveFrom` (latest first), then `id` for
-  stability. The docblock now states outright that there is no fallback and
-  that the engine must raise.
-- **`CommissionMethod.TIERED` (code 5) is allocated but unimplemented.** The
-  database CHECK accepts it; `isImplementedCommissionMethod()` is what refuses
-  it, at the service layer. Keep it that way.
-- **Money rules are non-negotiable** and are documented in the README: Decimal
-  in storage, currency.js for arithmetic, never `.toNumber()`, never a JSON
-  number over the wire. Each step of the chain stores a rounded value so a
-  reviewer can reproduce every figure with a calculator.
-- **Anything named `applied*` is frozen at computation time** and must never
-  move afterwards. `Shipment.appliedGasDeductionRate` and
-  `Commission.appliedRate` already exist for this.
+- **`Shipment` reaches LIQUIDATED when two things are true**: an approved liquidation
+  exists, and commissions are computed. `CommissionService.statusAfterComputing` applies
+  the move from the commission side. **Phase 5 must apply it from the other side** — when
+  a liquidation reaches APPROVED on a shipment whose commissions are already computed.
+  The predicate is deliberately symmetric; do not duplicate the status logic, lift it.
+- **The allowance is not a P&L cost.** It is a receivable from the crew, cleared by the
+  liquidation, and only liquidated actual expenses are recognised as cost. The close
+  guard already refuses to close a shipment with allowances and no approved liquidation.
+- **The gas deduction is not a cost line either.** Actual fuel is recognised through the
+  liquidation. Counting it in the P&L as well would double it. Both traps are documented
+  in `commission-chain.ts` and in the formula field catalog.
+- **Charges lock on `paid`, not on `computed`** — see the Phase 4 note above. Apply the
+  same rule to liquidation lines rather than inventing a second one.
 
-### Two gaps this phase has to close
+### Still worth doing
 
-Both were opened by removing the fallback and are described in "Still open"
-above:
+- **An API e2e harness (supertest).** Still absent. Phase 4's verification was thorough
+  but manual: a Python script driving the containerised stack, not something CI re-runs.
+  The commission engine's _arithmetic_ is well covered by unit tests; its _wiring_ —
+  status guards, role policy per transition, crew scoping — is only proved by hand.
+  This is now the biggest gap in the suite.
+- **`CommissionService.computeForShipment` has no unit test**, only live verification,
+  because it needs Prisma. The pure pieces around it are covered; the orchestration is
+  not. A test client against the real Postgres (as `packages/db` does) would close it.
+- The commission row does **not** record which rule produced it. That was deliberate —
+  the brief specifies what Commission stores, and adding an FK would also change
+  `removeRecord` semantics for rules — but "which rule paid this?" is answered today only
+  by inference from the frozen rate and method. Worth revisiting if audit asks.
 
-1. `CommissionRulesService.remove()` passes `probes: []`, so removing the last
-   live unscoped rule for a role is frictionless and silently breaks
-   computation.
-2. A baseline rule can expire via `effectiveTo` and leave the same hole. Rule
-   coverage wants a proactive check rather than a hard failure at payout time.
+---
 
-### Worked example to use as the first test fixture
+## Open questions / decisions flagged to user
 
-₱18,000 gross → ₱1,822.50 driver / ₱911.25 helper. Build the engine against this
-before wiring any UI.
+1. **Vehicles/trucks** were added by me (not in the original brief's domain concepts
+   list) — never explicitly confirmed as correct.
+2. ~~**`Shipment.appliedTpcRate` semantics**~~ — **RESOLVED by implementation in Phase 4,
+   still worth a nod from you.** A broker cut is entered as _either_ a percentage of
+   gross _or_ a flat amount, never both; `appliedTpcRate` is set for the former and null
+   for the latter. This is the design that was flagged in Phase 3; Phase 4 built it,
+   enforced the exclusivity in the schema (`hasUnambiguousTpc`) and refused a TPC on a
+   shipment with no broker at all. A cut larger than the gross rate is also refused,
+   since a negative net rate would poison every figure downstream.
+3. ~~**`CommissionRule` vs `SystemSetting` fallback overlap**~~ — **RESOLVED (Phase 3).**
+   `CommissionRule` is the only source of truth for crew pay. Phase 4 honoured it: a
+   shipment matching no rule raises, and the two gaps this opened are now closed.
+4. **`CrewDeduction` partial recovery across multiple payout runs** — one nullable
+   `payoutLineId` plus a `recovered` running total cannot fully represent a debt clawed
+   back across more than one run. Would need a join table. Untouched by Phase 4; becomes
+   real in Phase 6.
+5. ~~**1:1 relations modeled as 1:many**~~ — **RESOLVED (Phase 3).** `liveOne()` /
+   `liveOneOrThrow()` unwrap the single live row.
+6. ~~**`user.email` only partially unique**~~ — **RESOLVED (Phase 3).**
 
-### Also worth doing
+### New in Phase 4, worth your confirmation
 
-- **An API e2e harness (supertest).** Guards and the removal rule are
-  unit-tested, but the wiring — Better Auth mounting, body-parser and CORS
-  ordering in `main.ts`, session resolution — is verified only by hand. That
-  ordering is fragile and load-bearing; see the README gotchas.
-- Open questions **1, 2 and 4** still want a decision from the user. Question 2
-  (`Shipment.appliedTpcRate` semantics) becomes unavoidable the moment shipments
-  are built.
+7. **The gas override reuses `appliedGasDeductionRate`.** There is no separate
+   "requested override" column, so before computation that field means "the rate this
+   trip will use" and afterwards "the rate it did use". `gasRateOverrideReason` is what
+   distinguishes a deliberate override from a frozen copy of the default, and the API
+   makes the reason mandatory precisely so that stays true. It works, but if you would
+   rather the two concepts were separate columns, now is the cheap moment.
+8. **`Commission.appliedRate` is nullable and no longer bounded to `[0,1]` for the fixed
+   and formula methods.** See the schema section above. The alternative was refusing to
+   record a legitimate flat fee on a zero-rated backhaul because the _reporting_ rate is
+   undefined, which seemed worse.
+9. **Charges stay editable after commissions are computed, until something is paid.**
+   The shipment then reports `commissionsStale` and the UI prompts a recompute. The
+   stricter reading — lock at computation — was tried first and is a dead end.

@@ -577,15 +577,26 @@ model CommissionRule {
   role Int @db.SmallInt
 
   /// Code set: CommissionMethod (1 PERCENT_OF_BASE, 2 FIXED_PER_TRIP,
-  /// 3 FIXED_PER_ROUTE, 4 PERCENT_OF_NET_RATE, 5 TIERED — reserved and
-  /// unimplemented). The CHECK accepts every allocated code including TIERED;
-  /// refusing an unimplemented method is the service layer's job.
+  /// 3 FIXED_PER_ROUTE, 4 PERCENT_OF_NET_RATE, 5 FORMULA). The CHECK guards
+  /// the code set, not the feature set; refusing a method whose strategy does
+  /// not exist yet stays the service layer's job.
   method Int @default(1) @db.SmallInt
 
   /// Used by the rate-based methods (PERCENT_OF_BASE, PERCENT_OF_NET_RATE).
   rate        Decimal? @db.Decimal(5, 4)
   /// Used by the fixed methods (FIXED_PER_TRIP, FIXED_PER_ROUTE). Money.
   fixedAmount Decimal? @db.Decimal(15, 4)
+
+  /// Structured configuration for methods whose definition does not fit in a
+  /// single column. Today that is FORMULA alone, which stores
+  /// `{ "expression": "commissionable_base * 0.15" }`.
+  ///
+  /// The expression is PARSED AND VALIDATED BEFORE THIS ROW IS WRITTEN, against
+  /// the fixed field catalog in @eztruckr/types. A rule that failed validation
+  /// is never persisted, so the engine never has to evaluate an expression it
+  /// has not already proved well-formed. It is never passed to eval, Function
+  /// or vm — see the parser docblock; this column holds data, not code.
+  params Json?
 
   /// Narrower scope wins; ties break on priority (higher first).
   clientId String?
@@ -667,8 +678,13 @@ model Shipment {
   shipmentNumber String
 
   /// Code set: ShipmentStatus (1 DRAFT, 2 DISPATCHED, 3 IN_TRANSIT,
-  /// 4 DELIVERED, 5 LIQUIDATED, 6 CLOSED). Order comes from the declared
-  /// sequence in @eztruckr/types, never from the numeric value.
+  /// 4 DELIVERED, 5 PENDING_LIQUIDATION, 6 LIQUIDATED, 7 CLOSED). Order comes
+  /// from the declared sequence in @eztruckr/types, never from the numeric
+  /// value.
+  ///
+  /// DELIVERED is a transition, not a resting place: recording delivery writes
+  /// PENDING_LIQUIDATION in the same statement, so "awaiting liquidation" is a
+  /// state you can filter on rather than one inferred from a missing row.
   status Int @default(1) @db.SmallInt
 
   clientId String
@@ -1047,8 +1063,12 @@ model Adjustment {
 
 /// One computed commission for one crew member on one shipment.
 ///
-/// Self-verifying by design: commissionableBase x appliedRate = amount, using
-/// only values stored on this row.
+/// Self-verifying by design: for the default model (PERCENT_OF_BASE),
+/// commissionableBase x appliedRate = amount using only values stored on this
+/// row. The other methods do not derive their amount that way, so their
+/// appliedRate is a REPORTED rate rather than an operand — see the column.
+/// Whichever method ran, the row states the figure and the inputs it came
+/// from, so a reviewer never has to consult the rule that produced it.
 model Commission {
   id         String   @id @default(cuid())
   shipmentId String
@@ -1067,8 +1087,35 @@ model Commission {
 
   /// Frozen copies of the inputs, so a later rate change cannot move this row.
   commissionableBase Decimal @db.Decimal(15, 4)
-  appliedRate        Decimal @db.Decimal(5, 4)
   amount             Decimal @db.Decimal(15, 4)
+
+  /// The rate this commission was computed at, or reports at.
+  ///
+  /// For PERCENT_OF_BASE and PERCENT_OF_NET_RATE it is the rule's own rate and
+  /// it is an operand: base (or net rate) x this = amount. For the fixed and
+  /// formula methods no rate was involved in deriving the amount, so this is a
+  /// rate DERIVED afterwards purely so vouchers and reports have one to show —
+  /// amount over the base the method conceptually works against.
+  ///
+  /// Deliberately Decimal(9,4) rather than the (5,4) used for stored
+  /// percentages, and deliberately nullable. A derived rate is not a
+  /// percentage input and is not bounded by 1: a flat ₱2,000 on a small
+  /// backhaul is legitimately 300% of its base. It is null when no honest
+  /// figure exists — a zero denominator, or a ratio too large for the column.
+  /// Null reads as "not meaningful here"; storing 0 would read as "nothing was
+  /// earned", which would be a lie. The amount is always authoritative.
+  appliedRate Decimal? @db.Decimal(9, 4)
+
+  /// FORMULA only. The expression as it stood when this row was computed, and
+  /// the field values it read, e.g. `{"net_rate":"16200.0000"}`.
+  ///
+  /// Frozen for the same reason as every other applied* value, but load-bearing
+  /// in a way the others are not: a formula is the one method whose logic lives
+  /// in editable data, so without the expression the amount is unreproducible
+  /// the moment someone edits the rule. Together these two let a reviewer
+  /// recompute the figure by hand years later.
+  appliedFormulaExpression String?
+  appliedFormulaFields     Json?
 
   computedAt DateTime @default(now()) @db.Timestamptz(6)
 

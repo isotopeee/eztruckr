@@ -2,6 +2,7 @@
 
 import { ResourcePage } from '@/components/master-data/resource-page';
 import { GasDeductionRateCard } from '@/components/settings/gas-deduction-rate-card';
+import { RuleCoverageBanner } from '@/components/shipments/rule-coverage-banner';
 import { commissionRuleResource } from '@/lib/resources';
 
 /**
@@ -15,6 +16,7 @@ import { commissionRuleResource } from '@/lib/resources';
 export default function Page() {
   return (
     <div className="space-y-6">
+      <RuleCoverageBanner />
       <GasDeductionRateCard description="Deducted from fuel spend before the commissionable base every rule below is applied to. One system-wide value — editing it here is the same as editing it in System settings." />
       <ResourcePage spec={commissionRuleResource} />
     </div>
