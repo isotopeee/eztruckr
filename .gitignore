@@ -1,0 +1,33 @@
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# turborepo
+.turbo/
+
+# prisma generated client
+packages/db/generated/
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# test / coverage
+coverage/
+
+# editor + os
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# docker volumes
+.docker-data/

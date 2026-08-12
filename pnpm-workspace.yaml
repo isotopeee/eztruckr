@@ -1,0 +1,11 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+# These packages need their install scripts to fetch/build native binaries:
+# Prisma downloads its query engine, esbuild and sharp install platform binaries.
+allowBuilds:
+  "@prisma/client": true
+  "@prisma/engines": true
+  esbuild: true
+  prisma: true
+  sharp: true

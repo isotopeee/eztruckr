@@ -1,0 +1,26 @@
+{
+  "name": "@eztruckr/config",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "prettier",
+    "tsconfig",
+    "eslint"
+  ],
+  "exports": {
+    "./prettier": "./prettier/index.mjs",
+    "./eslint/base": "./eslint/base.mjs",
+    "./eslint/nest": "./eslint/nest.mjs",
+    "./eslint/next": "./eslint/next.mjs",
+    "./tsconfig/base.json": "./tsconfig/base.json",
+    "./tsconfig/nest.json": "./tsconfig/nest.json",
+    "./tsconfig/next.json": "./tsconfig/next.json",
+    "./tsconfig/library.json": "./tsconfig/library.json"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.38.0",
+    "eslint": "^9.38.0",
+    "eslint-config-prettier": "^10.1.8",
+    "typescript-eslint": "^8.46.0"
+  }
+}

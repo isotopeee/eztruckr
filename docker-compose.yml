@@ -1,0 +1,130 @@
+name: eztruckr
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: eztruckr-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: eztruckr
+      POSTGRES_PASSWORD: eztruckr
+      POSTGRES_DB: eztruckr
+      # Storage is UTC; Asia/Manila is a presentation concern only.
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      # Host port is 5433 by default to stay clear of other local Postgres
+      # instances. Container-internal port is always 5432.
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eztruckr -d eztruckr"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    container_name: eztruckr-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: eztruckr
+      MINIO_ROOT_PASSWORD: eztruckr-secret
+    ports:
+      - "${MINIO_PORT:-9010}:9000" # S3 API
+      - "${MINIO_CONSOLE_PORT:-9011}:9001" # web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot: creates the bucket the API expects, then exits.
+  minio-init:
+    image: minio/mc:latest
+    container_name: eztruckr-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 eztruckr eztruckr-secret &&
+      mc mb --ignore-existing local/eztruckr &&
+      echo 'bucket ready: eztruckr'
+      "
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: eztruckr-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://eztruckr:eztruckr@postgres:5432/eztruckr?schema=public
+      CORS_ORIGINS: http://localhost:3000
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: eztruckr
+      S3_ACCESS_KEY_ID: eztruckr
+      S3_SECRET_ACCESS_KEY: eztruckr-secret
+      S3_FORCE_PATH_STYLE: "true"
+      APP_TIMEZONE: Asia/Manila
+    ports:
+      - "${API_PORT:-4000}:4000"
+    # Migrations are applied on boot so `docker compose up` is self-contained.
+    # Invokes the Prisma binary directly rather than via pnpm, so the runtime
+    # image never has to resolve a package manager.
+    command: >
+      /bin/sh -c "
+      cd /app/packages/db &&
+      ./node_modules/.bin/prisma migrate deploy &&
+      cd /app &&
+      node apps/api/dist/main.js
+      "
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # Baked in at build time — Next.js inlines NEXT_PUBLIC_* into the
+        # client bundle. This is the URL the BROWSER uses, not the container.
+        NEXT_PUBLIC_API_URL: http://localhost:4000/api
+    container_name: eztruckr-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
+volumes:
+  postgres-data:
+  minio-data:

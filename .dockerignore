@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/coverage
+packages/db/generated
+
+# Must be excluded alongside dist/. TypeScript's incremental mode trusts this
+# file over the filesystem, so copying a host tsbuildinfo into an image with no
+# dist/ makes tsc believe the output is current and silently emit nothing.
+**/*.tsbuildinfo
+.git
+.env
+.env.local
+**/*.log
+.DS_Store

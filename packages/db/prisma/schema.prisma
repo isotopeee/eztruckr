@@ -1,0 +1,1206 @@
+// EZTruckr data model — complete domain schema.
+//
+// MONEY RULES (columns here, arithmetic in @eztruckr/types/money):
+//   - Money       -> Decimal @db.Decimal(15, 4). Never Float.
+//   - Percentages -> Decimal @db.Decimal(5, 4)  (0.2500 = 25%).
+//   - Reads convert via `value.toString()` into currency.js. Never `.toNumber()`.
+//   - Non-money numerics (distance, capacity) are called out where they occur.
+//
+// ENUMERATED VALUES: stored as Int @db.SmallInt. There are deliberately NO
+//   `enum` blocks here and no native Postgres enum types. Every code set is
+//   declared once in @eztruckr/types/codes and imported by both the API and
+//   the web app; a bare numeric literal should appear nowhere else.
+//   Codes are permanent — never renumbered, never reused, appended only.
+//   Each code column carries a CHECK constraint (added by migration) so a bad
+//   write fails at the database instead of becoming an unreadable row, and a
+//   SQL COMMENT so someone reading raw SQL can decode it.
+//
+// AUDIT RULES:
+//   Every business table carries createdAt / updatedAt / createdBy / updatedBy.
+//   `createdBy` / `updatedBy` / `deletedBy` are FK columns referencing User.id,
+//   exposed as `createdByUser` / `updatedByUser` / `deletedByUser`. The scalars
+//   keep their plain names so the audit column set reads as specified and the
+//   stamping extension can write them without relation syntax.
+//   Stamped exclusively by src/audit-extension.ts, never from a request body.
+//   `updatedBy` stays null until the row is first modified.
+//
+//   `createdBy` is declared OPTIONAL here but is NOT optional in the domain.
+//   The extension supplies it at query time, which the generated TypeScript
+//   cannot see, so a required column would make every create() in the codebase
+//   demand a value the caller must never provide. Instead the column is
+//   nullable to Prisma and mandatory in Postgres, via
+//   `<table>_created_by_required` CHECK constraints. Prisma's differ ignores
+//   CHECK constraints, so this produces no drift. `user` and `user_profile`
+//   are genuinely exempt — bootstrap admin and self-registration.
+//
+// SOFT DELETE:
+//   Every business table has nullable deletedAt / deletedBy. Rows are NEVER
+//   hard-deleted. Reads are filtered in exactly one place — the client
+//   extension in src/soft-delete-extension.ts adds `deletedAt: null` to every
+//   query, including nested relation reads, with an explicit opt-in for the
+//   admin "view deleted" and restore paths.
+//
+//   `isActive` is a SEPARATE concept and is not collapsed into deletion:
+//     isActive = false -> still valid on history, not offered for new entries
+//                         (a sold truck, a departed crew member)
+//     deletedAt set    -> removed from use entirely
+//
+//   Unique constraints on these tables are PARTIAL (WHERE "deletedAt" IS NULL),
+//   added by migration, so a deleted row does not reserve its code or
+//   reference number forever. Prisma cannot express partial uniqueness, which
+//   is why those columns carry no `@unique` here.
+//
+//   ONE DELIBERATE EXCEPTION: commission."payoutLineId" is a FULL unique index.
+//   A soft-deleted commission must still count as paid, so deleting it must
+//   never release its payout line and make it payable again.
+//
+//   Foreign keys stay intact: soft-deleting a parent does not cascade, because
+//   children must remain readable for history.
+//
+// TIMESTAMPS: DateTime is `timestamptz`, stored UTC, rendered Asia/Manila at
+//   the edges only.
+//
+// FREEZING: anything named applied* is a value copied at computation time.
+//   Later edits to SystemSetting or CommissionRule must never move it.
+
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../generated/client"
+  binaryTargets = ["native"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String  @id @default(cuid())
+  /// Partial-unique on (email) WHERE "deletedAt" IS NULL.
+  email         String
+  name          String
+  emailVerified Boolean @default(false)
+
+  /// Code set: UserRole (1 ADMINISTRATOR, 2 OPERATIONS, 3 ACCOUNTING,
+  /// 4 MANAGEMENT, 5 CREW). Never ranked — check membership, never `<`.
+  role Int @default(5) @db.SmallInt
+
+  isActive Boolean @default(true)
+
+  /// Set only for role = CREW. The hard link that scopes a portal user to
+  /// exactly one crew member's records; every crew-facing query filters on it.
+  /// Partial-unique WHERE "deletedAt" IS NULL.
+  crewMemberId String?
+  crewMember   CrewMember? @relation("CrewMemberLogin", fields: [crewMemberId], references: [id], onDelete: SetNull)
+
+  /// At most one live profile, enforced by a partial unique index.
+  profiles UserProfile[] @relation("UserProfileOwner")
+
+  // Better Auth infrastructure.
+  sessions      Session[]
+  accounts      Account[]
+  verifications Verification[]
+
+  lastLoginAt DateTime? @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  /// Nullable on User alone: the bootstrap administrator has no creator, and a
+  /// self-registering user has no acting user either.
+  createdBy     String?
+  createdByUser User?     @relation("UserCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  updatedBy     String?
+  updatedByUser User?     @relation("UserUpdatedBy", fields: [updatedBy], references: [id], onDelete: SetNull)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("UserDeletedBy", fields: [deletedBy], references: [id], onDelete: SetNull)
+
+  usersCreated User[] @relation("UserCreatedBy")
+  usersUpdated User[] @relation("UserUpdatedBy")
+  usersDeleted User[] @relation("UserDeletedBy")
+
+  // --- audit back-relations (created / updated / deleted per table) -------
+  userProfilesCreated UserProfile[] @relation("UserProfileCreatedBy")
+  userProfilesUpdated UserProfile[] @relation("UserProfileUpdatedBy")
+  userProfilesDeleted UserProfile[] @relation("UserProfileDeletedBy")
+
+  trucksCreated Truck[] @relation("TruckCreatedBy")
+  trucksUpdated Truck[] @relation("TruckUpdatedBy")
+  trucksDeleted Truck[] @relation("TruckDeletedBy")
+
+  crewMembersCreated CrewMember[] @relation("CrewMemberCreatedBy")
+  crewMembersUpdated CrewMember[] @relation("CrewMemberUpdatedBy")
+  crewMembersDeleted CrewMember[] @relation("CrewMemberDeletedBy")
+
+  clientsCreated Client[] @relation("ClientCreatedBy")
+  clientsUpdated Client[] @relation("ClientUpdatedBy")
+  clientsDeleted Client[] @relation("ClientDeletedBy")
+
+  thirdPartiesCreated ThirdParty[] @relation("ThirdPartyCreatedBy")
+  thirdPartiesUpdated ThirdParty[] @relation("ThirdPartyUpdatedBy")
+  thirdPartiesDeleted ThirdParty[] @relation("ThirdPartyDeletedBy")
+
+  routesCreated Route[] @relation("RouteCreatedBy")
+  routesUpdated Route[] @relation("RouteUpdatedBy")
+  routesDeleted Route[] @relation("RouteDeletedBy")
+
+  expenseCategoriesCreated ExpenseCategory[] @relation("ExpenseCategoryCreatedBy")
+  expenseCategoriesUpdated ExpenseCategory[] @relation("ExpenseCategoryUpdatedBy")
+  expenseCategoriesDeleted ExpenseCategory[] @relation("ExpenseCategoryDeletedBy")
+
+  commissionRulesCreated CommissionRule[] @relation("CommissionRuleCreatedBy")
+  commissionRulesUpdated CommissionRule[] @relation("CommissionRuleUpdatedBy")
+  commissionRulesDeleted CommissionRule[] @relation("CommissionRuleDeletedBy")
+
+  systemSettingsCreated SystemSetting[] @relation("SystemSettingCreatedBy")
+  systemSettingsUpdated SystemSetting[] @relation("SystemSettingUpdatedBy")
+  systemSettingsDeleted SystemSetting[] @relation("SystemSettingDeletedBy")
+
+  shipmentsCreated Shipment[] @relation("ShipmentCreatedBy")
+  shipmentsUpdated Shipment[] @relation("ShipmentUpdatedBy")
+  shipmentsDeleted Shipment[] @relation("ShipmentDeletedBy")
+
+  allowancesCreated Allowance[] @relation("AllowanceCreatedBy")
+  allowancesUpdated Allowance[] @relation("AllowanceUpdatedBy")
+  allowancesDeleted Allowance[] @relation("AllowanceDeletedBy")
+
+  liquidationsCreated Liquidation[] @relation("LiquidationCreatedBy")
+  liquidationsUpdated Liquidation[] @relation("LiquidationUpdatedBy")
+  liquidationsDeleted Liquidation[] @relation("LiquidationDeletedBy")
+
+  liquidationLinesCreated LiquidationLine[] @relation("LiquidationLineCreatedBy")
+  liquidationLinesUpdated LiquidationLine[] @relation("LiquidationLineUpdatedBy")
+  liquidationLinesDeleted LiquidationLine[] @relation("LiquidationLineDeletedBy")
+
+  receiptsCreated Receipt[] @relation("ReceiptCreatedBy")
+  receiptsUpdated Receipt[] @relation("ReceiptUpdatedBy")
+  receiptsDeleted Receipt[] @relation("ReceiptDeletedBy")
+
+  billableExpensesCreated BillableExpense[] @relation("BillableExpenseCreatedBy")
+  billableExpensesUpdated BillableExpense[] @relation("BillableExpenseUpdatedBy")
+  billableExpensesDeleted BillableExpense[] @relation("BillableExpenseDeletedBy")
+
+  additionalChargesCreated AdditionalCharge[] @relation("AdditionalChargeCreatedBy")
+  additionalChargesUpdated AdditionalCharge[] @relation("AdditionalChargeUpdatedBy")
+  additionalChargesDeleted AdditionalCharge[] @relation("AdditionalChargeDeletedBy")
+
+  crewDeductionsCreated CrewDeduction[] @relation("CrewDeductionCreatedBy")
+  crewDeductionsUpdated CrewDeduction[] @relation("CrewDeductionUpdatedBy")
+  crewDeductionsDeleted CrewDeduction[] @relation("CrewDeductionDeletedBy")
+
+  adjustmentsCreated Adjustment[] @relation("AdjustmentCreatedBy")
+  adjustmentsUpdated Adjustment[] @relation("AdjustmentUpdatedBy")
+  adjustmentsDeleted Adjustment[] @relation("AdjustmentDeletedBy")
+
+  commissionsCreated Commission[] @relation("CommissionCreatedBy")
+  commissionsUpdated Commission[] @relation("CommissionUpdatedBy")
+  commissionsDeleted Commission[] @relation("CommissionDeletedBy")
+
+  payoutRunsCreated PayoutRun[] @relation("PayoutRunCreatedBy")
+  payoutRunsUpdated PayoutRun[] @relation("PayoutRunUpdatedBy")
+  payoutRunsDeleted PayoutRun[] @relation("PayoutRunDeletedBy")
+
+  payoutLinesCreated PayoutLine[] @relation("PayoutLineCreatedBy")
+  payoutLinesUpdated PayoutLine[] @relation("PayoutLineUpdatedBy")
+  payoutLinesDeleted PayoutLine[] @relation("PayoutLineDeletedBy")
+
+  auditLogsCreated AuditLog[] @relation("AuditLogCreatedBy")
+  auditLogsUpdated AuditLog[] @relation("AuditLogUpdatedBy")
+  auditLogsDeleted AuditLog[] @relation("AuditLogDeletedBy")
+
+  // --- workflow actor back-relations -------------------------------------
+  auditLogsActed        AuditLog[]    @relation("AuditLogActor")
+  liquidationsApproved  Liquidation[] @relation("LiquidationApprovedBy")
+  liquidationsFinalized Liquidation[] @relation("LiquidationFinalizedBy")
+  adjustmentsApproved   Adjustment[]  @relation("AdjustmentApprovedBy")
+  payoutRunsApproved    PayoutRun[]   @relation("PayoutRunApprovedBy")
+  payoutRunsPaid        PayoutRun[]   @relation("PayoutRunPaidBy")
+  payoutRunsVoided      PayoutRun[]   @relation("PayoutRunVoidedBy")
+
+  @@index([role])
+  @@index([isActive])
+  @@index([deletedAt])
+  @@map("user")
+}
+
+/// Presentation and contact detail for a login. Kept separate from User so the
+/// security-critical columns (role, isActive, crewMemberId) stay small.
+model UserProfile {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL — at most one live profile per
+  /// user, while a soft-deleted one can be replaced.
+  userId String
+  user   User   @relation("UserProfileOwner", fields: [userId], references: [id], onDelete: Cascade)
+
+  displayName String?
+  phone       String?
+  /// S3 object key for the avatar, not a URL.
+  avatarKey   String?
+  locale      String  @default("en-PH")
+  timezone    String  @default("Asia/Manila")
+  isActive    Boolean @default(true)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  /// Nullable so a self-registering user can own their first profile row.
+  createdBy     String?
+  createdByUser User?     @relation("UserProfileCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("UserProfileUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("UserProfileDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([deletedAt])
+  @@map("user_profile")
+}
+
+// --- Better Auth infrastructure tables --------------------------------------
+// Not business tables: no audit columns, no soft delete, full uniques. A
+// session or verification token is genuinely transient and should be revoked
+// by deletion, not retained.
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  expiresAt DateTime @db.Timestamptz(6)
+  ipAddress String?
+  userAgent String?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime? @db.Timestamptz(6)
+  refreshTokenExpiresAt DateTime? @db.Timestamptz(6)
+  scope                 String?
+  idToken               String?
+  password              String?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime @db.Timestamptz(6)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ---------------------------------------------------------------------------
+// Master data
+// ---------------------------------------------------------------------------
+
+model Truck {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL.
+  plateNumber String
+  make        String?
+  model       String?
+  modelYear   Int?
+  bodyType    String?
+  /// Payload capacity in kilograms. NOT money — a physical quantity.
+  capacityKg  Decimal? @db.Decimal(10, 2)
+
+  registrationExpiry DateTime? @db.Timestamptz(6)
+  /// Deactivated = still valid on history, not offered for new shipments
+  /// (e.g. sold). Distinct from deletedAt, which removes it from use.
+  isActive           Boolean   @default(true)
+
+  shipments Shipment[]
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("TruckCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("TruckUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("TruckDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([isActive])
+  @@index([deletedAt])
+  @@map("truck")
+}
+
+/// One table for drivers and helpers alike. `eligibleRoles` says what this
+/// person MAY be assigned as; the role actually filled comes from the shipment
+/// slot and is recorded on Commission.
+model CrewMember {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL.
+  employeeCode String
+  firstName    String
+  lastName     String
+  phone        String?
+  address      String?
+  dateHired    DateTime? @db.Timestamptz(6)
+  /// Deactivated = still valid on history, not offered for new assignments
+  /// (e.g. departed). Distinct from deletedAt.
+  isActive     Boolean   @default(true)
+
+  /// Code set: CrewRole (1 DRIVER, 2 HELPER), as a SMALLINT array. A CHECK
+  /// constraint requires every element to be a valid code. A person eligible
+  /// for both can drive one trip and help on another.
+  eligibleRoles Int[] @db.SmallInt
+
+  /// Nullable: required, and validated, only when this person occupies a
+  /// driver slot on a shipment.
+  licenseNumber String?
+  licenseExpiry DateTime? @db.Timestamptz(6)
+
+  /// At most one live login, enforced by a partial unique index on user.
+  logins User[] @relation("CrewMemberLogin")
+
+  drivenShipments Shipment[]      @relation("ShipmentDriver")
+  helpedShipments Shipment[]      @relation("ShipmentHelper")
+  commissions     Commission[]
+  allowances      Allowance[]
+  deductions      CrewDeduction[]
+  adjustments     Adjustment[]
+  payoutLines     PayoutLine[]
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("CrewMemberCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("CrewMemberUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("CrewMemberDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([isActive])
+  @@index([lastName, firstName])
+  @@index([deletedAt])
+  @@map("crew_member")
+}
+
+model Client {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL.
+  code        String
+  name        String
+  contactName String?
+  phone       String?
+  email       String?
+  address     String?
+  tin         String?
+  isActive    Boolean @default(true)
+
+  shipments       Shipment[]
+  commissionRules CommissionRule[]
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("ClientCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("ClientUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("ClientDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([isActive])
+  @@index([deletedAt])
+  @@map("client")
+}
+
+/// Broker or agent who brings freight and takes a cut off the gross rate.
+model ThirdParty {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL.
+  code        String
+  name        String
+  contactName String?
+  phone       String?
+  email       String?
+  isActive    Boolean @default(true)
+
+  /// Usual cut, offered as a default when creating a shipment. The shipment's
+  /// own frozen tpcAmount / appliedTpcRate are what actually govern.
+  defaultCommissionRate Decimal? @db.Decimal(5, 4)
+
+  shipments Shipment[]
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("ThirdPartyCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("ThirdPartyUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("ThirdPartyDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([isActive])
+  @@index([deletedAt])
+  @@map("third_party")
+}
+
+model Route {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL.
+  code         String
+  name         String
+  origin       String
+  destination  String
+  /// Kilometres. NOT money — a physical quantity.
+  distanceKm   Decimal? @db.Decimal(10, 2)
+  /// Indicative freight rate used to prefill a shipment. Money.
+  standardRate Decimal? @db.Decimal(15, 4)
+  isActive     Boolean  @default(true)
+
+  shipments       Shipment[]
+  commissionRules CommissionRule[]
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("RouteCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("RouteUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("RouteDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([isActive])
+  @@index([deletedAt])
+  @@map("route")
+}
+
+/// Categories for liquidation lines and billable expenses
+/// (fuel, toll, food, parking, ferry, gate pass, miscellaneous).
+model ExpenseCategory {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL.
+  code String
+  name String
+
+  requiresReceipt       Boolean @default(true)
+  /// Default for the commissionable flag when this category is used as a
+  /// billable expense. The per-row flag still wins.
+  defaultCommissionable Boolean @default(false)
+  sortOrder             Int     @default(0)
+  isActive              Boolean @default(true)
+
+  liquidationLines LiquidationLine[]
+  billableExpenses BillableExpense[]
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("ExpenseCategoryCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("ExpenseCategoryUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("ExpenseCategoryDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([isActive])
+  @@index([deletedAt])
+  @@map("expense_category")
+}
+
+/// Commission rate for a role, optionally scoped to a client or route, valid
+/// over a date window.
+///
+/// RESOLUTION (Phase 3 engine). Candidates are the active, undeleted rules
+/// where the role matches, the shipment date falls in
+/// [effectiveFrom, effectiveTo), and the scope matches (a null clientId or
+/// routeId matches any). The winner is chosen by, in order:
+///   1. specificity — client+route beats client, which beats route, which
+///      beats unscoped
+///   2. priority, higher first
+///   3. effectiveFrom, latest first
+///   4. id, purely so the result is stable
+/// SystemSetting supplies the fallback when nothing matches.
+///
+/// Whichever rule wins, its rate is copied onto Commission.appliedRate and
+/// frozen there, so editing or deleting this row later cannot move a
+/// commission that has already been computed.
+model CommissionRule {
+  id   String @id @default(cuid())
+  name String
+
+  /// Code set: CrewRole (1 DRIVER, 2 HELPER).
+  role Int @db.SmallInt
+
+  /// Code set: CommissionMethod (1 PERCENT_OF_BASE, 2 FIXED_PER_TRIP,
+  /// 3 FIXED_PER_ROUTE, 4 PERCENT_OF_NET_RATE, 5 TIERED — reserved and
+  /// unimplemented). The CHECK accepts every allocated code including TIERED;
+  /// refusing an unimplemented method is the service layer's job.
+  method Int @default(1) @db.SmallInt
+
+  /// Used by the rate-based methods (PERCENT_OF_BASE, PERCENT_OF_NET_RATE).
+  rate        Decimal? @db.Decimal(5, 4)
+  /// Used by the fixed methods (FIXED_PER_TRIP, FIXED_PER_ROUTE). Money.
+  fixedAmount Decimal? @db.Decimal(15, 4)
+
+  /// Narrower scope wins; ties break on priority (higher first).
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  routeId  String?
+  route    Route?  @relation(fields: [routeId], references: [id], onDelete: Restrict)
+  priority Int     @default(0)
+
+  effectiveFrom DateTime  @db.Timestamptz(6)
+  /// Null means open-ended.
+  effectiveTo   DateTime? @db.Timestamptz(6)
+  isActive      Boolean   @default(true)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("CommissionRuleCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("CommissionRuleUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("CommissionRuleDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([role, isActive, effectiveFrom])
+  @@index([clientId])
+  @@index([routeId])
+  @@index([deletedAt])
+  @@map("commission_rule")
+}
+
+/// Single mutable row of system-wide defaults.
+///
+/// Changing a rate here must NEVER alter an already-computed commission: every
+/// shipment and commission freezes the values it actually used.
+model SystemSetting {
+  id String @id @default("singleton")
+
+  gasExpenseDeductionRate Decimal @default(0.25) @db.Decimal(5, 4)
+  driverCommissionRate    Decimal @default(0.15) @db.Decimal(5, 4)
+  helperCommissionRate    Decimal @default(0.075) @db.Decimal(5, 4)
+
+  currencyCode String @default("PHP")
+  timezone     String @default("Asia/Manila")
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("SystemSettingCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("SystemSettingUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("SystemSettingDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@map("system_setting")
+}
+
+// ---------------------------------------------------------------------------
+// Shipment and the rate chain
+// ---------------------------------------------------------------------------
+
+model Shipment {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL.
+  shipmentNumber String
+
+  /// Code set: ShipmentStatus (1 DRAFT, 2 DISPATCHED, 3 IN_TRANSIT,
+  /// 4 DELIVERED, 5 LIQUIDATED, 6 CLOSED). Order comes from the declared
+  /// sequence in @eztruckr/types, never from the numeric value.
+  status Int @default(1) @db.SmallInt
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  /// Null for direct clients — there is no broker cut.
+  thirdPartyId String?
+  thirdParty   ThirdParty? @relation(fields: [thirdPartyId], references: [id], onDelete: Restrict)
+
+  routeId String?
+  route   Route?  @relation(fields: [routeId], references: [id], onDelete: Restrict)
+  truckId String?
+  truck   Truck?  @relation(fields: [truckId], references: [id], onDelete: Restrict)
+
+  /// Snapshotted from the route at dispatch so later edits to the route do not
+  /// rewrite history.
+  origin           String
+  destination      String
+  cargoDescription String?
+
+  driverId String?
+  driver   CrewMember? @relation("ShipmentDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  helperId String?
+  helper   CrewMember? @relation("ShipmentHelper", fields: [helperId], references: [id], onDelete: Restrict)
+
+  dispatchedAt DateTime? @db.Timestamptz(6)
+  deliveredAt  DateTime? @db.Timestamptz(6)
+  closedAt     DateTime? @db.Timestamptz(6)
+
+  // --- rate chain: gross - tpc = net ------------------------------------
+  grossRate      Decimal  @db.Decimal(15, 4)
+  /// Resolved broker cut in pesos. Zero for direct clients.
+  tpcAmount      Decimal  @default(0) @db.Decimal(15, 4)
+  netRate        Decimal  @default(0) @db.Decimal(15, 4)
+  /// Set when the TPC was derived as a percentage of gross; null when it was
+  /// agreed as a flat amount. Frozen at computation.
+  appliedTpcRate Decimal? @db.Decimal(5, 4)
+
+  // --- commission inputs, frozen at computation time --------------------
+  /// The gas deduction rate actually used. Copied from SystemSetting, or from
+  /// a per-shipment override.
+  appliedGasDeductionRate Decimal? @db.Decimal(5, 4)
+  /// Required by the service layer whenever appliedGasDeductionRate differs
+  /// from the system default.
+  gasRateOverrideReason   String?
+
+  // --- commission chain; every step stored, each rounded to 2dp ----------
+  /// Sum of billable expenses and additional charges flagged commissionable.
+  commissionableCharges Decimal?  @db.Decimal(15, 4)
+  /// netRate + commissionableCharges.
+  grossForCommission    Decimal?  @db.Decimal(15, 4)
+  /// grossForCommission x appliedGasDeductionRate. Reduces the commission base
+  /// ONLY — never a P&L cost line, since actual fuel is recognised through the
+  /// liquidation.
+  gasDeductionAmount    Decimal?  @db.Decimal(15, 4)
+  /// grossForCommission - gasDeductionAmount. Multiplying this stored value by
+  /// a stored crew rate must reproduce the stored commission exactly.
+  commissionableBase    Decimal?  @db.Decimal(15, 4)
+  commissionsComputedAt DateTime? @db.Timestamptz(6)
+
+  allowances        Allowance[]
+  liquidations      Liquidation[]
+  billableExpenses  BillableExpense[]
+  additionalCharges AdditionalCharge[]
+  commissions       Commission[]
+  crewDeductions    CrewDeduction[]
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("ShipmentCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("ShipmentUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("ShipmentDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@index([clientId])
+  @@index([driverId])
+  @@index([helperId])
+  @@index([truckId])
+  @@index([dispatchedAt])
+  @@index([deletedAt])
+  @@map("shipment")
+}
+
+/// Cash handed to the crew before or during a trip.
+///
+/// NOT a P&L cost: it is a receivable from the crew, cleared by the
+/// liquidation. Only liquidated actual expenses are recognised as cost.
+model Allowance {
+  id         String   @id @default(cuid())
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  /// Crew member who physically received the cash.
+  crewMemberId String
+  crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
+
+  amount   Decimal  @db.Decimal(15, 4)
+  issuedAt DateTime @default(now()) @db.Timestamptz(6)
+  remarks  String?
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("AllowanceCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("AllowanceUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("AllowanceDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([shipmentId])
+  @@index([crewMemberId])
+  @@index([deletedAt])
+  @@map("allowance")
+}
+
+/// Settlement of the allowance against actual receipted spend.
+model Liquidation {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL — at most one live liquidation
+  /// per shipment, while a soft-deleted one can be superseded.
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  /// Code set: LiquidationStatus (1 SUBMITTED, 2 APPROVED, 3 FINALIZED).
+  status Int @default(1) @db.SmallInt
+
+  /// Sum of the shipment's allowances, frozen at submission.
+  totalAllowance  Decimal @default(0) @db.Decimal(15, 4)
+  /// Sum of the liquidation lines — this is the figure recognised as P&L cost.
+  totalLiquidated Decimal @default(0) @db.Decimal(15, 4)
+  /// totalAllowance - totalLiquidated. Positive = crew returns cash, negative =
+  /// company reimburses crew. Settled separately; never a P&L line.
+  variance        Decimal @default(0) @db.Decimal(15, 4)
+
+  submittedAt     DateTime  @default(now()) @db.Timestamptz(6)
+  approvedAt      DateTime? @db.Timestamptz(6)
+  approvedBy      String?
+  approvedByUser  User?     @relation("LiquidationApprovedBy", fields: [approvedBy], references: [id], onDelete: Restrict)
+  finalizedAt     DateTime? @db.Timestamptz(6)
+  finalizedBy     String?
+  finalizedByUser User?     @relation("LiquidationFinalizedBy", fields: [finalizedBy], references: [id], onDelete: Restrict)
+  remarks         String?
+
+  lines LiquidationLine[]
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("LiquidationCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("LiquidationUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("LiquidationDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([shipmentId])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("liquidation")
+}
+
+model LiquidationLine {
+  id            String      @id @default(cuid())
+  liquidationId String
+  liquidation   Liquidation @relation(fields: [liquidationId], references: [id], onDelete: Restrict)
+
+  expenseCategoryId String
+  expenseCategory   ExpenseCategory @relation(fields: [expenseCategoryId], references: [id], onDelete: Restrict)
+
+  description String?
+  amount      Decimal  @db.Decimal(15, 4)
+  spentAt     DateTime @db.Timestamptz(6)
+
+  /// Partial-unique WHERE "deletedAt" IS NULL — a receipt backs at most one
+  /// live line.
+  receiptId String?
+  receipt   Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("LiquidationLineCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("LiquidationLineUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("LiquidationLineDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([liquidationId])
+  @@index([expenseCategoryId])
+  @@index([deletedAt])
+  @@map("liquidation_line")
+}
+
+/// A file in S3-compatible object storage. Holds the object key, never a URL —
+/// links are presigned on demand.
+model Receipt {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL.
+  storageKey String
+  fileName   String
+  mimeType   String
+  sizeBytes  Int
+  checksum   String?
+
+  uploadedAt DateTime @default(now()) @db.Timestamptz(6)
+
+  liquidationLines LiquidationLine[]
+  billableExpenses BillableExpense[]
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("ReceiptCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("ReceiptUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("ReceiptDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([deletedAt])
+  @@map("receipt")
+}
+
+// ---------------------------------------------------------------------------
+// Client charges
+// ---------------------------------------------------------------------------
+
+/// A cost the company fronted and recovers from the client (permit, crane,
+/// port charges). Adds to revenue and is also a real cost.
+model BillableExpense {
+  id         String   @id @default(cuid())
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  expenseCategoryId String?
+  expenseCategory   ExpenseCategory? @relation(fields: [expenseCategoryId], references: [id], onDelete: Restrict)
+
+  description      String
+  amount           Decimal @db.Decimal(15, 4)
+  /// Whether this amount feeds the commission base.
+  isCommissionable Boolean @default(false)
+
+  /// Partial-unique WHERE "deletedAt" IS NULL.
+  receiptId String?
+  receipt   Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("BillableExpenseCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("BillableExpenseUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("BillableExpenseDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([shipmentId])
+  @@index([deletedAt])
+  @@map("billable_expense")
+}
+
+/// A fee or surcharge with no underlying cost (extra drop, detention, fuel
+/// surcharge). Pure revenue.
+model AdditionalCharge {
+  id         String   @id @default(cuid())
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  description      String
+  amount           Decimal @db.Decimal(15, 4)
+  isCommissionable Boolean @default(false)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("AdditionalChargeCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("AdditionalChargeUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("AdditionalChargeDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([shipmentId])
+  @@index([deletedAt])
+  @@map("additional_charge")
+}
+
+// ---------------------------------------------------------------------------
+// Crew ledger
+// ---------------------------------------------------------------------------
+
+/// A charge against a crew member (cash shortage, damage, violation).
+/// Recovered at payout. Never a client charge.
+model CrewDeduction {
+  id           String     @id @default(cuid())
+  crewMemberId String
+  crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
+
+  /// Optional link to the trip the deduction arose from.
+  shipmentId String?
+  shipment   Shipment? @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+
+  reason     String
+  amount     Decimal  @db.Decimal(15, 4)
+  /// Clawed back so far across payout runs.
+  recovered  Decimal  @default(0) @db.Decimal(15, 4)
+  isSettled  Boolean  @default(false)
+  incurredAt DateTime @default(now()) @db.Timestamptz(6)
+
+  /// The payout line that recovered it, once settled.
+  payoutLineId String?
+  payoutLine   PayoutLine? @relation(fields: [payoutLineId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("CrewDeductionCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("CrewDeductionUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("CrewDeductionDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([crewMemberId, isSettled])
+  @@index([payoutLineId])
+  @@index([deletedAt])
+  @@map("crew_deduction")
+}
+
+/// Manual increase or decrease applied to a crew member at payout. Reason and
+/// approver are both required.
+model Adjustment {
+  id           String     @id @default(cuid())
+  crewMemberId String
+  crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
+
+  /// Code set: AdjustmentDirection (1 INCREASE, 2 DECREASE).
+  direction Int     @db.SmallInt
+  amount    Decimal @db.Decimal(15, 4)
+  reason    String
+
+  approvedBy     String
+  approvedByUser User     @relation("AdjustmentApprovedBy", fields: [approvedBy], references: [id], onDelete: Restrict)
+  approvedAt     DateTime @default(now()) @db.Timestamptz(6)
+
+  payoutLineId String?
+  payoutLine   PayoutLine? @relation(fields: [payoutLineId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("AdjustmentCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("AdjustmentUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("AdjustmentDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([crewMemberId])
+  @@index([payoutLineId])
+  @@index([deletedAt])
+  @@map("adjustment")
+}
+
+// ---------------------------------------------------------------------------
+// Commissions and payout
+// ---------------------------------------------------------------------------
+
+/// One computed commission for one crew member on one shipment.
+///
+/// Self-verifying by design: commissionableBase x appliedRate = amount, using
+/// only values stored on this row.
+model Commission {
+  id         String   @id @default(cuid())
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  crewMemberId String
+  crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
+
+  /// Code set: CrewRole (1 DRIVER, 2 HELPER) — the role actually filled on
+  /// this trip. Partial-unique on (shipmentId, role) WHERE "deletedAt" IS NULL.
+  role Int @db.SmallInt
+
+  /// Code set: CommissionMethod — how this amount was derived, frozen so the
+  /// row stays interpretable if the rule changes method later.
+  appliedMethod Int @default(1) @db.SmallInt
+
+  /// Frozen copies of the inputs, so a later rate change cannot move this row.
+  commissionableBase Decimal @db.Decimal(15, 4)
+  appliedRate        Decimal @db.Decimal(5, 4)
+  amount             Decimal @db.Decimal(15, 4)
+
+  computedAt DateTime @default(now()) @db.Timestamptz(6)
+
+  /// IDEMPOTENCY. Nullable until paid.
+  ///
+  /// This unique is FULL, not partial — the single deliberate exception to the
+  /// partial-unique rule. A soft-deleted commission must still count as paid,
+  /// so deleting one must never release its payout line and let the same work
+  /// be paid twice. Triggers additionally refuse to move or clear this link,
+  /// to delete the row, or to soft-delete it, once the run has reached PAID.
+  payoutLineId String?     @unique
+  payoutLine   PayoutLine? @relation(fields: [payoutLineId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("CommissionCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("CommissionUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("CommissionDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([shipmentId])
+  @@index([crewMemberId])
+  @@index([deletedAt])
+  @@map("commission")
+}
+
+/// A batch payout covering a period. DRAFT -> APPROVED -> PAID.
+/// PAID is terminal and immutable; VOIDED is reachable only before PAID.
+model PayoutRun {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL.
+  runNumber String
+
+  /// Code set: PayoutRunStatus (1 DRAFT, 2 APPROVED, 3 PAID, 4 VOIDED).
+  /// PAID is terminal, enforced by trigger.
+  status Int @default(1) @db.SmallInt
+
+  periodStart DateTime @db.Timestamptz(6)
+  periodEnd   DateTime @db.Timestamptz(6)
+
+  totalGross       Decimal @default(0) @db.Decimal(15, 4)
+  totalDeductions  Decimal @default(0) @db.Decimal(15, 4)
+  totalAdjustments Decimal @default(0) @db.Decimal(15, 4)
+  totalNet         Decimal @default(0) @db.Decimal(15, 4)
+
+  approvedAt     DateTime? @db.Timestamptz(6)
+  approvedBy     String?
+  approvedByUser User?     @relation("PayoutRunApprovedBy", fields: [approvedBy], references: [id], onDelete: Restrict)
+  paidAt         DateTime? @db.Timestamptz(6)
+  paidBy         String?
+  paidByUser     User?     @relation("PayoutRunPaidBy", fields: [paidBy], references: [id], onDelete: Restrict)
+  voidedAt       DateTime? @db.Timestamptz(6)
+  voidedBy       String?
+  voidedByUser   User?     @relation("PayoutRunVoidedBy", fields: [voidedBy], references: [id], onDelete: Restrict)
+  voidReason     String?
+
+  lines PayoutLine[]
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("PayoutRunCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("PayoutRunUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("PayoutRunDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@index([deletedAt])
+  @@map("payout_run")
+}
+
+/// One crew member's payment line within a run, carrying exactly one
+/// commission plus any deductions and adjustments applied against it.
+model PayoutLine {
+  id          String    @id @default(cuid())
+  payoutRunId String
+  payoutRun   PayoutRun @relation(fields: [payoutRunId], references: [id], onDelete: Restrict)
+
+  crewMemberId String
+  crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
+
+  /// Back side of Commission.payoutLineId; at most one, by that full unique.
+  commission Commission?
+
+  grossAmount      Decimal @db.Decimal(15, 4)
+  deductionAmount  Decimal @default(0) @db.Decimal(15, 4)
+  adjustmentAmount Decimal @default(0) @db.Decimal(15, 4)
+  netAmount        Decimal @db.Decimal(15, 4)
+
+  deductions  CrewDeduction[]
+  adjustments Adjustment[]
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("PayoutLineCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("PayoutLineUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("PayoutLineDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([payoutRunId])
+  @@index([crewMemberId])
+  @@index([deletedAt])
+  @@map("payout_line")
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail
+// ---------------------------------------------------------------------------
+
+/// Append-only record of who changed what. Distinct from the audit columns:
+/// those say who touched a row last, this says what actually changed.
+model AuditLog {
+  id String @id @default(cuid())
+
+  actorId String?
+  actor   User?   @relation("AuditLogActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  /// e.g. "shipment.dispatch", "liquidation.approve", "payout-run.pay".
+  action     String
+  entityType String
+  entityId   String
+
+  /// Column-level snapshots. Money inside these is serialised as a string.
+  before Json?
+  after  Json?
+
+  ipAddress  String?
+  userAgent  String?
+  occurredAt DateTime @default(now()) @db.Timestamptz(6)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("AuditLogCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("AuditLogUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("AuditLogDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([occurredAt])
+  @@index([deletedAt])
+  @@map("audit_log")
+}
