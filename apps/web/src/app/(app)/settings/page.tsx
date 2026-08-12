@@ -48,16 +48,20 @@ const RATE_FIELDS = [
  * has to be answerable.
  */
 export default function SettingsPage() {
-  const { user } = useCurrentUser();
+  const { user, isPending: userIsPending } = useCurrentUser();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const isAdministrator = user?.role === UserRole.ADMINISTRATOR;
 
+  // Both are gated so a non-administrator never fires a request that can only
+  // come back 403. The API refuses them regardless — this screen is the
+  // courtesy, not the control.
   const settings = useQuery({
     queryKey: ['settings'],
     queryFn: () => apiFetch<SystemSetting>('/settings'),
+    enabled: isAdministrator,
   });
 
   const history = useQuery({
@@ -95,6 +99,27 @@ export default function SettingsPage() {
     },
   });
 
+  if (userIsPending) {
+    return <Loader2 className="text-muted-foreground size-5 animate-spin" />;
+  }
+
+  // The nav link is already administrator-only, so reaching this means someone
+  // typed the URL. Say so plainly rather than rendering a form with every
+  // control disabled, which reads as a bug.
+  if (!isAdministrator) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Administrators only</CardTitle>
+          <CardDescription>
+            System settings are company financial policy. Ask an administrator if a rate needs to
+            change.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <header className="space-y-1">
@@ -130,7 +155,7 @@ export default function SettingsPage() {
                     <Input
                       id={field.name}
                       inputMode="decimal"
-                      disabled={!isAdministrator || save.isPending}
+                      disabled={save.isPending}
                       value={draft[field.name] ?? ''}
                       onChange={(event) =>
                         setDraft((previous) => ({ ...previous, [field.name]: event.target.value }))
@@ -145,63 +170,55 @@ export default function SettingsPage() {
                 ))}
               </div>
 
-              {isAdministrator ? (
-                <Button type="submit" disabled={save.isPending}>
-                  {save.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
-                  Save settings
-                </Button>
-              ) : (
-                <p className="text-muted-foreground text-sm">
-                  Only an administrator may change these.
-                </p>
-              )}
+              <Button type="submit" disabled={save.isPending}>
+                {save.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+                Save settings
+              </Button>
             </form>
           )}
         </CardContent>
       </Card>
 
-      {isAdministrator ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Change history</CardTitle>
-            <CardDescription>Who changed what, when, and what it was before.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>When</TableHead>
-                  <TableHead>Who</TableHead>
-                  <TableHead>Setting</TableHead>
-                  <TableHead>Previous</TableHead>
-                  <TableHead>New</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {history.data && history.data.length > 0 ? (
-                  history.data.map((change) => (
-                    <TableRow key={change.id}>
-                      <TableCell className="whitespace-nowrap">
-                        {formatDateTime(change.occurredAt)}
-                      </TableCell>
-                      <TableCell>{change.actorName ?? '—'}</TableCell>
-                      <TableCell>{labelFor(change.field)}</TableCell>
-                      <TableCell className="tabular-nums">{change.previousValue ?? '—'}</TableCell>
-                      <TableCell className="tabular-nums">{change.newValue ?? '—'}</TableCell>
-                    </TableRow>
-                  ))
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-muted-foreground py-8 text-center">
-                      No changes recorded yet.
+      <Card>
+        <CardHeader>
+          <CardTitle>Change history</CardTitle>
+          <CardDescription>Who changed what, when, and what it was before.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>When</TableHead>
+                <TableHead>Who</TableHead>
+                <TableHead>Setting</TableHead>
+                <TableHead>Previous</TableHead>
+                <TableHead>New</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {history.data && history.data.length > 0 ? (
+                history.data.map((change) => (
+                  <TableRow key={change.id}>
+                    <TableCell className="whitespace-nowrap">
+                      {formatDateTime(change.occurredAt)}
                     </TableCell>
+                    <TableCell>{change.actorName ?? '—'}</TableCell>
+                    <TableCell>{labelFor(change.field)}</TableCell>
+                    <TableCell className="tabular-nums">{change.previousValue ?? '—'}</TableCell>
+                    <TableCell className="tabular-nums">{change.newValue ?? '—'}</TableCell>
                   </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      ) : null}
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-muted-foreground py-8 text-center">
+                    No changes recorded yet.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   );
 }

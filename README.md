@@ -342,6 +342,12 @@ in `auth/role-policy.ts`. Crew logins are confined to their own records, checked
 server-side against the session's `crewMemberId` — changing the id in the URL
 gets a 403, whether or not the UI rendered the link.
 
+System settings are administrator-only including the read: the rates are
+company financial policy, not reference data. When a later screen needs to show
+the gas deduction rate beside a commission it computed, that should be a narrow
+endpoint returning just that value, rather than this one widened until it is no
+longer administrator-only in any meaningful sense.
+
 ### Removing master data
 
 Delete is not one operation. Before removing anything the service counts what

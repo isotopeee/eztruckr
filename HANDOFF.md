@@ -154,7 +154,7 @@ Entities: `User`, `UserProfile`, `Truck`, `CrewMember`, `Client`, `ThirdParty`, 
 
 ### Settings and auditing
 
-- `GET/PATCH /api/settings` (read: any office role; write: administrator only) and `GET /api/settings/history`.
+- `GET/PATCH /api/settings` and `GET /api/settings/history` — **administrator only, read included**. The read was briefly open to every office role on the theory that a later screen would want the gas rate; the user rejected that, correctly: nothing consumed it, and the settings page was not role-gated, so any office role that typed the URL saw all three rates. When a commission screen needs the gas rate it should get a narrow endpoint returning just that value.
 - Each change writes an `AuditLog` row **in the same transaction** as the update, capturing actor, timestamp, before and after. History is flattened to one entry per field.
 - **Bug found and fixed during verification**: change detection compared `Decimal.toString()` against the input string, so `0.25` vs `0.2500` recorded a change that never happened. Now compared as `Prisma.Decimal` and rendered at the column's scale (`toFixed(4)`) everywhere.
 
@@ -191,7 +191,6 @@ Entities: `User`, `UserProfile`, `Truck`, `CrewMember`, `Client`, `ThirdParty`, 
 ### Still open after Phase 3
 
 - Items 1–4 above remain open. Item 3 (`CommissionRule` vs `SystemSetting` overlap) was **explicitly deferred** by the user this session — both remain in place, and the settings screen labels the two rates "Fallback used when no commission rule matches."
-- **`GET /api/settings` is readable by every office role**, while the screen and all writes are administrator-only, as specified. The broader read is deliberate — the gas deduction rate explains numbers shown elsewhere — but it is wider than the letter of "admin only", so flagging it.
 - **Crew scoping is only exercised on `CrewMember`** so far, because that is the only crew-facing resource Phase 3 built. The mechanism (`crewMemberId` on `RequestUser`, checked server-side) is in place for shipments and payouts in a later phase.
 - **No API-level e2e tests.** Guards and the removal rule are unit-tested; wiring (Better Auth mounting, CORS ordering, session resolution) was verified live by hand rather than by an automated suite. A supertest harness would be worth adding before this grows.
 

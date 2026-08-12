@@ -2,7 +2,7 @@ import { Body, Controller, Get, Patch, Req } from '@nestjs/common';
 import { updateSystemSettingSchema, type SettingChange, type SystemSetting } from '@eztruckr/types';
 import type { Request } from 'express';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
-import { CAN_ADMINISTER, CAN_READ_MASTER_DATA } from '../auth/role-policy';
+import { CAN_ADMINISTER } from '../auth/role-policy';
 import type { RequestUser } from '../auth/request-user';
 import { createZodDto } from '../common/create-zod-dto';
 import { SettingsService, type RequestOrigin } from './settings.service';
@@ -14,11 +14,17 @@ export class SettingsController {
   constructor(private readonly settings: SettingsService) {}
 
   /**
-   * Readable by anyone with a desk — the gas deduction rate explains numbers
-   * they see elsewhere — but writable only by an administrator.
+   * Administrator only, read included.
+   *
+   * These rates are company financial policy, not reference data, so the whole
+   * row stays closed rather than being readable by anyone with a desk. When a
+   * later screen needs to show the gas deduction rate beside a commission it
+   * computed, that should arrive through an endpoint returning just that value
+   * — a narrow read for a specific purpose, rather than this one widened until
+   * it is no longer administrator-only in any meaningful sense.
    */
   @Get()
-  @Roles(...CAN_READ_MASTER_DATA)
+  @Roles(...CAN_ADMINISTER)
   get(): Promise<SystemSetting> {
     return this.settings.get();
   }
