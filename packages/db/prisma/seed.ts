@@ -231,6 +231,13 @@ const ROUTES = [
 /**
  * Baseline company-wide rates. Unscoped and lowest priority, so any narrower
  * rule added later wins.
+ *
+ * These are load-bearing, not decorative. Now that the SystemSetting fallback
+ * is gone, CommissionRule is the only source of truth for crew pay and a
+ * shipment matching no rule is an error rather than a silent default. These two
+ * rows are what make the unscoped case resolve, so removing them without a
+ * replacement stops commissions computing — which is the intended behaviour,
+ * but should be a decision rather than a surprise.
  */
 const COMMISSION_RULES = [
   {
@@ -296,8 +303,9 @@ async function seedSystemSetting() {
   const existing = await prisma.systemSetting.findFirst({ where: { id: 'singleton' } });
   if (existing) return existing;
 
-  // Rates come from the schema defaults (25% gas, 15% driver, 7.5% helper) so
-  // they are declared in exactly one place.
+  // The gas deduction rate comes from the schema default (25%) so it is
+  // declared in exactly one place. Commission rates are NOT here — the
+  // unscoped CommissionRule rows below are the only source of truth for them.
   return prisma.systemSetting.create({ data: { id: 'singleton' } });
 }
 

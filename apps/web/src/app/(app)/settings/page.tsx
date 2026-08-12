@@ -1,14 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { UserRole, type SettingChange, type SystemSetting } from '@eztruckr/types';
+import { useQuery } from '@tanstack/react-query';
+import { UserRole, type SettingChange } from '@eztruckr/types';
 import { Loader2 } from 'lucide-react';
-import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
+import {
+  GAS_DEDUCTION_FIELD,
+  GasDeductionRateCard,
+} from '@/components/settings/gas-deduction-rate-card';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import {
   Table,
   TableBody,
@@ -17,86 +16,42 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { ApiError, apiFetch } from '@/lib/api-client';
+import { apiFetch } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
 import { useCurrentUser } from '@/lib/use-current-user';
 
-const RATE_FIELDS = [
-  {
-    name: 'gasExpenseDeductionRate' as const,
-    label: 'Gas expense deduction rate',
-    help: 'The share of fuel spend deducted before commission is computed. 0.2500 is 25%.',
-  },
-  {
-    name: 'driverCommissionRate' as const,
-    label: 'Driver commission rate',
-    help: 'Fallback used when no commission rule matches.',
-  },
-  {
-    name: 'helperCommissionRate' as const,
-    label: 'Helper commission rate',
-    help: 'Fallback used when no commission rule matches.',
-  },
-];
+const FIELD_LABELS: Record<string, string> = {
+  [GAS_DEDUCTION_FIELD]: 'Gas expense deduction rate',
+
+  // Retired. These columns were dropped when CommissionRule became the only
+  // source of truth for crew pay, but entries recording changes to them stay
+  // in the audit log — that is the point of an audit log. Keeping the labels
+  // means the history reads as sentences rather than degrading into raw column
+  // names the moment a field is removed.
+  driverCommissionRate: 'Driver commission rate (retired)',
+  helperCommissionRate: 'Helper commission rate (retired)',
+};
 
 /**
  * System settings, and the record of who changed them.
  *
- * The history below the form is the reason this screen exists rather than a
- * plain settings form: these rates are inputs to every commission the system
- * computes, and when someone questions a payout, "it was 0.2500 until the 14th"
- * has to be answerable.
+ * The history below is the reason this screen exists rather than a plain
+ * settings form: the gas deduction rate is an input to every commission the
+ * system computes, and when someone questions a payout, "it was 0.2500 until
+ * the 14th" has to be answerable.
+ *
+ * Commission rates are deliberately not here. CommissionRule is the only
+ * source of truth for what crew are paid — see the note on the SystemSetting
+ * model in schema.prisma.
  */
 export default function SettingsPage() {
   const { user, isPending: userIsPending } = useCurrentUser();
-  const queryClient = useQueryClient();
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-
   const isAdministrator = user?.role === UserRole.ADMINISTRATOR;
-
-  // Both are gated so a non-administrator never fires a request that can only
-  // come back 403. The API refuses them regardless — this screen is the
-  // courtesy, not the control.
-  const settings = useQuery({
-    queryKey: ['settings'],
-    queryFn: () => apiFetch<SystemSetting>('/settings'),
-    enabled: isAdministrator,
-  });
 
   const history = useQuery({
     queryKey: ['settings', 'history'],
     queryFn: () => apiFetch<SettingChange[]>('/settings/history'),
     enabled: isAdministrator,
-  });
-
-  // Seed the form from the server exactly once per load of the settings, so
-  // typing is never overwritten by a background refetch.
-  useEffect(() => {
-    if (!settings.data) return;
-    setDraft({
-      gasExpenseDeductionRate: settings.data.gasExpenseDeductionRate,
-      driverCommissionRate: settings.data.driverCommissionRate,
-      helperCommissionRate: settings.data.helperCommissionRate,
-    });
-  }, [settings.data]);
-
-  const save = useMutation({
-    mutationFn: (payload: Record<string, string>) =>
-      apiFetch<SystemSetting>('/settings', { method: 'PATCH', body: JSON.stringify(payload) }),
-    onSuccess: async () => {
-      toast.success('Settings saved');
-      setFieldErrors({});
-      await queryClient.invalidateQueries({ queryKey: ['settings'] });
-    },
-    onError: (error) => {
-      if (error instanceof ApiError) {
-        setFieldErrors(error.fieldErrors);
-        toast.error(error.displayMessage);
-        return;
-      }
-      toast.error('Something went wrong');
-    },
   });
 
   if (userIsPending) {
@@ -125,59 +80,12 @@ export default function SettingsPage() {
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">System settings</h1>
         <p className="text-muted-foreground text-sm">
-          Rates used when computing commissions. Changing one never alters a commission already
-          computed — every shipment freezes the values it actually used.
+          Changing a rate never alters a commission already computed — every shipment freezes the
+          values it actually used.
         </p>
       </header>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Rates</CardTitle>
-          <CardDescription>
-            Each is a multiplier between 0 and 1, stored to four decimal places.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {settings.isPending ? (
-            <Loader2 className="text-muted-foreground size-5 animate-spin" />
-          ) : (
-            <form
-              className="space-y-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                save.mutate(draft);
-              }}
-            >
-              <div className="grid gap-4 sm:grid-cols-3">
-                {RATE_FIELDS.map((field) => (
-                  <div key={field.name} className="space-y-2">
-                    <Label htmlFor={field.name}>{field.label}</Label>
-                    <Input
-                      id={field.name}
-                      inputMode="decimal"
-                      disabled={save.isPending}
-                      value={draft[field.name] ?? ''}
-                      onChange={(event) =>
-                        setDraft((previous) => ({ ...previous, [field.name]: event.target.value }))
-                      }
-                    />
-                    {fieldErrors[field.name] ? (
-                      <p className="text-destructive text-xs">{fieldErrors[field.name]}</p>
-                    ) : (
-                      <p className="text-muted-foreground text-xs">{field.help}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              <Button type="submit" disabled={save.isPending}>
-                {save.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
-                Save settings
-              </Button>
-            </form>
-          )}
-        </CardContent>
-      </Card>
+      <GasDeductionRateCard />
 
       <Card>
         <CardHeader>
@@ -203,7 +111,7 @@ export default function SettingsPage() {
                       {formatDateTime(change.occurredAt)}
                     </TableCell>
                     <TableCell>{change.actorName ?? '—'}</TableCell>
-                    <TableCell>{labelFor(change.field)}</TableCell>
+                    <TableCell>{FIELD_LABELS[change.field] ?? change.field}</TableCell>
                     <TableCell className="tabular-nums">{change.previousValue ?? '—'}</TableCell>
                     <TableCell className="tabular-nums">{change.newValue ?? '—'}</TableCell>
                   </TableRow>
@@ -221,8 +129,4 @@ export default function SettingsPage() {
       </Card>
     </div>
   );
-}
-
-function labelFor(field: string): string {
-  return RATE_FIELDS.find((entry) => entry.name === field)?.label ?? field;
 }

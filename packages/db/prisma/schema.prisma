@@ -613,12 +613,25 @@ model CommissionRule {
 ///
 /// Changing a rate here must NEVER alter an already-computed commission: every
 /// shipment and commission freezes the values it actually used.
+///
+/// COMMISSION RATES DO NOT LIVE HERE. `CommissionRule` is the only source of
+/// truth for what a driver or helper is paid. This table once carried
+/// `driverCommissionRate` / `helperCommissionRate` as a fallback for when no
+/// rule matched. That was two places to look for one number, and the weaker of
+/// the two: a fallback rate has no effective window, no scope and no priority,
+/// so it could not answer "what was the helper rate in March?" — the very
+/// question `CommissionRule.effectiveFrom` exists for. Worse, it failed
+/// silently: a deactivated, expired or mis-scoped rule would quietly pay the
+/// default instead of raising, and nobody would find out until someone
+/// questioned a payout. The columns were dropped; a shipment matching no rule
+/// is now an error the engine raises, not a number it invents.
 model SystemSetting {
   id String @id @default("singleton")
 
+  /// Share of fuel spend deducted before commission is computed. Genuinely
+  /// system-wide: not a per-role rate, so it has no CommissionRule equivalent
+  /// and no ambiguity about which role's value governs a shared base.
   gasExpenseDeductionRate Decimal @default(0.25) @db.Decimal(5, 4)
-  driverCommissionRate    Decimal @default(0.15) @db.Decimal(5, 4)
-  helperCommissionRate    Decimal @default(0.075) @db.Decimal(5, 4)
 
   currencyCode String @default("PHP")
   timezone     String @default("Asia/Manila")

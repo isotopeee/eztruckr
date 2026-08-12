@@ -342,6 +342,23 @@ in `auth/role-policy.ts`. Crew logins are confined to their own records, checked
 server-side against the session's `crewMemberId` — changing the id in the URL
 gets a 403, whether or not the UI rendered the link.
 
+### One source of truth for crew pay
+
+`CommissionRule` is the only place a driver or helper rate is defined. There is
+deliberately no fallback: a shipment matching no rule must be an error the
+engine raises, not a number it invents. `SystemSetting` once carried fallback
+rates, which was two places to look for one number — and the weaker of the two,
+since a fallback has no effective window, no scope and no priority, so it could
+not answer "what was the helper rate in March?". The seeded unscoped,
+open-ended, priority-0 rules are the company-wide baseline.
+
+`gasExpenseDeductionRate` does stay on `SystemSetting`: it is not per-role, so
+it has no rule equivalent, and putting it on a per-role rule would let a driver
+rule and a helper rule disagree about the commissionable base of the same
+shipment. It is _surfaced_ on both the settings screen and the commission rules
+screen through one shared component that reads and writes the same row —
+surfaced twice, stored once.
+
 System settings are administrator-only including the read: the rates are
 company financial policy, not reference data. When a later screen needs to show
 the gas deduction rate beside a commission it computed, that should be a narrow

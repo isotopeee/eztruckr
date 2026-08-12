@@ -124,6 +124,10 @@ Entities: `User`, `UserProfile`, `Truck`, `CrewMember`, `Client`, `ThirdParty`, 
   3. `20260812135930_partial_uniques_and_payout_guards` — all partial unique indexes + the 5 payout triggers.
   4. `20260812140740_created_by_optional_to_prisma` — nullability fix + `_created_by_required` CHECKs.
 
+A fifth was added in Phase 3:
+
+5. `20260813000000_drop_commission_rate_fallback` — drops `SystemSetting.driverCommissionRate` / `helperCommissionRate`. **Hand-written, and the reason matters**: `system_setting_rate_ranges` is a single CHECK spanning all three rate columns, and Postgres drops a multi-column constraint entirely when any column it references goes. The migration drops and rebuilds it narrowed, or the `gasExpenseDeductionRate` bound would vanish silently. (`prisma migrate dev` also refuses to run non-interactively here, so hand-writing was necessary anyway.)
+
 ---
 
 ## Phase 3 — Auth and master data ✅
@@ -183,14 +187,19 @@ Entities: `User`, `UserProfile`, `Truck`, `CrewMember`, `Client`, `ThirdParty`, 
 
 1. **Vehicles/trucks** were added by me (not in original brief's domain concepts list) — confirmed reasonable, no objection raised, but never explicitly confirmed as "correct."
 2. **`Shipment.appliedTpcRate` semantics** (nullable = flat TPC amount agreed, set = percentage of gross) — my design choice, flagged for confirmation, no response yet.
-3. **`CommissionRule` vs `SystemSetting` fallback overlap** — two sources of truth for driver/helper rates (rule table is authoritative, system setting is fallback-when-no-rule-matches). Flagged as a smell, not resolved.
+3. ~~**`CommissionRule` vs `SystemSetting` fallback overlap**~~ — **RESOLVED (user decision).** `CommissionRule` is now the only source of truth for crew pay. `SystemSetting.driverCommissionRate` / `helperCommissionRate` were dropped (migration `20260813000000_drop_commission_rate_fallback`). The deciding argument: the fallback was strictly _less expressive_ than the thing it backed up — no effective window, no scope, no priority — so it could not answer "what was the helper rate in March?", the very question `CommissionRule.effectiveFrom` exists for. It also failed silently: an expired or mis-scoped rule would quietly pay the default. Nothing was lost, because the seeded unscoped priority-0 rules already carried the same values (0.1500 / 0.0750).
+   - **`gasExpenseDeductionRate` stays on `SystemSetting`** — it is not per-role, so it has no rule equivalent, and putting it on a per-role rule would let the driver rule and helper rule disagree about the commissionable base of the same shipment. It is surfaced on **both** the settings screen and the commission rules screen via one shared component (`components/settings/gas-deduction-rate-card.tsx`) reading and writing the same row through the same query key. Surfaced twice, stored once.
+   - **Consequence for Phase 4**: a shipment matching no rule must be an **error the engine raises**, not a number it invents.
 4. **`CrewDeduction` partial recovery across multiple payout runs** — current model has one nullable `payoutLineId` + a `recovered` running total, which can't fully represent a debt clawed back across >1 run. Flagged; would need a join table if that's a real scenario.
 5. ~~**1:1 relations modeled as 1:many**~~ — **RESOLVED (user decision).** Keep the partial-unique-backed arrays; added `liveOne()` / `liveOneOrThrow()` in `packages/db/src/relations.ts`, which assert-and-unwrap the single live row so call sites read as 1:1 without the schema lying. More than one survivor throws, because that means the partial unique index is gone. Used in `UsersService.currentUser`.
 6. ~~**`user.email` only partially unique**~~ — **RESOLVED.** Better Auth's Prisma adapter uses `findFirst`, not `findUnique`, so it never assumes total uniqueness. No change needed.
 
 ### Still open after Phase 3
 
-- Items 1–4 above remain open. Item 3 (`CommissionRule` vs `SystemSetting` overlap) was **explicitly deferred** by the user this session — both remain in place, and the settings screen labels the two rates "Fallback used when no commission rule matches."
+- Items 1, 2 and 4 above remain open. Item 3 is resolved (see above).
+- **Two gaps opened by removing the fallback, both for Phase 4.** With no fallback, losing the baseline rule stops commissions computing — correctly, but nothing guards it today:
+  1. `CommissionRulesService.remove()` passes `probes: []`, so soft-deleting or deactivating the **last live unscoped rule for a role** is frictionless. It needs a probe, or an explicit refusal.
+  2. A baseline rule whose `effectiveTo` passes leaves the same hole with a timer on it. Rule coverage should be checked **proactively** — at dispatch, or as a dashboard warning — so a gap surfaces on a calm Tuesday rather than as a hard failure at month-end.
 - **Crew scoping is only exercised on `CrewMember`** so far, because that is the only crew-facing resource Phase 3 built. The mechanism (`crewMemberId` on `RequestUser`, checked server-side) is in place for shipments and payouts in a later phase.
 - **No API-level e2e tests.** Guards and the removal rule are unit-tested; wiring (Better Auth mounting, CORS ordering, session resolution) was verified live by hand rather than by an automated suite. A supertest harness would be worth adding before this grows.
 

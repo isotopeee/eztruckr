@@ -13,12 +13,14 @@ const SINGLETON_ID = 'singleton';
 const AUDIT_ENTITY_TYPE = 'SystemSetting';
 const AUDIT_ACTION = 'system-setting.update';
 
-/** The fields this service will record changes for, in display order. */
-const AUDITED_FIELDS = [
-  'gasExpenseDeductionRate',
-  'driverCommissionRate',
-  'helperCommissionRate',
-] as const;
+/**
+ * The fields this service will record changes for, in display order.
+ *
+ * One entry today, and the machinery around it is still worth having: this is
+ * the rate every commission in the system is computed against, so "who changed
+ * it, when, and from what" has to be answerable.
+ */
+const AUDITED_FIELDS = ['gasExpenseDeductionRate'] as const;
 
 type AuditedField = (typeof AUDITED_FIELDS)[number];
 
@@ -198,8 +200,6 @@ function toSystemSetting(row: SystemSettingRow): SystemSetting {
   return {
     id: SINGLETON_ID,
     gasExpenseDeductionRate: formatRate(row.gasExpenseDeductionRate),
-    driverCommissionRate: formatRate(row.driverCommissionRate),
-    helperCommissionRate: formatRate(row.helperCommissionRate),
     currencyCode: row.currencyCode,
     timezone: row.timezone,
     ...auditFields(row),

@@ -1,12 +1,16 @@
 import { z } from 'zod';
 import { auditFieldsSchema, isoDateTimeSchema, rateStringSchema } from './common';
 
-/** System-wide defaults as returned by the API. */
+/**
+ * System-wide defaults as returned by the API.
+ *
+ * Commission rates are deliberately absent: `CommissionRule` is the only
+ * source of truth for what crew are paid. See the note on the `SystemSetting`
+ * model in schema.prisma for why the fallback was removed.
+ */
 export const systemSettingSchema = auditFieldsSchema.extend({
   id: z.literal('singleton'),
   gasExpenseDeductionRate: rateStringSchema,
-  driverCommissionRate: rateStringSchema,
-  helperCommissionRate: rateStringSchema,
   currencyCode: z.string(),
   timezone: z.string(),
 });
@@ -24,8 +28,6 @@ export type SystemSetting = z.infer<typeof systemSettingSchema>;
 export const updateSystemSettingSchema = z
   .object({
     gasExpenseDeductionRate: rateStringSchema,
-    driverCommissionRate: rateStringSchema,
-    helperCommissionRate: rateStringSchema,
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, {
