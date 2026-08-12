@@ -13,8 +13,16 @@ export const envSchema = z.object({
   /** Comma-separated list of origins allowed to call the API. */
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
 
-  BETTER_AUTH_SECRET: z.string().min(1).optional(),
-  BETTER_AUTH_URL: z.string().url().optional(),
+  /**
+   * Signs session cookies and tokens. Required — an app that boots without it
+   * would either refuse every login or, worse, sign with a predictable key.
+   * Generate with: openssl rand -base64 32
+   */
+  BETTER_AUTH_SECRET: z
+    .string()
+    .min(32, 'BETTER_AUTH_SECRET must be at least 32 characters (openssl rand -base64 32)'),
+  /** Origin the auth endpoints are reached at, used to build callback URLs. */
+  BETTER_AUTH_URL: z.string().url().default('http://localhost:4000'),
 
   // S3-compatible storage (MinIO in development).
   S3_ENDPOINT: z.string().url().optional(),

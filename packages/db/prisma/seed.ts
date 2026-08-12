@@ -1,4 +1,5 @@
 import { CommissionMethod, CrewRole, UserRole } from '@eztruckr/types';
+import { hashPassword } from 'better-auth/crypto';
 import { withActor } from '../src/actor-context';
 import { createPrismaClient } from '../src/prisma-client';
 
@@ -24,6 +25,46 @@ import { createPrismaClient } from '../src/prisma-client';
 const prisma = createPrismaClient();
 
 const ADMIN_EMAIL = 'admin@eztruckr.ph';
+
+/**
+ * Development default. Overridden by SEED_ADMIN_PASSWORD, and long enough to
+ * satisfy the API's 12-character minimum so a developer who changes one and
+ * not the other finds out here rather than at the login screen.
+ */
+const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'eztruckr-dev-admin';
+
+/**
+ * Gives the bootstrap administrator a password they can actually sign in with.
+ *
+ * Better Auth stores email/password credentials as an `account` row with
+ * providerId `credential` and the hash in `password` — the same row its own
+ * sign-up flow writes. Using Better Auth's `hashPassword` rather than reaching
+ * for a hashing library directly is what keeps this row verifiable by the
+ * running app: the algorithm and encoding are Better Auth's business, and it
+ * changes them without asking.
+ *
+ * Idempotent, and deliberately non-destructive: an existing credential is left
+ * alone, so re-running the seed never resets a password someone has changed.
+ */
+async function seedAdministratorCredential(userId: string) {
+  const existing = await prisma.account.findFirst({
+    where: { userId, providerId: 'credential' },
+  });
+
+  if (existing) return;
+
+  await prisma.account.create({
+    data: {
+      userId,
+      // Better Auth uses the user id as accountId for credential accounts.
+      accountId: userId,
+      providerId: 'credential',
+      password: await hashPassword(ADMIN_PASSWORD),
+    },
+  });
+
+  console.warn('[seed] administrator credential created');
+}
 
 async function seedAdministrator() {
   // No actor scope here on purpose — see the note above.
@@ -262,6 +303,7 @@ async function seedSystemSetting() {
 
 async function main() {
   const admin = await seedAdministrator();
+  await seedAdministratorCredential(admin.id);
 
   // Everything below is attributed to the administrator automatically.
   await withActor({ userId: admin.id }, async () => {

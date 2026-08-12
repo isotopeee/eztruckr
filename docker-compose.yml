@@ -80,15 +80,26 @@ services:
       S3_SECRET_ACCESS_KEY: eztruckr-secret
       S3_FORCE_PATH_STYLE: "true"
       APP_TIMEZONE: Asia/Manila
+      # Required — the API refuses to boot without it. `:?` fails the whole
+      # `compose up` immediately with this message, rather than leaving a
+      # container to crash-loop while the reason scrolls past in the logs.
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env - generate one by running 'openssl rand -base64 32'}"
+      # The browser reaches the API on the host port, so callback URLs must be
+      # built from that and not from the container's internal name.
+      BETTER_AUTH_URL: http://localhost:${API_PORT:-4000}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-eztruckr-dev-admin}
     ports:
       - "${API_PORT:-4000}:4000"
-    # Migrations are applied on boot so `docker compose up` is self-contained.
-    # Invokes the Prisma binary directly rather than via pnpm, so the runtime
-    # image never has to resolve a package manager.
+    # Migrations and the seed both run on boot so `docker compose up` gives a
+    # system you can actually sign in to. The seed is idempotent and never
+    # resets an existing password, so repeated boots are harmless.
+    # Invokes the binaries directly rather than via pnpm, so the runtime image
+    # never has to resolve a package manager.
     command: >
       /bin/sh -c "
       cd /app/packages/db &&
       ./node_modules/.bin/prisma migrate deploy &&
+      ./node_modules/.bin/tsx prisma/seed.ts &&
       cd /app &&
       node apps/api/dist/main.js
       "

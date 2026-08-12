@@ -17,3 +17,5 @@ export {
 } from './soft-delete-extension';
 export { withDeleted, withHardDelete, getSoftDeleteScope } from './soft-delete-context';
 export type { SoftDeleteScope } from './soft-delete-context';
+
+export { liveOne, liveOneOrThrow, MissingLiveRowError, MultipleLiveRowsError } from './relations';

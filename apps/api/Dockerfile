@@ -58,8 +58,13 @@ COPY --from=build /app/packages/db/node_modules ./packages/db/node_modules
 COPY --from=build /app/packages/db/package.json ./packages/db/package.json
 COPY --from=build /app/packages/db/dist ./packages/db/dist
 COPY --from=build /app/packages/db/generated ./packages/db/generated
-# Needed by `prisma migrate deploy` on startup.
+# Needed by `prisma migrate deploy` and the seed on startup.
 COPY --from=build /app/packages/db/prisma ./packages/db/prisma
+# The seed is TypeScript run through tsx and imports the extensions from
+# source (`../src/actor-context`), not from dist — so the sources have to come
+# along. A few KB, and it is what makes `docker compose up` produce a system
+# with an administrator you can actually sign in as.
+COPY --from=build /app/packages/db/src ./packages/db/src
 
 USER node
 EXPOSE 4000

@@ -5,23 +5,29 @@ freight rates, third-party broker commissions, crew assignment, cash advances
 and liquidation, client charges, crew commissions, commission payouts, and
 profit and loss.
 
-> **Status: Phase 2 (Data model).** The monorepo, containers and both apps are
-> up, and the complete domain schema is migrated and seeded. Still to come:
-> Better Auth, role and crew scoping, the commission engine, the API surface
-> and the UI.
+> **Status: Phase 3 (Auth and master data).** The monorepo, containers and both
+> apps are up, the complete domain schema is migrated and seeded, and you can
+> sign in and manage every master data table with role-based access. Still to
+> come: the commission engine, shipments and liquidation, and payouts.
 
 ---
 
 ## Quick start
 
-Bring the whole stack up with one command:
+First, set an auth secret — the API refuses to boot without one:
+
+```bash
+cp .env.example .env && printf 'BETTER_AUTH_SECRET=%s\n' "$(openssl rand -base64 32)" >> .env
+```
+
+Then bring the whole stack up with one command:
 
 ```bash
 docker compose up -d --build
 ```
 
 That starts PostgreSQL, MinIO (creating the `eztruckr` bucket), applies Prisma
-migrations, and boots both apps:
+migrations, seeds an administrator you can sign in as, and boots both apps:
 
 | Service       | URL                              | Notes                                   |
 | ------------- | -------------------------------- | --------------------------------------- |
@@ -45,6 +51,17 @@ curl -s http://localhost:4000/api/health
   "checks": { "database": "up", "storage": "up" }
 }
 ```
+
+Then sign in at http://localhost:3000 as the seeded administrator:
+
+| Email               | Password             |
+| ------------------- | -------------------- |
+| `admin@eztruckr.ph` | `eztruckr-dev-admin` |
+
+Development only — override with `SEED_ADMIN_PASSWORD` in `.env`. The seed
+creates the credential on first run and never touches an existing one, so it
+will not reset a password you have changed. There is no public sign-up: every
+other account is created by an administrator under **Users**.
 
 Tear down (add `-v` to also drop the database and bucket volumes):
 
@@ -70,7 +87,7 @@ cp .env.example .env
 pnpm install
 docker compose up -d postgres minio minio-init   # datastores only
 pnpm db:migrate                                  # apply migrations
-pnpm db:seed                                     # seed system settings
+pnpm db:seed                                     # admin login + master data
 pnpm dev                                         # web + api in watch mode
 ```
 
@@ -86,7 +103,7 @@ Requires Node >= 20.11 and pnpm 11.
 | `pnpm test`       | Run test suites                                  |
 | `pnpm format`     | Rewrite files with Prettier                      |
 | `pnpm db:migrate` | Create/apply a migration                         |
-| `pnpm db:seed`    | Seed the singleton system settings row           |
+| `pnpm db:seed`    | Seed the administrator, settings and master data |
 | `pnpm db:studio`  | Open Prisma Studio                               |
 
 ---
@@ -166,8 +183,8 @@ Zod pipe strips unknown keys and the extension overwrites them regardless.
 `updatedBy` stays `null` until a row is first modified.
 
 The acting user comes from request-scoped `AsyncLocalStorage`
-(`withActor`), opened by `ActorContextMiddleware`, so no service has to thread
-a `userId` through its signatures.
+(`withActor`), opened by `SessionContextMiddleware` from the Better Auth
+session, so no service has to thread a `userId` through its signatures.
 
 ### Timestamps
 
@@ -295,6 +312,53 @@ pnpm --filter @eztruckr/db test
   injection makes a class appear in type position only; rewriting it to
   `import type` would erase the runtime value that `emitDecoratorMetadata`
   needs, breaking DI at boot.
+- **Order in `main.ts` is load-bearing, twice over.** The app is created with
+  `bodyParser: false` and the Better Auth handler is mounted before the JSON
+  parser is turned back on — Better Auth reads the raw request stream, and a
+  parser ahead of it consumes the body so every sign-in arrives empty. CORS is
+  enabled before that mount, because `enableCors` registers Express middleware
+  in call order and the auth handler ends the response itself; enabling CORS
+  afterwards leaves exactly the sign-in route without the headers, which fails
+  only in a browser and only cross-origin.
+- **TanStack Query never retries a 4xx and never pauses when "offline".** A 403
+  is a settled answer, and a paused query renders as pending forever — an
+  unexplained spinner with no error. See the comments in `providers.tsx`.
+
+---
+
+## Authorisation
+
+Authentication is Better Auth over the `user` / `session` / `account` /
+`verification` tables. Two global guards run on every request:
+
+- `AuthenticatedGuard` — a session is required unless the route is `@Public()`,
+  and a deactivated account is refused with a message that says so.
+- `RolesGuard` — **fails closed**. A route with no `@Roles(...)` declaration is
+  refused outright, so a controller added without one returns 403 on its first
+  call rather than being open until someone notices.
+
+Roles are a membership test, never a ranking. Who may do what is declared once
+in `auth/role-policy.ts`. Crew logins are confined to their own records, checked
+server-side against the session's `crewMemberId` — changing the id in the URL
+gets a 403, whether or not the UI rendered the link.
+
+### Removing master data
+
+Delete is not one operation. Before removing anything the service counts what
+refers to it:
+
+| Situation                                  | Outcome        |
+| ------------------------------------------ | -------------- |
+| Something still refers to it               | `DEACTIVATED`  |
+| Nothing refers to it                       | `SOFT_DELETED` |
+| Nothing refers to it, and it is a category | `HARD_DELETED` |
+
+The response says which happened and what referred to the record, and the UI
+reports it — "delete" that silently means "deactivate" is how someone ends up
+believing a truck is gone while it still prints on last month's vouchers.
+Expense categories are the only table that can be truly deleted, and only while
+unused: they are classification, not history. Every business foreign key is
+`ON DELETE RESTRICT`, so the database is a real second line of defence.
 
 ---
 
@@ -305,6 +369,22 @@ Dockerfiles for both apps; Prisma with the audit-stamping extension and a
 `SystemSetting` singleton; NestJS with a health check, schema-validated config
 and a global Zod validation pipe; Next.js with Tailwind, shadcn/ui and TanStack
 Query; shared Prettier/ESLint/tsconfig wired into `turbo.json`.
+
+## Phase 2 scope
+
+Built: the full 23-table domain model with SMALLINT code sets instead of
+Postgres enums, soft delete everywhere behind a single Prisma extension,
+partial unique indexes, five payout-idempotency triggers, and an idempotent
+seed.
+
+## Phase 3 scope
+
+Built: Better Auth wired to the existing tables with role, `isActive` and
+`crewMemberId` as non-client-settable additional fields; global authentication
+and fail-closed role guards; crew scoping; full CRUD for all seven master data
+tables with reference-aware removal; admin-only system settings with a change
+history written to `AuditLog`; and the web app — login, role-aware app shell,
+management screens and a crew portal.
 
 Not yet built: Better Auth, roles and crew scoping, and the domain model
 (shipments, crew, charges, liquidation, commissions, payout runs, P&L).

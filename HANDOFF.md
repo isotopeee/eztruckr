@@ -1,6 +1,6 @@
 # EZTruckr — Session Handoff
 
-Trucking management system for a Philippine hauling company. Turborepo monorepo, built in phases. This document summarizes everything completed through **Phase 2** so a new session can continue without replaying history.
+Trucking management system for a Philippine hauling company. Turborepo monorepo, built in phases. This document summarizes everything completed through **Phase 3** so a new session can continue without replaying history.
 
 **Git initialized.** Branch `main`, initial commit `3af269a` covers all of Phase 1 + Phase 2. No remote configured.
 
@@ -126,10 +126,52 @@ Entities: `User`, `UserProfile`, `Truck`, `CrewMember`, `Client`, `ThirdParty`, 
 
 ---
 
+## Phase 3 — Auth and master data ✅
+
+### Better Auth
+
+- `apps/api/src/auth/auth.ts` builds the instance over the **existing** Phase 2 tables via `prismaAdapter`. The `user` table already matched Better Auth's own shape, so nothing was renamed; `UserProfile` remains the extension, holding presentation and contact detail.
+- `role`, `isActive` and `crewMemberId` are declared as `user.additionalFields` with **`input: false`** — no request body can set them, at sign-up or update. Roles are assigned only by the admin-guarded users service, through Prisma.
+- **Public sign-up is closed** by a `before` hook that throws when `ctx.path === '/sign-up/email' && ctx.request`. `ctx.request` is set only for HTTP-originated calls, so the admin service's in-process `auth.api.signUpEmail()` still works. Verified live: HTTP sign-up → 403, admin creation → 201.
+- **Open question 6 resolved.** Better Auth's Prisma adapter uses `findFirst`, never `findUnique` (confirmed by reading `@better-auth/prisma-adapter`), so it makes no total-uniqueness assumption about email. The partial unique index works as-is: live duplicates rejected by the database, a deleted user's address reusable.
+- Session resolution happens once per request in `SessionContextMiddleware`, which replaced `ActorContextMiddleware`. It sets `req.authUser` for the guards **and** opens the actor scope, so audit stamping and authorisation share one lookup. A soft-deleted user cannot authenticate for free — the soft-delete extension filters the lookup Better Auth performs.
+- `lastLoginAt` is stamped by a `databaseHooks.session.create.after` hook using **raw SQL**, deliberately bypassing the audit extension: going through `prisma.user.update` would stamp `updatedBy` with the null actor and erase the real one every time someone logged in. Signing in is not an edit to the record.
+
+### Guards
+
+- Two global guards: `AuthenticatedGuard` (session required unless `@Public()`; deactivated accounts refused with a distinct message) and `RolesGuard`.
+- **`RolesGuard` fails closed** — a route with no `@Roles(...)` is refused outright. "Role guards on every endpoint" is therefore structural, not a review checklist item.
+- Policy declared once in `auth/role-policy.ts`. Roles are membership-tested, never ranked.
+- Crew scoping: a CREW login may read its own `CrewMember` and nothing else, checked server-side against the session's `crewMemberId`.
+
+### Master data
+
+- Full CRUD for trucks, crew members, clients, third parties, routes, expense categories and commission rules, plus users and settings.
+- **Reference-aware removal** (`master-data/removal.ts`): count what refers to the record first — referenced → `DEACTIVATED`, unreferenced → `SOFT_DELETED`, unreferenced expense category → `HARD_DELETED` (via `withHardDelete()`, the only place in the app that reaches it). The response names the outcome and the references; the UI reports it.
+- Expense categories probe **billable expenses as well as liquidation lines**. The brief named only liquidation lines, but both FKs are `ON DELETE RESTRICT`, so a category referenced only by a billable expense would otherwise reach the database as a delete and fail there — a 409 the user cannot act on instead of the deactivation they wanted.
+- Cross-field rules that cannot run on a PATCH fragment (driver needs a licence; a commission rule's amount column must match its method) are exported as plain predicates from `@eztruckr/types` and re-applied in the service to the patch merged onto the stored row.
+- `PrismaExceptionFilter` translates P2002 → 409, P2003 → 409, P2025 → 404. Without it every database guarantee surfaced as a 500.
+
+### Settings and auditing
+
+- `GET/PATCH /api/settings` (read: any office role; write: administrator only) and `GET /api/settings/history`.
+- Each change writes an `AuditLog` row **in the same transaction** as the update, capturing actor, timestamp, before and after. History is flattened to one entry per field.
+- **Bug found and fixed during verification**: change detection compared `Decimal.toString()` against the input string, so `0.25` vs `0.2500` recorded a change that never happened. Now compared as `Prisma.Decimal` and rendered at the column's scale (`toFixed(4)`) everywhere.
+
+### Web
+
+- Login, role-aware app shell, seven master data screens driven by a declarative `ResourceSpec`, a bespoke users screen, the settings screen with its history, and a crew portal.
+- **Bug found and fixed during verification**: a 403 left the UI on a spinner forever. TanStack Query had paused the retry (`fetchStatus: 'paused'`). Now 4xx is never retried and `networkMode: 'always'` prevents silent pausing — a paused query renders as pending with no error and no way out.
+- Empty **required** fields submit as `""` rather than `null`, so the schema's own message ("must be at least 2 characters") appears instead of Zod's "expected string, received null"; `required` on the input catches it in the browser first.
+
+---
+
 ## Current verified state (as of last check)
 
-- **`pnpm run check`**: 14/14 tasks passing (format-check, lint, typecheck, test across all workspaces).
-- **57 total tests**: 34 DB integration tests (real Postgres, 3 files: `payout-idempotency.test.ts` [7], `soft-delete.test.ts` [13], `code-constraints.test.ts` [14]), 19 code-set unit tests, 4 API unit tests (Zod pipe stripping).
+- **`pnpm run check`**: 14/14 tasks passing, uncached (format-check, lint, typecheck, test across all workspaces).
+- **63 total tests**: 41 in `packages/db` (34 integration against real Postgres + 7 `relations.test.ts`), 22 in `apps/api` (`guards.test.ts` [11], `removal.test.ts` [7], `zod-validation.pipe.test.ts` [4]), plus the code-set unit tests in `packages/types`.
+- Live verification against the **containerised** stack: unauthenticated read → 401, HTTP sign-up → 403, admin sign-in → 200, `/me` → 200, master data → 200. Browser-verified: login, dashboard, master data CRUD, removal reporting, settings history, crew portal, and a crew account refused on `/trucks` with the API's own message.
+- Role matrix verified live: OPERATIONS can write trucks but not expense categories, users or settings; CREW can read only its own crew record; a deactivated user's existing session is refused on the next request.
 - Database schema verified via direct SQL inspection: 0 enum types, 0 float columns, 0 naive timestamps, 23/23 tables with audit cols, 23/23 with soft-delete cols, 16 partial unique indexes, 10 code CHECKs, 21 `createdBy_required` CHECKs, 5 triggers, 1 full unique (payout link).
 - `docker compose up -d --build` **re-verified after the Phase 2 schema rewrite**: all four containers healthy, `/api/health` returns `{"status":"ok"}` with database and storage both `up`, web renders the health card via TanStack Query, and UTC→Asia/Manila rendering is correct (14:24 UTC displayed as 10:24 PM).
 - Schema invariants re-confirmed against the live database after rebuild: 0 enum types, 0 float columns, 0 naive timestamps, 23 soft-deletable business tables, 16 partial unique indexes, 21 `_created_by_required` CHECKs, 5 triggers.
@@ -143,8 +185,15 @@ Entities: `User`, `UserProfile`, `Truck`, `CrewMember`, `Client`, `ThirdParty`, 
 2. **`Shipment.appliedTpcRate` semantics** (nullable = flat TPC amount agreed, set = percentage of gross) — my design choice, flagged for confirmation, no response yet.
 3. **`CommissionRule` vs `SystemSetting` fallback overlap** — two sources of truth for driver/helper rates (rule table is authoritative, system setting is fallback-when-no-rule-matches). Flagged as a smell, not resolved.
 4. **`CrewDeduction` partial recovery across multiple payout runs** — current model has one nullable `payoutLineId` + a `recovered` running total, which can't fully represent a debt clawed back across >1 run. Flagged; would need a join table if that's a real scenario.
-5. **1:1 relations modeled as 1:many** (see soft-delete section above) — `Liquidation`, `UserProfile`, `CrewMember.logins`, `Receipt`'s backlinks — because Prisma can't express partial-unique-backed one-to-one. Flagged as a one-line-per-model fix if the user wants true 1:1 typing back (would need to drop the partial-unique-on-delete benefit for those specific tables, or find another way).
-6. **`user.email` only partially unique** — a deleted user's email can be reused by a new user. Flagged as a Phase 3 risk: Better Auth's adapter may assume email uniqueness is total; may need reconsidering when auth is wired up.
+5. ~~**1:1 relations modeled as 1:many**~~ — **RESOLVED (user decision).** Keep the partial-unique-backed arrays; added `liveOne()` / `liveOneOrThrow()` in `packages/db/src/relations.ts`, which assert-and-unwrap the single live row so call sites read as 1:1 without the schema lying. More than one survivor throws, because that means the partial unique index is gone. Used in `UsersService.currentUser`.
+6. ~~**`user.email` only partially unique**~~ — **RESOLVED.** Better Auth's Prisma adapter uses `findFirst`, not `findUnique`, so it never assumes total uniqueness. No change needed.
+
+### Still open after Phase 3
+
+- Items 1–4 above remain open. Item 3 (`CommissionRule` vs `SystemSetting` overlap) was **explicitly deferred** by the user this session — both remain in place, and the settings screen labels the two rates "Fallback used when no commission rule matches."
+- **`GET /api/settings` is readable by every office role**, while the screen and all writes are administrator-only, as specified. The broader read is deliberate — the gas deduction rate explains numbers shown elsewhere — but it is wider than the letter of "admin only", so flagging it.
+- **Crew scoping is only exercised on `CrewMember`** so far, because that is the only crew-facing resource Phase 3 built. The mechanism (`crewMemberId` on `RequestUser`, checked server-side) is in place for shipments and payouts in a later phase.
+- **No API-level e2e tests.** Guards and the removal rule are unit-tested; wiring (Better Auth mounting, CORS ordering, session resolution) was verified live by hand rather than by an automated suite. A supertest harness would be worth adding before this grows.
 
 ---
 
@@ -152,13 +201,25 @@ Entities: `User`, `UserProfile`, `Truck`, `CrewMember`, `Client`, `ThirdParty`, 
 
 Turborepo · Docker + docker compose · Next.js App Router + TypeScript · shadcn/ui + Tailwind v4 · TanStack Query · NestJS + TypeScript · Prisma · PostgreSQL 16 · currency.js (configured once in `packages/types/src/money/money.ts`, `{ symbol: '₱', precision: 2 }`) · MinIO (S3-compatible) · Prettier (root-level Turborepo task `//#format:check`).
 
-**Not yet integrated**: Better Auth (Phase 1/2 apps have no real auth — `ActorContextMiddleware` currently resolves `userId` as always-null with a `TODO(phase-2)` comment that's now stale/should say phase-3).
+**Better Auth 1.6.26** is now integrated (Phase 3). `express` was added as a direct API dependency, since `main.ts` mounts the auth handler and the body parsers itself.
+
+---
+
+## Development logins
+
+Seeded on `docker compose up`. Development only.
+
+| Email               | Password             | Role          |
+| ------------------- | -------------------- | ------------- |
+| `admin@eztruckr.ph` | `eztruckr-dev-admin` | Administrator |
+
+`ops@eztruckr.ph` (Operations) and `driver@eztruckr.ph` (Crew, linked to a crew member) exist in the local database from this session's role testing but are **not** created by the seed — a fresh volume will have the administrator only.
 
 ---
 
 ## Suggested next steps for a new session
 
-1. `git init` + initial commit — very overdue, flagged multiple times.
-2. Fresh `docker compose up -d --build` smoke test — schema changed substantially since Phase 1's last verified boot.
-3. Resolve the 6 open questions above, or explicitly defer them.
-4. Phase 3 candidates per the original phased plan: Better Auth wiring + role/crew-scoping middleware, the commission computation engine (rate chain → gas deduction → commissionable base → driver/helper commission, using the worked example as a test fixture: ₱18,000 gross → ₱1,822.50 driver / ₱911.25 helper), and/or the NestJS API surface (controllers/services/DTOs) for the domain model that Phase 2 only modeled at the DB layer.
+1. **The commission computation engine** — the obvious next phase, and everything it needs now exists: rate chain → gas deduction → commissionable base → driver/helper commission, with the worked example as a test fixture (₱18,000 gross → ₱1,822.50 driver / ₱911.25 helper). Resolving open question 3 (rule vs setting fallback) becomes unavoidable here.
+2. **Shipments and liquidations** — the operational core, and the first real exercise of crew scoping beyond `CrewMember`.
+3. **An API e2e harness** (supertest) covering the auth wiring, since that is the part currently verified only by hand.
+4. Items 1, 2 and 4 of the open questions still want a decision from the user.

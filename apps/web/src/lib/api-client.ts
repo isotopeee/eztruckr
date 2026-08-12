@@ -1,5 +1,11 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
 
+/** One field-level complaint from the API's Zod validation. */
+export interface FieldError {
+  path: string;
+  message: string;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -9,11 +15,53 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
   }
+
+  /**
+   * The API's own message, when it has one worth showing.
+   *
+   * Nest wraps thrown exceptions as `{ message }`, and the Zod pipe adds
+   * `{ message, errors }`. Falling back to the HTTP status keeps the caller
+   * from ever rendering "undefined" at a user.
+   */
+  get displayMessage(): string {
+    const body = this.body;
+
+    if (typeof body === 'object' && body !== null && 'message' in body) {
+      const { message } = body as { message: unknown };
+      if (typeof message === 'string') return message;
+      if (Array.isArray(message) && typeof message[0] === 'string') return message[0];
+    }
+
+    return this.message;
+  }
+
+  /** Field-level errors, keyed by field name, for rendering beside inputs. */
+  get fieldErrors(): Record<string, string> {
+    const body = this.body;
+
+    if (typeof body !== 'object' || body === null || !('errors' in body)) {
+      return {};
+    }
+
+    const { errors } = body as { errors: unknown };
+    if (!Array.isArray(errors)) return {};
+
+    const result: Record<string, string> = {};
+    for (const entry of errors as FieldError[]) {
+      if (entry?.path && entry?.message && !result[entry.path]) {
+        result[entry.path] = entry.message;
+      }
+    }
+    return result;
+  }
 }
 
 /**
- * Thin fetch wrapper for the NestJS API. Credentials are included so the
- * Better Auth session cookie rides along once Phase 2 adds it.
+ * Thin fetch wrapper for the NestJS API.
+ *
+ * `credentials: 'include'` carries the Better Auth session cookie, which in
+ * development is set by a different origin (:4000) from the one the app is
+ * served on (:3000).
  */
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -25,6 +73,10 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     },
   });
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   const body: unknown = await response.json().catch(() => null);
 
   if (!response.ok) {
@@ -32,4 +84,17 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
 
   return body as T;
+}
+
+/** Builds a query string, omitting empty and default-ish values. */
+export function queryString(params: Record<string, string | number | boolean | undefined>): string {
+  const search = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === '' || value === false) continue;
+    search.set(key, String(value));
+  }
+
+  const rendered = search.toString();
+  return rendered ? `?${rendered}` : '';
 }
