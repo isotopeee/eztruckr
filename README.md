@@ -193,9 +193,10 @@ at display time via `formatDateTime` in `apps/web/src/lib/format.ts`.
 
 ### Rates are frozen
 
-System settings supply defaults only. When a commission is computed, the rate
-values actually used are stored on the shipment, so later settings changes can
-never retroactively alter a computed commission.
+When a commission is computed, the rate values actually used are copied onto the
+shipment and the commission, so a later edit to a setting or a rule can never
+retroactively alter a figure already computed. Anything named `applied*` is one
+of these frozen copies.
 
 Commission rates are flat per role and scope. Rates that vary by trip value are
 deliberately not supported.

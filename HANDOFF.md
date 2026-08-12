@@ -2,7 +2,15 @@
 
 Trucking management system for a Philippine hauling company. Turborepo monorepo, built in phases. This document summarizes everything completed through **Phase 3** so a new session can continue without replaying history.
 
-**Git initialized.** Branch `main`, initial commit `3af269a` covers all of Phase 1 + Phase 2. No remote configured.
+**Git.** Branch `main`, 5 commits through the end of Phase 3, working tree clean. No remote configured.
+
+| Commit    | What                                                    |
+| --------- | ------------------------------------------------------- |
+| `3af269a` | Phase 1 foundation + Phase 2 data model                 |
+| `61195ff` | Handoff formatting, git init recorded                   |
+| `fdd7a52` | Phase 3 — auth, role guards, master data                |
+| `56b371d` | System settings made administrator-only, read included  |
+| `b399139` | CommissionRule becomes the only source of truth for pay |
 
 ---
 
@@ -14,7 +22,7 @@ eztruckr/
 │  ├─ web/          # Next.js 15 App Router, Tailwind v4, shadcn/ui, TanStack Query
 │  └─ api/          # NestJS 11, health check, Zod validation pipe
 ├─ packages/
-│  ├─ db/           # Prisma schema (27 tables), migrations, audit + soft-delete extensions
+│  ├─ db/           # Prisma schema (26 tables), migrations, audit + soft-delete extensions
 │  ├─ types/        # Money helper, Zod schemas, code sets (const-object enums)
 │  └─ config/       # Shared tsconfig/eslint/prettier, imported via workspace protocol
 ├─ docker-compose.yml   # postgres (5433), minio (9010/9011), api (4000), web (3000)
@@ -52,7 +60,7 @@ Original Phase 2 request used Postgres native `enum` blocks and relation-based `
 
 ### Round 2 (current, final state)
 
-**23 business tables + 4 Better Auth infra tables (session/account/verification, no audit cols) = 27 total.**
+**23 business tables + 3 Better Auth infra tables (`session` / `account` / `verification` — no audit columns, no soft delete) = 26 total**, verified by listing `information_schema.tables`. (`user` and `user_profile` are counted among the 23: they carry the full audit and soft-delete column set.)
 
 Entities: `User`, `UserProfile`, `Truck`, `CrewMember`, `Client`, `ThirdParty`, `Route`, `ExpenseCategory`, `CommissionRule`, `SystemSetting`, `Shipment`, `Allowance`, `Liquidation`, `LiquidationLine`, `Receipt`, `BillableExpense`, `AdditionalCharge`, `CrewDeduction`, `Adjustment`, `Commission`, `PayoutRun`, `PayoutLine`, `AuditLog`.
 
@@ -70,7 +78,7 @@ Entities: `User`, `UserProfile`, `Truck`, `CrewMember`, `Client`, `ThirdParty`, 
 #### Soft delete everywhere
 
 - Every business table: nullable `deletedAt` (timestamptz) + `deletedBy` (FK to User).
-- **No hard deletes, ever.** Application-level enforcement: the soft-delete Prisma extension (`packages/db/src/soft-delete-extension.ts`) throws on `delete`/`deleteMany` unless explicitly permitted via `withHardDelete()` (test-only escape).
+- **No hard deletes by default.** Application-level enforcement: the soft-delete Prisma extension (`packages/db/src/soft-delete-extension.ts`) throws on `delete`/`deleteMany` unless explicitly permitted via `withHardDelete()`. Phase 2 used that escape only in tests; **Phase 3 gave it exactly one production caller** — removing an expense category nothing has been filed under (see "Master data" below). Everything else still soft-deletes at most.
 - **Filtering happens in exactly one place**: the extension adds `deletedAt: null` to every read (`findMany`, `findFirst`, `findUnique`, `count`, `aggregate`, `groupBy`), including **nested to-many relation reads** reached via `include`/`select` (walks the DMMF relation graph recursively).
 - Explicit opt-in: `withDeleted(fn)` (AsyncLocalStorage-scoped) for admin "view deleted" and restore paths.
 - `softDelete()` and `restore()` added as Prisma client-extension model methods on every soft-deletable model.
@@ -161,6 +169,9 @@ A fifth was added in Phase 3:
 - `GET/PATCH /api/settings` and `GET /api/settings/history` — **administrator only, read included**. The read was briefly open to every office role on the theory that a later screen would want the gas rate; the user rejected that, correctly: nothing consumed it, and the settings page was not role-gated, so any office role that typed the URL saw all three rates. When a commission screen needs the gas rate it should get a narrow endpoint returning just that value.
 - Each change writes an `AuditLog` row **in the same transaction** as the update, capturing actor, timestamp, before and after. History is flattened to one entry per field.
 - **Bug found and fixed during verification**: change detection compared `Decimal.toString()` against the input string, so `0.25` vs `0.2500` recorded a change that never happened. Now compared as `Prisma.Decimal` and rendered at the column's scale (`toFixed(4)`) everywhere.
+- **The commission-rate fallback was removed** (see open question 3). `SystemSetting` now holds exactly one editable value: `gasExpenseDeductionRate`. `AUDITED_FIELDS` is down to that one entry, and the audit machinery around it is still worth having — it is the rate every commission is computed against.
+- The gas rate is rendered by **one shared component**, `components/settings/gas-deduction-rate-card.tsx`, placed on both the settings screen and the commission rules screen. Both read and write the same row through the same TanStack Query key, so a change on either is immediately correct on the other. Surfaced twice, stored once. The card is administrator-only and returns `null` otherwise, so callers do not repeat the role check.
+- Retired fields keep their labels in the settings history (`Driver commission rate (retired)`), so the audit trail reads as sentences rather than degrading into raw column names when a field is dropped.
 
 ### Web
 
@@ -170,16 +181,21 @@ A fifth was added in Phase 3:
 
 ---
 
-## Current verified state (as of last check)
+## Current verified state (end of Phase 3)
 
 - **`pnpm run check`**: 14/14 tasks passing, uncached (format-check, lint, typecheck, test across all workspaces).
-- **63 total tests**: 41 in `packages/db` (34 integration against real Postgres + 7 `relations.test.ts`), 22 in `apps/api` (`guards.test.ts` [11], `removal.test.ts` [7], `zod-validation.pipe.test.ts` [4]), plus the code-set unit tests in `packages/types`.
-- Live verification against the **containerised** stack: unauthenticated read → 401, HTTP sign-up → 403, admin sign-in → 200, `/me` → 200, master data → 200. Browser-verified: login, dashboard, master data CRUD, removal reporting, settings history, crew portal, and a crew account refused on `/trucks` with the API's own message.
-- Role matrix verified live: OPERATIONS can write trucks but not expense categories, users or settings; CREW can read only its own crew record; a deactivated user's existing session is refused on the next request.
-- Database schema verified via direct SQL inspection: 0 enum types, 0 float columns, 0 naive timestamps, 23/23 tables with audit cols, 23/23 with soft-delete cols, 16 partial unique indexes, 10 code CHECKs, 21 `createdBy_required` CHECKs, 5 triggers, 1 full unique (payout link).
-- `docker compose up -d --build` **re-verified after the Phase 2 schema rewrite**: all four containers healthy, `/api/health` returns `{"status":"ok"}` with database and storage both `up`, web renders the health card via TanStack Query, and UTC→Asia/Manila rendering is correct (14:24 UTC displayed as 10:24 PM).
-- Schema invariants re-confirmed against the live database after rebuild: 0 enum types, 0 float columns, 0 naive timestamps, 23 soft-deletable business tables, 16 partial unique indexes, 21 `_created_by_required` CHECKs, 5 triggers.
-- **Git initialized** — branch `main`, initial commit covering Phase 1 + Phase 2. No remote.
+- **82 tests**, all passing:
+  | Workspace        | Count | Files                                                                                                                        |
+  | ---------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+  | `packages/db`    | 41    | `payout-idempotency` [7], `soft-delete` [13], `code-constraints` [14], `relations` [7] — the first three hit a real Postgres |
+  | `apps/api`       | 22    | `guards` [11], `removal` [7], `zod-validation.pipe` [4]                                                                      |
+  | `packages/types` | 19    | code-set and money unit tests                                                                                                |
+- **Schema invariants re-verified against the live database at the end of Phase 3** (not carried over from Phase 2): 0 enum types, 0 float columns, 0 naive timestamps, 26 tables (23 soft-deletable business + 3 Better Auth infra), 16 partial unique indexes, 21 `_created_by_required` CHECKs, 5 triggers, 5 migrations applied, and `prisma migrate status` reports no drift.
+- The narrowed `system_setting_rate_ranges` CHECK was confirmed to still bite after the fallback migration: `UPDATE ... SET "gasExpenseDeductionRate" = 1.5` is rejected by Postgres.
+- Live verification against the **containerised** stack: unauthenticated read → 401, HTTP sign-up → 403, admin sign-in → 200, `/me` → 200, master data → 200; `GET /settings` returns only the gas rate, a dropped field is rejected 400, out-of-range 400.
+- Role matrix verified live: OPERATIONS can write trucks but not expense categories, users or settings; ADMINISTRATOR 200 / OPERATIONS 403 on all three settings routes; CREW can read only its own crew record; a deactivated user's existing session is refused on the next request.
+- Browser-verified: login, dashboard, master data CRUD, all three removal outcomes reported in the UI, settings history, the gas rate edited on the commission rules screen and reflected on the settings screen, the crew portal, and a crew account refused on `/trucks` with the API's own message.
+- `docker compose up -d --build` is self-contained: migrations and the seed run on boot, so a fresh volume gives you an administrator to sign in as.
 
 ---
 
@@ -225,9 +241,59 @@ Seeded on `docker compose up`. Development only.
 
 ---
 
-## Suggested next steps for a new session
+## Phase 4 — what a new session needs to know
 
-1. **The commission computation engine** — the obvious next phase, and everything it needs now exists: rate chain → gas deduction → commissionable base → driver/helper commission, with the worked example as a test fixture (₱18,000 gross → ₱1,822.50 driver / ₱911.25 helper). Resolving open question 3 (rule vs setting fallback) becomes unavoidable here.
-2. **Shipments and liquidations** — the operational core, and the first real exercise of crew scoping beyond `CrewMember`.
-3. **An API e2e harness** (supertest) covering the auth wiring, since that is the part currently verified only by hand.
-4. Items 1, 2 and 4 of the open questions still want a decision from the user.
+Phase 4 is the commission engine and/or shipments and liquidation. Everything it
+depends on exists; nothing about it has been started. Read this section before
+writing any of it.
+
+### Decisions already made that constrain the engine
+
+- **`CommissionRule` is the only source of truth for crew pay.** There is no
+  fallback. A shipment matching no rule **must be an error the engine raises**,
+  not a number it invents. This was an explicit user decision — do not
+  reintroduce a default "so computation never fails".
+- **Resolution order is already specified** in the `CommissionRule` docblock in
+  `schema.prisma`: candidates are active, undeleted rules where the role
+  matches, the shipment date falls in `[effectiveFrom, effectiveTo)`, and the
+  scope matches (a null `clientId`/`routeId` matches anything). The winner is
+  chosen by specificity (client+route ▸ client ▸ route ▸ unscoped), then
+  priority (higher first), then `effectiveFrom` (latest first), then `id` for
+  stability. The docblock now states outright that there is no fallback and
+  that the engine must raise.
+- **`CommissionMethod.TIERED` (code 5) is allocated but unimplemented.** The
+  database CHECK accepts it; `isImplementedCommissionMethod()` is what refuses
+  it, at the service layer. Keep it that way.
+- **Money rules are non-negotiable** and are documented in the README: Decimal
+  in storage, currency.js for arithmetic, never `.toNumber()`, never a JSON
+  number over the wire. Each step of the chain stores a rounded value so a
+  reviewer can reproduce every figure with a calculator.
+- **Anything named `applied*` is frozen at computation time** and must never
+  move afterwards. `Shipment.appliedGasDeductionRate` and
+  `Commission.appliedRate` already exist for this.
+
+### Two gaps this phase has to close
+
+Both were opened by removing the fallback and are described in "Still open"
+above:
+
+1. `CommissionRulesService.remove()` passes `probes: []`, so removing the last
+   live unscoped rule for a role is frictionless and silently breaks
+   computation.
+2. A baseline rule can expire via `effectiveTo` and leave the same hole. Rule
+   coverage wants a proactive check rather than a hard failure at payout time.
+
+### Worked example to use as the first test fixture
+
+₱18,000 gross → ₱1,822.50 driver / ₱911.25 helper. Build the engine against this
+before wiring any UI.
+
+### Also worth doing
+
+- **An API e2e harness (supertest).** Guards and the removal rule are
+  unit-tested, but the wiring — Better Auth mounting, body-parser and CORS
+  ordering in `main.ts`, session resolution — is verified only by hand. That
+  ordering is fragile and load-bearing; see the README gotchas.
+- Open questions **1, 2 and 4** still want a decision from the user. Question 2
+  (`Shipment.appliedTpcRate` semantics) becomes unavoidable the moment shipments
+  are built.

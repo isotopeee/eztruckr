@@ -548,7 +548,7 @@ model ExpenseCategory {
 /// Commission rate for a role, optionally scoped to a client or route, valid
 /// over a date window.
 ///
-/// RESOLUTION (Phase 3 engine). Candidates are the active, undeleted rules
+/// RESOLUTION (Phase 4 engine). Candidates are the active, undeleted rules
 /// where the role matches, the shipment date falls in
 /// [effectiveFrom, effectiveTo), and the scope matches (a null clientId or
 /// routeId matches any). The winner is chosen by, in order:
@@ -557,7 +557,14 @@ model ExpenseCategory {
 ///   2. priority, higher first
 ///   3. effectiveFrom, latest first
 ///   4. id, purely so the result is stable
-/// SystemSetting supplies the fallback when nothing matches.
+///
+/// THERE IS NO FALLBACK. If nothing matches, the engine must RAISE, not
+/// substitute a default. SystemSetting once carried driver/helper rates for
+/// exactly that purpose and they were deliberately removed: a silent default
+/// turns an expired or mis-scoped rule into a plausible wrong number that then
+/// freezes onto the commission, and nobody finds out until a payout is
+/// questioned. The unscoped, open-ended, priority-0 rules created by the seed
+/// are the company-wide baseline, and they are ordinary rules like any other.
 ///
 /// Whichever rule wins, its rate is copied onto Commission.appliedRate and
 /// frozen there, so editing or deleting this row later cannot move a
