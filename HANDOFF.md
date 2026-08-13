@@ -2,7 +2,7 @@
 
 Trucking operations system. Turborepo monorepo, Philippine haulage domain (₱, Asia/Manila).
 
-**Last commit: `HEAD`.** Working tree clean, `pnpm run check` green.
+**Last commit: `f3f8759`.** Working tree clean, `pnpm run check` green.
 
 ---
 
