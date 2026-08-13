@@ -125,6 +125,11 @@ export class CommissionService {
               crewMemberId: entry.crewMemberId,
               role: entry.role,
               appliedMethod: entry.rule.method,
+              // Frozen as a pair: the id to trace, the name as it reads now.
+              // Following the id later gives today's rule, which is exactly
+              // what the frozen name is here to prevent.
+              appliedRuleId: entry.rule.id,
+              appliedRuleName: entry.rule.name,
               commissionableBase: chain.commissionableBase,
               appliedRate: entry.result.effectiveRate,
               amount: entry.result.amount,
@@ -433,6 +438,8 @@ export function toCommissionResponse(
     crewMemberName: `${row.crewMember.firstName} ${row.crewMember.lastName}`,
     role: row.role,
     appliedMethod: row.appliedMethod,
+    appliedRuleId: row.appliedRuleId,
+    appliedRuleName: row.appliedRuleName,
     commissionableBase: row.commissionableBase.toString(),
     appliedRate: row.appliedRate?.toString() ?? null,
     amount: row.amount.toString(),

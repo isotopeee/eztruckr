@@ -162,17 +162,24 @@ export class CommissionRulesService {
   }
 
   /**
-   * A rule is a template, not a record of anything: every commission freezes
-   * the rate it actually used onto itself, so removing the rule cannot move
-   * money that has already been computed. Nothing holds a foreign key to it,
-   * so an unreferenced rule simply soft-deletes.
+   * Removing a rule cannot move money: every commission freezes the rate,
+   * method and rule name it used, so the figures stand on their own.
    *
-   * What removing one CAN break is the future. There is no fallback rate in
-   * this system, so a role left with no live rule stops computing altogether —
-   * and the failure lands at month-end, on a shipment, far from the click that
-   * caused it. Removing the last rule for a role is therefore refused outright
-   * rather than reported as an outcome: unlike deactivate-instead-of-delete,
-   * there is no lesser action that leaves the system working.
+   * It can still break two things.
+   *
+   * THE PAST. Since commissions now record which rule produced them, a rule
+   * that has paid anything is referenced by history, and the ordinary
+   * deactivate-instead-of-delete rule applies — it stays in the table, visible
+   * and inactive, so an auditor following `appliedRuleId` from a voucher
+   * arrives somewhere. Before that link existed this probe had nothing to
+   * count and a used rule would simply soft-delete.
+   *
+   * THE FUTURE. There is no fallback rate in this system, so a role left with
+   * no live rule stops computing altogether — and the failure lands at
+   * month-end, on a shipment, far from the click that caused it. Removing the
+   * last rule for a role is therefore refused outright rather than reported as
+   * an outcome: unlike deactivation, there is no lesser action that leaves the
+   * system working.
    */
   async remove(id: string): Promise<RemovalResult> {
     const rule = await this.get(id);
@@ -180,7 +187,15 @@ export class CommissionRulesService {
     await this.assertRoleKeepsCoverage(id, rule.role);
 
     return removeRecord({
-      probes: [],
+      probes: [
+        {
+          entity: 'commissions',
+          // Counts live commissions only, which is what the extension gives
+          // us. A soft-deleted commission is superseded working, not history
+          // anyone will follow a link from.
+          count: () => this.prisma.client.commission.count({ where: { appliedRuleId: id } }),
+        },
+      ],
       deactivate: () => this.rules.update({ where: { id }, data: { isActive: false } }),
       softDelete: () => this.rules.softDelete({ id }),
     });

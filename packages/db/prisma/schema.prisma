@@ -614,6 +614,11 @@ model CommissionRule {
   effectiveTo   DateTime? @db.Timestamptz(6)
   isActive      Boolean   @default(true)
 
+  /// The commissions this rule produced. Editing or deleting the rule cannot
+  /// move any of them — each froze the rate, method and name it used — but the
+  /// link makes "which rule paid this?" answerable without inference.
+  commissions Commission[] @relation("CommissionAppliedRule")
+
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
   createdBy     String?
@@ -1182,6 +1187,27 @@ model Commission {
   /// row stays interpretable if the rule changes method later.
   appliedMethod Int @default(1) @db.SmallInt
 
+  /// WHICH RULE PAID THIS — the id for tracing, the name as it read at the
+  /// time for reading.
+  ///
+  /// The pair is deliberate. The id alone answers "which row", but following
+  /// it gives you the rule as it stands TODAY, which is exactly the thing
+  /// every other applied* column exists to avoid: a rule renamed from
+  /// "Northport 2026 driver" to "Northport 2027 driver" would silently
+  /// relabel last year's vouchers. The frozen name is what a voucher prints;
+  /// the id is what an auditor follows.
+  ///
+  /// Nullable only because rows computed before this column existed cannot be
+  /// backfilled honestly — resolution depends on rules and dates as they were,
+  /// and guessing would produce a confident wrong answer. Every commission
+  /// computed from here on carries both.
+  ///
+  /// Restrict, like every business foreign key here: a rule that has paid
+  /// money is deactivated rather than removed, so the trail stays walkable.
+  appliedRuleId   String?
+  appliedRule     CommissionRule? @relation("CommissionAppliedRule", fields: [appliedRuleId], references: [id], onDelete: Restrict)
+  appliedRuleName String?
+
   /// Frozen copies of the inputs, so a later rate change cannot move this row.
   commissionableBase Decimal @db.Decimal(15, 4)
   amount             Decimal @db.Decimal(15, 4)
@@ -1238,6 +1264,7 @@ model Commission {
 
   @@index([shipmentId])
   @@index([crewMemberId])
+  @@index([appliedRuleId])
   @@index([deletedAt])
   @@map("commission")
 }

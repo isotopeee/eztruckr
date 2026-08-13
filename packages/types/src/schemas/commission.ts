@@ -22,6 +22,18 @@ export const commissionSchema = auditFieldsSchema.extend({
   role: crewRoleSchema,
   appliedMethod: commissionMethodSchema,
 
+  /**
+   * Which rule produced this, as a frozen pair: the id traces, the name reads.
+   *
+   * The name is stored rather than joined because following the id gives the
+   * rule as it stands today — a rename would otherwise relabel an old voucher.
+   * Both null together on rows computed before the columns existed; they were
+   * deliberately not backfilled, since resolution depends on rules and dates
+   * as they were.
+   */
+  appliedRuleId: z.string().nullable(),
+  appliedRuleName: z.string().nullable(),
+
   commissionableBase: z.string(),
   /**
    * Null where no meaningful rate exists — a fixed fee on a zero base. Null

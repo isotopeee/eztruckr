@@ -506,3 +506,128 @@ describe.runIf(process.env.SKIP_DB_TESTS !== '1')('crew deduction recovery', () 
     expect(survivor?.amount.toString()).toBe('3000');
   });
 });
+
+/**
+ * Which rule paid this?
+ *
+ * A commission froze everything needed to CHECK its figure — the rate, the
+ * method, a formula's expression and inputs — but not which rule produced it.
+ * With several rules able to carry the same rate at different scopes, that was
+ * answerable only by inference, and ambiguous exactly when somebody is
+ * disputing a payout.
+ *
+ * The id and the name are frozen as a pair: following the id gives the rule as
+ * it stands today, which is the very thing the frozen name prevents.
+ */
+describe.runIf(process.env.SKIP_DB_TESTS !== '1')('a commission records its rule', () => {
+  async function createRule(suffix: string, name: string) {
+    return withActor({ userId: adminId }, async () =>
+      prisma.commissionRule.create({
+        data: {
+          id: testId(`rule-${suffix}`),
+          name,
+          role: CrewRole.DRIVER,
+          method: CommissionMethod.PERCENT_OF_BASE,
+          rate: '0.1500',
+          effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+        },
+      }),
+    );
+  }
+
+  async function createCommission(suffix: string, rule: { id: string; name: string } | null) {
+    return withActor({ userId: adminId }, async () => {
+      const shipment = await prisma.shipment.create({
+        data: {
+          id: testId(`rshipment-${suffix}`),
+          shipmentNumber: testId(`RSHP-${suffix}`),
+          status: ShipmentStatus.PENDING_LIQUIDATION,
+          clientId,
+          origin: 'Manila',
+          destination: 'Batangas',
+          grossRate: '18000.0000',
+          netRate: '16200.0000',
+        },
+      });
+
+      return prisma.commission.create({
+        data: {
+          id: testId(`rcommission-${suffix}`),
+          shipmentId: shipment.id,
+          crewMemberId,
+          role: CrewRole.DRIVER,
+          appliedMethod: CommissionMethod.PERCENT_OF_BASE,
+          appliedRuleId: rule?.id ?? null,
+          appliedRuleName: rule?.name ?? null,
+          commissionableBase: '12150.0000',
+          appliedRate: '0.1500',
+          amount: '1822.5000',
+        },
+      });
+    });
+  }
+
+  it('keeps the rule name it was computed with, even after the rule is renamed', async () => {
+    if (!available) return;
+    const rule = await createRule('rename', 'Northport 2026 driver');
+    const commission = await createCommission('rename', rule);
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.commissionRule.update({
+        where: { id: rule.id },
+        data: { name: 'Northport 2027 driver' },
+      }),
+    );
+
+    const frozen = await prisma.commission.findFirst({ where: { id: commission.id } });
+
+    // The voucher still reads as it did. Joining would have relabelled it.
+    expect(frozen?.appliedRuleName).toBe('Northport 2026 driver');
+    // And the id still traces to the rule, which now reads differently.
+    expect(frozen?.appliedRuleId).toBe(rule.id);
+
+    const current = await prisma.commissionRule.findFirst({ where: { id: rule.id } });
+    expect(current?.name).toBe('Northport 2027 driver');
+  });
+
+  it('still resolves the rule after it is soft-deleted, so the trail is walkable', async () => {
+    if (!available) return;
+    const rule = await createRule('deleted', 'Retired driver rule');
+    const commission = await createCommission('deleted', rule);
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.commissionRule.softDelete({ id: rule.id }),
+    );
+
+    // To-one relations are deliberately not filtered by the soft-delete
+    // extension — this is the case that exists for.
+    const withRule = await prisma.commission.findFirst({
+      where: { id: commission.id },
+      include: { appliedRule: true },
+    });
+
+    expect(withRule?.appliedRule?.id).toBe(rule.id);
+    expect(withRule?.appliedRule?.deletedAt).not.toBeNull();
+  });
+
+  it('refuses an id without a name, or a name without an id', async () => {
+    if (!available) return;
+    const rule = await createRule('pair', 'Pairing rule');
+
+    await expect(
+      createCommission('pair-idonly', { id: rule.id, name: null as never }),
+    ).rejects.toThrow(/applied_rule_id_and_name_together/i);
+
+    await expect(
+      createCommission('pair-nameonly', { id: null as never, name: 'orphaned label' }),
+    ).rejects.toThrow(/applied_rule_id_and_name_together/i);
+  });
+
+  it('allows both null, for rows computed before the columns existed', async () => {
+    if (!available) return;
+    const commission = await createCommission('legacy', null);
+
+    expect(commission.appliedRuleId).toBeNull();
+    expect(commission.appliedRuleName).toBeNull();
+  });
+});

@@ -136,7 +136,19 @@ function CommissionRow({ commission }: { commission: Commission }) {
       </div>
 
       <div className="text-muted-foreground mt-2 space-y-1 text-xs">
-        <p>{COMMISSION_METHOD_LABELS[commission.appliedMethod]}</p>
+        <p>
+          {COMMISSION_METHOD_LABELS[commission.appliedMethod]}
+          {commission.appliedRuleName ? (
+            <>
+              {' · '}
+              {/* The name frozen at computation, not the rule's name today —
+                  a rename must not relabel an old voucher. */}
+              <span title={`Rule ${commission.appliedRuleId ?? ''}`}>
+                {commission.appliedRuleName}
+              </span>
+            </>
+          ) : null}
+        </p>
         <p className="tabular-nums">
           {formatMoney(commission.commissionableBase)} base
           {commission.appliedRate === null ? (

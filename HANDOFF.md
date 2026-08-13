@@ -387,13 +387,13 @@ visible, own detail 200, colleague's commissions 403, all writes 403.
 ## Current verified state (end of Phase 4)
 
 - **`pnpm run check`**: 14/14 tasks passing, uncached.
-- **195 tests**, all passing (was 82):
+- **199 tests**, all passing (was 82):
 
-  | Workspace        | Count | Added in Phase 4                                                                                              |
-  | ---------------- | ----- | ------------------------------------------------------------------------------------------------------------- |
-  | `packages/types` | 67    | `formula-syntax` [47] — mostly what the parser REFUSES                                                        |
-  | `packages/db`    | 49    | drift guard confirms status codes 1–7; 3 assert the gas-override pairing; 5 the deduction-recovery join table |
-  | `apps/api`       | 79    | `commission-engine` [38], `formula-evaluator` [19]                                                            |
+  | Workspace        | Count | Added in Phase 4                                                                                                                      |
+  | ---------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------- |
+  | `packages/types` | 67    | `formula-syntax` [47] — mostly what the parser REFUSES                                                                                |
+  | `packages/db`    | 53    | drift guard confirms status codes 1–7; 3 assert the gas-override pairing; 5 the deduction-recovery join table; 4 the frozen rule link |
+  | `apps/api`       | 79    | `commission-engine` [38], `formula-evaluator` [19]                                                                                    |
 
 - **The brief's required assertions pass, in unit tests and again live:**
   - `netRate 16200`, no commissionable charges, gas 25% → gasDeduction **4050.00**, base
@@ -421,10 +421,10 @@ visible, own detail 200, colleague's commissions 403, all writes 403.
   worksheet, the FORMULA commission showing its frozen expression and resolved field
   values, the gas override showing 30% against the 25% system default with its reason,
   and both charge lists.
-- `prisma migrate status`: 8 migrations applied, no drift. Seed still idempotent.
+- `prisma migrate status`: 9 migrations applied, no drift. Seed still idempotent.
 - **The migration chain was replayed from scratch** into a throwaway database
   (`eztruckr_migrationtest`, since dropped) — worth doing because Phase 4's migrations are
-  largely hand-written SQL. All eight applied cleanly and the invariants held on a virgin
+  largely hand-written SQL. All nine applied cleanly and the invariants held on a virgin
   schema: 0 enum types, 0 float columns, 0 naive timestamps, 27 tables, 9 payout
   triggers, 17 partial unique indexes, 22 `_created_by_required` CHECKs,
   `shipment_status_code_valid` accepting 1–7, and `commission.appliedRate` as
@@ -557,10 +557,21 @@ Phase 5 is allowance, liquidation and receipts. Everything it depends on exists.
 - **`CommissionService.computeForShipment` has no unit test**, only live verification,
   because it needs Prisma. The pure pieces around it are covered; the orchestration is
   not. A test client against the real Postgres (as `packages/db` does) would close it.
-- The commission row does **not** record which rule produced it. Deliberate — the brief
-  specifies what `Commission` stores, and adding an FK would also change `removeRecord`
-  semantics for rules — but "which rule paid this?" is answered today only by inference
-  from the frozen rate and method. Worth revisiting if audit asks.
+- ~~The commission row does not record which rule produced it.~~ **Done at the end of
+  Phase 4**, on request. `Commission.appliedRuleId` + `appliedRuleName` are frozen as a
+  pair: the id traces, the name reads. The name is stored rather than joined because
+  following the id gives the rule as it stands TODAY — a rename would otherwise relabel
+  an old voucher, which is the exact failure every other `applied*` column exists to
+  prevent. A CHECK requires both or neither.
+
+  Two knock-on effects worth knowing:
+  - **Removal semantics changed.** `CommissionRulesService.remove()` now probes
+    commissions, so a rule that has paid anything is DEACTIVATED rather than
+    soft-deleted, keeping the audit trail walkable. Previously it had nothing to count.
+  - **Old rows were deliberately not backfilled.** Resolution depends on the rules and
+    dates as they stood; re-running it today would produce a confident wrong answer on
+    exactly the rows an auditor would trust. Null means "computed before the column
+    existed".
 
 ### Housekeeping on the development machine
 
