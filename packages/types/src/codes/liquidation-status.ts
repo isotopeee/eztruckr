@@ -23,32 +23,25 @@ import { defineCodeSet } from './code-set';
  * THERE IS NO `FINALIZED` STATE either. Approval is the lock: an approved
  * liquidation may only move by being explicitly reversed, with a reason.
  *
- * CODES ARE PERMANENT — never renumbered, never reused, append only. Phase 2
- * shipped this set as SUBMITTED 1 / APPROVED 2 / FINALIZED 3, before the
- * lifecycle above was specified. PENDING is therefore APPENDED at 4 rather than
- * renumbering the set to read 1-2-3, even though the `liquidation` table was
- * empty and a renumber would have been safe. Order never comes from the numeric
- * value anywhere in this codebase — it comes from the sequence below — so the
- * only thing a renumber would have bought is a tidier-looking constant, at the
- * cost of the one rule that keeps stored rows meaning what they meant.
+ * RENUMBERED ONCE, in Phase 5, by explicit decision — the second and last time
+ * this has been done to any code set. Phase 2 shipped SUBMITTED 1 / APPROVED 2 /
+ * FINALIZED 3, before this lifecycle was specified. Phase 5 first appended
+ * PENDING at 4 and retired 3, then renumbered to the natural order above on the
+ * user's instruction, while the only `liquidation` rows in existence were
+ * development test data. The remapping is in migration
+ * `20260813030000_renumber_liquidation_status`, which rewrites stored rows in a
+ * single statement rather than leaving any to be reinterpreted.
+ *
+ * CODES ARE PERMANENT FROM HERE. The rule protects stored rows, and the window
+ * in which there were none has closed. Append; never renumber.
  */
 export const LiquidationStatus = {
-  PENDING: 4,
-  SUBMITTED: 1,
-  APPROVED: 2,
+  PENDING: 1,
+  SUBMITTED: 2,
+  APPROVED: 3,
 } as const;
 
 export type LiquidationStatus = (typeof LiquidationStatus)[keyof typeof LiquidationStatus];
-
-/**
- * Codes withdrawn from the set and never to be reused.
- *
- * 3 was FINALIZED, a fourth state the specification does not have. No row ever
- * held it. It is listed here — and pinned in `code-set.test.ts` — so that the
- * next code appended to this set is 5, and nobody re-allocates 3 to something
- * new and makes a historical row read as the wrong thing.
- */
-export const RETIRED_LIQUIDATION_STATUS_CODES: readonly number[] = [3];
 
 const meta = defineCodeSet('LiquidationStatus', LiquidationStatus);
 
@@ -63,8 +56,8 @@ export const LIQUIDATION_STATUS_LABELS: Readonly<Record<LiquidationStatus, strin
 };
 
 /**
- * Explicit progression. PENDING carries the highest code and comes first, which
- * is precisely why order is never inferred from the number.
+ * Explicit progression. It happens to match the numbers today; the next status
+ * appended to this set will not, and nothing here reads the number anyway.
  */
 export const LIQUIDATION_STATUS_SEQUENCE: readonly LiquidationStatus[] = [
   LiquidationStatus.PENDING,

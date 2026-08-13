@@ -8,6 +8,7 @@ import {
   returnLiquidationSchema,
   reverseLiquidationSchema,
   submitLiquidationSchema,
+  sweepOrphanReceiptsQuerySchema,
   updateAllowanceSchema,
   updateLiquidationLineSchema,
 } from '@eztruckr/types';
@@ -32,6 +33,8 @@ export class SubmitLiquidationDto extends createZodDto(submitLiquidationSchema) 
 export class ReturnLiquidationDto extends createZodDto(returnLiquidationSchema) {}
 export class ApproveLiquidationDto extends createZodDto(approveLiquidationSchema) {}
 export class ReverseLiquidationDto extends createZodDto(reverseLiquidationSchema) {}
+
+export class SweepOrphanReceiptsQueryDto extends createZodDto(sweepOrphanReceiptsQuerySchema) {}
 
 export class RecordSettlementDto extends createZodDto(recordSettlementSchema) {}
 export class CarrySettlementToPayoutDto extends createZodDto(carrySettlementToPayoutSchema) {}

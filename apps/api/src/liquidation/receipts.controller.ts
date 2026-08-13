@@ -1,10 +1,20 @@
-import { Controller, Get, Param, Post, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
-import { MAX_RECEIPT_BYTES, type Receipt } from '@eztruckr/types';
+import { MAX_RECEIPT_BYTES, type OrphanSweepResult, type Receipt } from '@eztruckr/types';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
-import { CAN_READ_SHIPMENTS, CAN_UPLOAD_RECEIPTS } from '../auth/role-policy';
+import { CAN_ADMINISTER, CAN_READ_SHIPMENTS, CAN_UPLOAD_RECEIPTS } from '../auth/role-policy';
+import { SweepOrphanReceiptsQueryDto } from './liquidation.dto';
 import { ReceiptsService, type UploadedFile as ReceiptFile } from './receipts.service';
 
 /**
@@ -30,6 +40,23 @@ export class ReceiptsController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_RECEIPT_BYTES } }))
   upload(@UploadedFile() file: ReceiptFile | undefined): Promise<Receipt> {
     return this.receipts.upload(file);
+  }
+
+  /**
+   * Removes receipts nothing ever attached.
+   *
+   * Declared before `:id` because Nest matches routes in declaration order and
+   * `sweep-orphans` would otherwise be read as a receipt id.
+   *
+   * Administrator only, and deliberately a request rather than a hook: there is
+   * no scheduler here, and making deletion a side effect of somebody else's
+   * upload is a poor property for the one operation in this module that
+   * destroys data. Point a host cron at it.
+   */
+  @Post('sweep-orphans')
+  @Roles(...CAN_ADMINISTER)
+  sweepOrphans(@Query() query: SweepOrphanReceiptsQueryDto): Promise<OrphanSweepResult> {
+    return this.receipts.sweepOrphans(query.olderThanHours);
   }
 
   @Get(':id')

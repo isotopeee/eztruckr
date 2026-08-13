@@ -4,10 +4,10 @@ import {
   CommissionMethod,
   CrewRole,
   DisbursementMode,
+  LIQUIDATION_STATUS_SEQUENCE,
   LiquidationHistoryAction,
   LiquidationStatus,
   PayoutRunStatus,
-  RETIRED_LIQUIDATION_STATUS_CODES,
   SettlementStatus,
   ShipmentStatus,
   UserRole,
@@ -54,30 +54,21 @@ describe('code sets are permanent', () => {
   });
 
   /**
-   * PENDING was APPENDED at 4 in Phase 5, not slotted in at 1.
+   * Renumbered once, in Phase 5, by explicit decision — the second and last
+   * exercise of the empty-table window.
    *
    * The set shipped in Phase 2 as SUBMITTED 1 / APPROVED 2 / FINALIZED 3,
-   * before the PENDING -> SUBMITTED -> APPROVED lifecycle was specified. The
-   * `liquidation` table was empty, so renumbering would have been safe — and it
-   * was still not done, because nothing in this codebase reads order from the
-   * number, so a renumber buys a tidier constant and spends the rule that keeps
-   * stored rows honest. If this assertion ever fails, the fix is to restore 4.
+   * before the PENDING -> SUBMITTED -> APPROVED lifecycle was specified. Phase 5
+   * appended PENDING at 4, then renumbered to the natural order on the user's
+   * instruction, remapping the development rows explicitly in migration
+   * `20260813030000_renumber_liquidation_status` so nothing was reinterpreted.
+   *
+   * Liquidations exist now. If this assertion ever fails again, the fix is
+   * almost never to update the expectation — it is to restore these values and
+   * append instead.
    */
   it('pins every LiquidationStatus code', () => {
-    expect(LiquidationStatus).toEqual({ PENDING: 4, SUBMITTED: 1, APPROVED: 2 });
-  });
-
-  /**
-   * 3 held FINALIZED, a state the specification does not have and no row ever
-   * carried. Withdrawn rather than repurposed: the next code appended to this
-   * set is 5.
-   */
-  it('never re-allocates a retired liquidation status code', () => {
-    expect(RETIRED_LIQUIDATION_STATUS_CODES).toEqual([3]);
-
-    for (const retired of RETIRED_LIQUIDATION_STATUS_CODES) {
-      expect(Object.values(LiquidationStatus)).not.toContain(retired);
-    }
+    expect(LiquidationStatus).toEqual({ PENDING: 1, SUBMITTED: 2, APPROVED: 3 });
   });
 
   it('pins every LiquidationHistoryAction code', () => {
@@ -206,13 +197,14 @@ describe('order-dependent logic', () => {
 
 describe('LiquidationStatus', () => {
   /**
-   * The sharpest test of "order never comes from the number": PENDING is the
-   * first stage and carries the highest code. A `>=` comparison anywhere in the
-   * liquidation path would get every one of these backwards.
+   * Rank comes from the declared sequence, not from the code.
+   *
+   * The two happen to agree for this set today, which is exactly why the
+   * assertion is worth keeping: a status appended later — a fourth stage at
+   * code 4, say — would still have to sort by its position in the workflow, and
+   * a `>=` on the number would be the thing that silently stopped working.
    */
-  it('orders by workflow position even though the codes run backwards', () => {
-    expect(LiquidationStatus.PENDING).toBeGreaterThan(LiquidationStatus.APPROVED);
-
+  it('orders by workflow position, not by numeric code', () => {
     expect(liquidationStatusAtLeast(LiquidationStatus.APPROVED, LiquidationStatus.PENDING)).toBe(
       true,
     );
@@ -222,6 +214,12 @@ describe('LiquidationStatus', () => {
     expect(liquidationStatusAtLeast(LiquidationStatus.SUBMITTED, LiquidationStatus.PENDING)).toBe(
       true,
     );
+
+    expect(LIQUIDATION_STATUS_SEQUENCE).toEqual([
+      LiquidationStatus.PENDING,
+      LiquidationStatus.SUBMITTED,
+      LiquidationStatus.APPROVED,
+    ]);
   });
 
   it('allows exactly the four specified moves', () => {

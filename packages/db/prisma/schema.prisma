@@ -907,11 +907,10 @@ model Liquidation {
   shipmentId String
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
 
-  /// Code set: LiquidationStatus (4 PENDING, 1 SUBMITTED, 2 APPROVED). Order
-  /// comes from the declared sequence in @eztruckr/types — PENDING is the first
-  /// stage and carries the highest code, so a numeric comparison would get
-  /// every question about this column backwards.
-  status Int @default(4) @db.SmallInt
+  /// Code set: LiquidationStatus (1 PENDING, 2 SUBMITTED, 3 APPROVED). Order
+  /// comes from the declared sequence in @eztruckr/types, never from the
+  /// number — it matches today and will not once a status is appended.
+  status Int @default(1) @db.SmallInt
 
   /// Sum of ALL the shipment's allowances — every release, not one of them.
   /// Recomputed while the liquidation is open and frozen on approval.

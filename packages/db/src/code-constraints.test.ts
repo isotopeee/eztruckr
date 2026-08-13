@@ -6,7 +6,6 @@ import {
   LiquidationHistoryAction,
   LiquidationStatus,
   PayoutRunStatus,
-  RETIRED_LIQUIDATION_STATUS_CODES,
   SettlementStatus,
   ShipmentStatus,
   UserRole,
@@ -176,19 +175,20 @@ describe('createdBy stays mandatory in the database', () => {
   });
 });
 
-describe('a retired code stays out of the database as well as the type', () => {
-  it('rejects a liquidation written with the withdrawn FINALIZED code', async () => {
+describe('an unallocated code stays out of the database as well as the type', () => {
+  it('rejects a liquidation written with a code the set does not define', async () => {
     if (!available) return;
 
-    // 3 was FINALIZED. It is gone from the code set AND from the CHECK, so a
-    // row cannot be written with it by any path — including the raw SQL that
-    // bypasses every TypeScript guard in the system.
-    expect(RETIRED_LIQUIDATION_STATUS_CODES).toContain(3);
+    // 4 is one past the highest allocated LiquidationStatus, and is exactly
+    // where PENDING sat before Phase 5 renumbered the set. A row cannot be
+    // written with it by any path — including the raw SQL that bypasses every
+    // TypeScript guard in the system.
+    expect(Object.values(LiquidationStatus)).not.toContain(4);
 
     await expect(
       prisma.$executeRawUnsafe(`
         INSERT INTO "liquidation" (id, "shipmentId", status, "createdAt", "updatedAt", "createdBy")
-        SELECT 'itest-retired-status', id, 3, now(), now(), 'itest'
+        SELECT 'itest-bad-status', id, 4, now(), now(), 'itest'
           FROM "shipment" LIMIT 1
       `),
     ).rejects.toThrow(/liquidation_status_code_valid/i);

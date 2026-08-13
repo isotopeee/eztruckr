@@ -1,4 +1,9 @@
-import { createPrismaClient, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
+import {
+  createPrismaClient,
+  withActor,
+  withDeleted,
+  type ExtendedPrismaClient,
+} from '@eztruckr/db';
 import {
   CrewRole,
   DisbursementMode,
@@ -38,6 +43,8 @@ let available = false;
 let liquidations: LiquidationService;
 let allowances: AllowancesService;
 let settlements: SettlementService;
+let receipts: ReceiptsService;
+let storage: { removed: string[]; service: StorageService };
 
 let adminId: string;
 let actor: RequestUser;
@@ -58,15 +65,32 @@ const PREFIX = 'p5test-';
 const id = (name: string) => `${PREFIX}${name}`;
 
 /**
- * The services take `PrismaService` for its `client`, and `ReceiptsService`
- * takes `StorageService` for uploads that none of these tests perform. Building
- * them by hand keeps the test to the lifecycle rules rather than to Nest's
- * container; anything that actually reached storage would fail loudly rather
- * than silently pass.
+ * Storage stubbed to a recorder.
+ *
+ * The sweep's interesting behaviour is which receipts it decides are orphans,
+ * not whether the AWS SDK can delete a key. Recording the keys it asked to
+ * remove tests the decision; a real bucket would test MinIO.
  */
-function serviceStubs(client: ExtendedPrismaClient) {
+function recordingStorage() {
+  const removed: string[] = [];
+
+  return {
+    removed,
+    service: {
+      remove: async (key: string) => {
+        removed.push(key);
+      },
+    } as unknown as StorageService,
+  };
+}
+
+/**
+ * The services take `PrismaService` for its `client`. Building them by hand
+ * keeps the test to the rules under examination rather than to Nest's
+ * container.
+ */
+function serviceStubs(client: ExtendedPrismaClient, storage: StorageService) {
   const prismaService = { client } as unknown as PrismaService;
-  const storage = null as unknown as StorageService;
   const receipts = new ReceiptsService(prismaService, storage);
   const liquidationService = new LiquidationService(prismaService, receipts);
 
@@ -98,6 +122,8 @@ const CLEANUP_STATEMENTS = [
   `DELETE FROM "settlement" WHERE "shipmentId" LIKE '${PREFIX}%'`,
   `DELETE FROM "liquidation" WHERE "shipmentId" LIKE '${PREFIX}%'`,
   `DELETE FROM "allowance" WHERE "shipmentId" LIKE '${PREFIX}%'`,
+  // After everything that could reference one.
+  `DELETE FROM "receipt" WHERE id LIKE '${PREFIX}%'`,
   `DELETE FROM "crew_deduction" WHERE "shipmentId" LIKE '${PREFIX}%'`,
   `DELETE FROM "audit_log" WHERE "entityType" = 'Liquidation' AND "entityId" NOT IN
      (SELECT id FROM "liquidation")`,
@@ -144,7 +170,8 @@ beforeAll(async () => {
     crewMemberId: null,
   };
 
-  ({ liquidations, allowances, settlements } = serviceStubs(prisma));
+  storage = recordingStorage();
+  ({ liquidations, allowances, settlements, receipts } = serviceStubs(prisma, storage.service));
 
   await cleanup();
 
@@ -622,5 +649,129 @@ describe('approval is the lock, and reversing it is a reasoned act', () => {
         }),
       ),
     ).rejects.toThrow(/already been settled/i);
+  });
+});
+
+describe('orphaned receipts are swept, and only the genuinely orphaned ones', () => {
+  /**
+   * Receipts are written directly with a chosen `uploadedAt`, because the age
+   * is the input under test and waiting a day for it is not an option.
+   */
+  async function uploadedAt(suffix: string, hoursAgo: number) {
+    const receiptId = id(`receipt-${suffix}`);
+
+    await withActor({ userId: adminId }, async () => {
+      await prisma.receipt.create({
+        data: {
+          id: receiptId,
+          storageKey: `receipts/${receiptId}.png`,
+          fileName: 'fuel.png',
+          mimeType: 'image/png',
+          sizeBytes: 1024,
+          uploadedAt: new Date(Date.now() - hoursAgo * 60 * 60 * 1000),
+        },
+      });
+    });
+
+    return receiptId;
+  }
+
+  const stillThere = async (receiptId: string) =>
+    (await prisma.receipt.count({ where: { id: receiptId } })) === 1;
+
+  it('removes an unattached receipt once the grace period has passed', async () => {
+    if (!available) return;
+
+    const receiptId = await uploadedAt('orphan', 48);
+    storage.removed.length = 0;
+
+    const result = await act(async () => receipts.sweepOrphans(24));
+
+    expect(result.removed).toBeGreaterThanOrEqual(1);
+    expect(await stillThere(receiptId)).toBe(false);
+    // The object went too — a swept row that leaves its bytes behind has
+    // reclaimed nothing and nothing will ever look at them again.
+    expect(storage.removed).toContain(`receipts/${receiptId}.png`);
+  });
+
+  it('leaves a fresh upload alone, because attaching is the next request', async () => {
+    if (!available) return;
+
+    const receiptId = await uploadedAt('fresh', 1);
+
+    await act(async () => receipts.sweepOrphans(24));
+
+    expect(await stillThere(receiptId)).toBe(true);
+  });
+
+  it('leaves an attached receipt alone however old it is', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('sweep-attached', '2000.00');
+    const receiptId = await uploadedAt('attached', 500);
+
+    await act(async () =>
+      liquidations.addLine(
+        shipmentId,
+        {
+          expenseCategoryId: fuelCategoryId,
+          description: 'Diesel',
+          amount: '1000.00',
+          spentAt: new Date().toISOString(),
+          receiptId,
+        },
+        actor,
+      ),
+    );
+
+    const result = await act(async () => receipts.sweepOrphans(1));
+
+    expect(result.stillAttached).toBeGreaterThanOrEqual(1);
+    expect(await stillThere(receiptId)).toBe(true);
+  });
+
+  /**
+   * The case the whole sweep turns on.
+   *
+   * Every receipt foreign key is ON DELETE SET NULL, and the soft-delete
+   * extension hides the deleted line from an ordinary read — so a sweep that
+   * asked the default question would call this receipt an orphan and quietly
+   * strip the attachment off a row being kept precisely so the history stays
+   * readable. `referenceCount` runs inside `withDeleted` for exactly this.
+   */
+  it('leaves a receipt that only a SOFT-DELETED line still names', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('sweep-softdeleted', '2000.00');
+    const receiptId = await uploadedAt('soft-deleted', 500);
+
+    const line = await act(async () =>
+      liquidations.addLine(
+        shipmentId,
+        {
+          expenseCategoryId: fuelCategoryId,
+          description: 'Diesel, later corrected',
+          amount: '1000.00',
+          spentAt: new Date().toISOString(),
+          receiptId,
+        },
+        actor,
+      ),
+    );
+
+    await act(async () => liquidations.removeLine(shipmentId, line.id, actor));
+
+    // Gone from an ordinary read...
+    expect(await prisma.liquidationLine.count({ where: { id: line.id } })).toBe(0);
+
+    await act(async () => receipts.sweepOrphans(1));
+
+    // ...and still holding its receipt.
+    expect(await stillThere(receiptId)).toBe(true);
+
+    const preserved = await withDeleted(async () =>
+      prisma.liquidationLine.findFirst({ where: { id: line.id }, select: { receiptId: true } }),
+    );
+    expect(preserved?.receiptId).toBe(receiptId);
   });
 });

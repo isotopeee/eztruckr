@@ -514,15 +514,36 @@ of a release, proof of a settlement.
   browser is attacker-controlled text.
 - Allow-list of MIME types (images + PDF), 10 MB, enforced by multer while streaming **and**
   again in the service.
+- **`POST /receipts/sweep-orphans` collects what upload-then-abandon leaves behind.**
+  Nothing else in the system can: a receipt is not reachable from a shipment, so no cascade
+  or removal probe passes near it. Administrator-only, with a 24-hour grace period, and a
+  request rather than a hook — there is no scheduler here, and making deletion a side
+  effect of somebody else's upload is a poor property for the one operation in the module
+  that destroys data. Point a host cron at it.
+  - It **hard-deletes**, on the same test `removeRecord` applies to an unreferenced expense
+    category. A soft-deleted row saying "somebody uploaded a file and never used it"
+    answers no question and accumulates forever.
+  - **It counts references inside `withDeleted`, and that is the whole correctness of it.**
+    Every receipt foreign key is `ON DELETE SET NULL`, so sweeping one that only a
+    _soft-deleted_ liquidation line still names would silently strip the attachment off a
+    row kept precisely so history stays readable. There is a test that fails without it.
+  - Object first, row second. A failure between the two leaves a receipt the next sweep
+    retries; the other order leaks bytes nothing will ever look at again.
 
 ### Code sets: one appended, one retired
 
 `LiquidationStatus` shipped in Phase 2 as SUBMITTED 1 / APPROVED 2 / FINALIZED 3, before
-this lifecycle was specified. PENDING was **appended at 4**, not slotted in at 1 — even
-though the table was empty and a renumber would have been safe. Nothing in this codebase
-reads order from the number, so a renumber buys a tidier constant and spends the one rule
-that keeps stored rows honest. Code 3 is **retired**: withdrawn, never reused, listed in
-`RETIRED_LIQUIDATION_STATUS_CODES` and pinned by a test so the next code appended is 5.
+this lifecycle was specified. It is now **PENDING 1, SUBMITTED 2, APPROVED 3**.
+
+That took two steps, and the second was the user's call. Phase 5 first _appended_ PENDING
+at 4 and retired 3, on the reasoning that codes are permanent and nothing here reads order
+from the number. Asked to review it, the user chose the natural order. Migration
+`20260813030000_renumber_liquidation_status` remaps the stored rows explicitly, in one
+statement, so nothing was reinterpreted — and it drops and rebuilds all three CHECKs that
+encode status codes, because the remap transiently produces values two of them reject.
+
+**This was the second and last exercise of that window.** Liquidations exist now; the set
+is append-only from here, and `code-set.test.ts` says so.
 
 New sets: `LiquidationHistoryAction` (SUBMITTED 1, RETURNED 2), `DisbursementMode`
 (CASH 1, BANK_TRANSFER 2, EWALLET 3 — one vocabulary for money moving in both directions),
@@ -559,6 +580,7 @@ structural rather than conventional:
 | `POST /shipments/:id/settlement/{record,carry-to-payout}`    | ADMIN/ACCOUNTING                                       |
 | `GET /settlements/outstanding`                               | office                                                 |
 | `POST /receipts`, `GET /receipts/:id[/content]`              | upload: ADMIN/OPS/ACCOUNTING/CREW · read: per receipt  |
+| `POST /receipts/sweep-orphans?olderThanHours=`               | ADMIN                                                  |
 
 Four named actions rather than one `PATCH /status`, because the payloads genuinely differ —
 returning and reversing require a reason, submitting and approving do not. The transition
@@ -580,13 +602,13 @@ new: no allowance releases, no settlement, no charges, no levers.
 ## Current verified state (end of Phase 5)
 
 - **`pnpm run check`**: 14/14 tasks passing, uncached.
-- **223 tests**, all passing (was 199):
+- **226 tests**, all passing (was 199):
 
-  | Workspace        | Count | Added in Phase 5                                                                            |
-  | ---------------- | ----- | ------------------------------------------------------------------------------------------- |
-  | `packages/types` | 73    | the appended PENDING code, the retired 3, the backwards-running order, the four legal moves |
-  | `packages/db`    | 58    | four new code-column drift guards; a retired code is refused by raw SQL as well as by TS    |
-  | `apps/api`       | 92    | `liquidation-lifecycle` [13] — the first DB-backed tests in this workspace                  |
+  | Workspace        | Count | Added in Phase 5                                                                           |
+  | ---------------- | ----- | ------------------------------------------------------------------------------------------ |
+  | `packages/types` | 72    | the renumbered codes pinned, rank taken from the sequence, the four legal moves            |
+  | `packages/db`    | 58    | four new code-column drift guards; an unallocated code refused by raw SQL as well as by TS |
+  | `apps/api`       | 96    | `liquidation-lifecycle` [17] — the first DB-backed tests in this workspace                 |
 
 - **The brief's three required assertions, each asserted twice** — in
   `apps/api/src/liquidation/liquidation-lifecycle.test.ts` against a real database, and
@@ -603,7 +625,8 @@ new: no allowance releases, no settlement, no charges, no levers.
 - **Phase 4's assertions still pass unchanged** (`netRate 16200` → base 12,150, driver
   1,822.50, helper 911.25; with a 1,500 commissionable charge → 995.63 half-up).
 
-- **50 live checks against the containerised stack**, in order: created a route with a
+- **53 live checks against the containerised stack**, re-run after the renumber, in order:
+  created a route with a
   standard allowance; booked a trip; confirmed **no liquidation exists before delivery**;
   dispatched → in transit → delivered, and found a liquidation at PENDING with
   `submittedAt` null; saw the route standard offered as a default for the first release
@@ -617,26 +640,32 @@ new: no allowance releases, no settlement, no charges, no levers.
   shipment **earn LIQUIDATED**; reversed the approval and watched the shipment drop back to
   PENDING_LIQUIDATION with the settlement gone and the approver cleared; re-approved;
   was refused a carry naming someone who never worked the trip; carried it to payout and
-  found the crew deduction; confirmed it **stays on the outstanding alert**; then, as the
-  crew login, listed its own liquidations, read one, saw the return reason, and was refused
-  both settling and releasing cash to itself.
+  found the crew deduction; confirmed it **stays on the outstanding alert**; ran the orphan
+  sweep and watched it leave a fresh unattached upload alone; then, as the crew login,
+  listed its own liquidations, read one, saw the return reason, and was refused settling,
+  releasing cash to itself, and sweeping.
 - **Browser-verified**: the dashboard's outstanding-allowances alert; the shipment detail
   rendering the liquidation card with its four figures, the receipt link on one line and
   "No receipt attached" on the other, and the full submit/return/submit history; the
   allowances card showing both releases with their modes and the frozen-by-approval notice;
   the settlement card showing "Carried to payout — ₱0.00 taken so far"; and the crew
   portal's "Liquidations waiting on you".
-- `prisma migrate status`: 10 migrations applied, no drift. Seed still idempotent.
+- `prisma migrate status`: 11 migrations applied, no drift. Seed still idempotent.
 - **Table count**: 26 business + 3 Better Auth infra (`session`, `account`, `verification`)
   = **29 domain tables**. `information_schema.tables` returns **30** with Prisma's own
   `_prisma_migrations`.
 - **The migration chain was replayed from scratch** into a throwaway database
-  (`eztruckr_p5replay`, since dropped). All ten applied cleanly and the invariants held on
-  a virgin schema: 0 enum types, 0 float columns, 0 naive timestamps, 29 domain tables,
-  9 payout triggers, 21 partial unique indexes, 24 `_created_by_required` CHECKs,
-  26 `_soft_delete_consistent` CHECKs, `liquidation_status_code_valid` accepting exactly
-  `(1, 2, 4)`, `liquidation.status` defaulting to 4, `submittedAt` nullable, and
+  (`eztruckr_p5replay`, since dropped), after the renumber as well as before it. All eleven
+  applied cleanly and the invariants held on a virgin schema: 0 enum types, 0 float
+  columns, 0 naive timestamps, 29 domain tables, 9 payout triggers, 21 partial unique
+  indexes, 24 `_created_by_required` CHECKs, 26 `_soft_delete_consistent` CHECKs,
+  `liquidation_status_code_valid` accepting exactly `(1, 2, 3)`,
+  `liquidation_approved_at_matches_status` keyed to 3, `liquidation_submitted_at_matches_status`
+  keyed to 1, `liquidation.status` defaulting to 1, `submittedAt` nullable, and
   `finalizedAt`/`finalizedBy` gone.
+- **The renumber was checked against the live rows too**, not only a virgin schema: the
+  development liquidation that sat at 4 (PENDING) reads 1, and the one at 2 (APPROVED)
+  reads 3.
 
 ### Test data left in the development database
 
@@ -739,17 +768,54 @@ underneath it.
 | 6   | `user.email` only partially unique                 | Phase 3. Better Auth's adapter uses `findFirst`, so it never assumed total uniqueness.                                         |
 | 7   | Gas override sharing a column with the frozen rate | Phase 4. Split into input (`gasRateOverride`) and output (`appliedGasDeductionRate`).                                          |
 
-### Decided during Phase 5, without a question needing to be asked
+### Reviewed by the user at the end of Phase 5
 
-The brief settled most of this phase itself. Four calls it did not cover were made here,
-each one following an existing rule in the codebase rather than inventing a new one:
+Fourteen open questions were put to the user. **Twelve were confirmed as built**, one
+reversed a decision, and one asked for a design. Nothing here is still open.
+
+| #   | Question                                                     | Decision                                                                                   |
+| --- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| 1   | `LiquidationStatus`: append PENDING at 4, or renumber?       | **Renumber** to 1/2/3. Done, with stored rows remapped — see the Phase 5 code-set section. |
+| 2   | Who may release cash — should OPERATIONS be added?           | As built: ADMINISTRATOR and ACCOUNTING only.                                               |
+| 3   | May office roles submit on the crew's behalf?                | As built: yes, with the history naming whoever acted.                                      |
+| 4   | Does approval freeze the total advanced?                     | As built: yes. A late release costs a reversal.                                            |
+| 5   | Does reversal move the shipment back to PENDING_LIQUIDATION? | As built: yes, and refused once CLOSED.                                                    |
+| 6   | Ask which crew member a carried balance is charged to?       | As built: ask. Never default to the driver.                                                |
+| 7   | Is `requiresReceipt` enforced or merely stated?              | As built: stated. The approver judges a lost ferry ticket, not a validation rule.          |
+| 8   | Do crew see individual releases, or just the total?          | As built: the total.                                                                       |
+| 9   | Can a variance in the crew's favour be carried to payout?    | **No — it is paid to the crew immediately.** See below.                                    |
+| 10  | Any way back from CARRIED_TO_PAYOUT short of reversal?       | As built: no. Reverse the approval.                                                        |
+| 11  | `clearRecoveredCarryovers()` waiting for its Phase 6 caller  | As built. Phase 6 calls it and tests it.                                                   |
+| 12  | How should orphaned receipts be cleaned up?                  | **Built**: `POST /receipts/sweep-orphans`. See the Receipts section above.                 |
+| 13  | 10 MB, images-plus-PDF allow-list                            | Confirmed.                                                                                 |
+| 14  | Still no API e2e harness, no web tests                       | As built. Carried into "still worth doing".                                                |
+
+#### 9 in full: money owed to the crew is handed over, not deferred
+
+A negative variance — the crew spent more than they were advanced — is **paid to them
+immediately** and recorded as an ordinary settlement movement. It is never carried into a
+payout run.
+
+That is what the code already did, and it now has a decision behind it rather than a
+default: `carryToPayout` refuses a non-positive variance with a message saying to hand it
+over instead, `settlement_carry_is_a_debt` enforces the same rule in the database, and the
+settlement card only offers the carry option when the crew owe the company.
+
+**Do not add the symmetric case in Phase 6.** The obvious move — an `Adjustment` (INCREASE)
+on the next payout line — would make a crew member wait for a payout run to be reimbursed
+for money they have already spent out of their own pocket.
+
+### Decided during Phase 5, before that review
+
+Four calls the brief did not cover, each following an existing rule in the codebase rather
+than inventing a new one. All four survived the review above:
 
 | Decision                                                             | Why                                                                                                                                                                         |
 | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| PENDING appended at code 4; FINALIZED (3) retired, never reused      | Codes are permanent. The table was empty, so a renumber was safe — and buys only a tidier constant, since order comes from the declared sequence.                           |
 | Reversal moves the shipment back to PENDING_LIQUIDATION              | The status is derived from two facts; retracting one and leaving LIQUIDATED would let the close guard pass on a claim that is no longer true. Refused outright once CLOSED. |
-| CARRIED_TO_PAYOUT creates an ordinary `CrewDeduction`, positive only | That machinery already recovers in slices, refuses over-recovery and freezes on PAID. Money the company owes is handed over, not deducted — a run has nothing to recover.   |
+| CARRIED_TO_PAYOUT creates an ordinary `CrewDeduction`, positive only | That machinery already recovers in slices, refuses over-recovery and freezes on PAID.                                                                                       |
 | Receipt bytes stream through the API, not a presigned URL            | A presigned link outlives its request and travels outside `RolesGuard`; a receipt is exactly what one crew member may see and their colleague may not.                      |
+| Cash release stays with ADMINISTRATOR and ACCOUNTING                 | Money is accounting's, movement is operations' — the rule Phase 4 set for charges and the gas override. `releasedBy` records who actually handed it over.                   |
 
 ### The pattern worth carrying forward
 
@@ -787,7 +853,11 @@ constraint coverage.
 - **`SettlementService.clearRecoveredCarryovers(actorId)` is waiting for its caller.** A
   CARRIED_TO_PAYOUT settlement becomes SETTLED when its `CrewDeduction` is fully recovered
   by runs marked PAID. Call it when a run is marked Paid; do not re-derive the rule in the
-  payout code.
+  payout code. It has never been exercised — there are no payout runs yet — so test it
+  when you wire it.
+- **A variance owed TO the crew is never a payout concern.** It is handed over and recorded
+  as a settlement movement, by decision (question 9). Do not add an `Adjustment` path for
+  it.
 - **`shipmentStatusAfterLiquidationMilestone()` is the only definition of LIQUIDATED.**
   Both the commission side and the liquidation side call it. If a third thing ever affects
   the status, extend that function.

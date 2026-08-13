@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
   PutObjectCommand,
@@ -112,6 +113,18 @@ export class StorageService {
       body: Buffer.from(await response.Body.transformToByteArray()),
       contentType: response.ContentType ?? null,
     };
+  }
+
+  /**
+   * Removes an object. Used only by the orphan sweep.
+   *
+   * S3 treats deleting a key that is not there as a success, which is what
+   * makes the sweep safely re-runnable after a partial failure.
+   */
+  async remove(key: string): Promise<void> {
+    const client = this.requireClient();
+
+    await client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
   }
 
   /**
