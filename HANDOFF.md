@@ -2,8 +2,8 @@
 
 Trucking operations system. Turborepo monorepo, Philippine haulage domain (₱, Asia/Manila).
 
-**Last commit: `d69792f`;** the `payee` work below is staged but **uncommitted** — record
-its hash here when it lands. `pnpm run check` green (88 types + 176 api + 59 db tests), no
+**Last commit: `1cb8dd8`**, on branch `phase-7-payees-uuid-crew-portal` — not yet merged to
+`main`. Working tree clean, `pnpm run check` green (88 types + 176 api + 59 db tests), no
 schema drift.
 
 ```
