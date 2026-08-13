@@ -413,6 +413,8 @@ model CrewMember {
   helpedShipments Shipment[]      @relation("ShipmentHelper")
   commissions     Commission[]
   allowances      Allowance[]
+  /// Trips whose cash this person is answerable for accounting for.
+  custodyOf       Liquidation[]   @relation("LiquidationCustodian")
   deductions      CrewDeduction[]
   adjustments     Adjustment[]
   payoutLines     PayoutLine[]
@@ -850,7 +852,19 @@ model Allowance {
   shipmentId String
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
 
-  /// Crew member who physically received the cash.
+  /// WHICH ACCOUNT this release is booked against — whose variance it moves.
+  ///
+  /// The pair (liquidationId, shipmentId) is a single composite foreign key to
+  /// `liquidation (id, shipmentId)`, so a release can never be booked against
+  /// an account on a DIFFERENT trip. `shipmentId` is kept rather than reached
+  /// through the liquidation precisely so that key can exist: the redundancy is
+  /// what the database checks, not something it has to be trusted about.
+  liquidationId String
+  liquidation   Liquidation @relation(fields: [liquidationId, shipmentId], references: [id, shipmentId], onDelete: Restrict)
+
+  /// Crew member who physically RECEIVED the cash. Deliberately independent of
+  /// the liquidation's custodian: a helper can be handed ferry money that the
+  /// driver remains answerable for, and both facts are worth keeping.
   crewMemberId String
   crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
 
@@ -890,6 +904,7 @@ model Allowance {
   deletedByUser User?     @relation("AllowanceDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
   @@index([shipmentId])
+  @@index([liquidationId])
   @@index([crewMemberId])
   @@index([releasedBy])
   @@index([deletedAt])
@@ -909,21 +924,42 @@ model Allowance {
 /// their action". What a `RETURNED` state would have recorded is recorded
 /// better by `LiquidationHistory`, which also says when, by whom and why. See
 /// the code set for the full argument.
+/// ONE CUSTODIAN'S ACCOUNT of one trip's cash. Many per shipment.
+///
+/// It was one per shipment until the custodian existed, and that single row
+/// was quietly blending two people's money: with a driver holding ₱10,000 and
+/// a helper holding ₱3,000, one `variance` could only ever say what the TRIP
+/// was short by, never which of them owed it. The settlement built on top
+/// inherited the same blindness, and a crew member could be chased for change
+/// their colleague was holding.
+///
+/// A custodian is the person accountable for accounting — not necessarily the
+/// person who received every peso. An allowance names its own recipient, so a
+/// helper can be handed ferry money that the driver is still answerable for.
 model Liquidation {
   id String @id @default(cuid())
 
-  /// Partial-unique WHERE "deletedAt" IS NULL — at most one live liquidation
-  /// per shipment, while a soft-deleted one can be superseded.
   shipmentId String
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  /// The crew member answerable for this cash.
+  ///
+  /// Nullable, because a trip's first liquidation is created at BOOKING, before
+  /// anybody has been assigned to drive it. Partial-unique on
+  /// (shipmentId, custodianId) WHERE "deletedAt" IS NULL and NULLS NOT
+  /// DISTINCT — one open account per person per trip, and only one that has
+  /// nobody's name on it yet, because two unnamed accounts are indistinguishable.
+  custodianId String?
+  custodian   CrewMember? @relation("LiquidationCustodian", fields: [custodianId], references: [id], onDelete: Restrict)
 
   /// Code set: LiquidationStatus (1 PENDING, 2 SUBMITTED, 3 APPROVED). Order
   /// comes from the declared sequence in @eztruckr/types, never from the
   /// number — it matches today and will not once a status is appended.
   status Int @default(1) @db.SmallInt
 
-  /// Sum of ALL the shipment's allowances — every release, not one of them.
-  /// Recomputed while the liquidation is open and frozen on approval.
+  /// Sum of THIS liquidation's allowances — the releases booked against this
+  /// custodian, not every release on the trip. Recomputed while the liquidation
+  /// is open and frozen on approval.
   totalAllowance  Decimal @default(0) @db.Decimal(15, 4)
   /// Sum of the liquidation lines — this is the figure recognised as P&L cost.
   totalLiquidated Decimal @default(0) @db.Decimal(15, 4)
@@ -942,8 +978,10 @@ model Liquidation {
   approvedByUser User?     @relation("LiquidationApprovedBy", fields: [approvedBy], references: [id], onDelete: Restrict)
   remarks        String?
 
-  lines   LiquidationLine[]
-  history LiquidationHistory[]
+  lines       LiquidationLine[]
+  history     LiquidationHistory[]
+  allowances  Allowance[]
+  settlements Settlement[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -955,7 +993,14 @@ model Liquidation {
   deletedBy     String?
   deletedByUser User?     @relation("LiquidationDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
+  /// Lets a child row reference (liquidationId, shipmentId) as one foreign key,
+  /// which is what makes "an allowance's liquidation is on its own shipment"
+  /// a structural fact rather than something a service remembers to check.
+  /// `map:`, not `name:` — the first sets the constraint name in Postgres, the
+  /// second only renames the compound key in the generated client.
+  @@unique([id, shipmentId], map: "liquidation_id_shipment_key")
   @@index([shipmentId])
+  @@index([custodianId])
   @@index([status])
   @@index([deletedAt])
   @@map("liquidation")
@@ -1107,11 +1152,21 @@ model Receipt {
 model Settlement {
   id String @id @default(cuid())
 
-  /// Partial-unique WHERE "deletedAt" IS NULL — at most one live settlement per
-  /// shipment. A reversed approval soft-deletes it, and re-approval writes a
-  /// fresh one against the recomputed variance.
   shipmentId String
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  /// WHOSE leftover cash this is — partial-unique WHERE "deletedAt" IS NULL, so
+  /// at most one live settlement per LIQUIDATION rather than per shipment. A
+  /// reversed approval soft-deletes it, and re-approval writes a fresh one
+  /// against the recomputed variance.
+  ///
+  /// It moved off the shipment when a trip gained more than one custodian: two
+  /// people each holding change cannot share one settlement row, and the
+  /// blended figure the old shape produced would chase one of them for the
+  /// other's money. Composite FK on (liquidationId, shipmentId), same as an
+  /// allowance and for the same reason.
+  liquidationId String
+  liquidation   Liquidation @relation(fields: [liquidationId, shipmentId], references: [id, shipmentId], onDelete: Restrict)
 
   /// Code set: SettlementStatus (1 OUTSTANDING, 2 SETTLED, 3 CARRIED_TO_PAYOUT).
   status Int @default(1) @db.SmallInt
@@ -1160,6 +1215,7 @@ model Settlement {
   deletedByUser User?     @relation("SettlementDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
   @@index([shipmentId])
+  @@index([liquidationId])
   @@index([status])
   @@index([crewDeductionId])
   @@index([deletedAt])

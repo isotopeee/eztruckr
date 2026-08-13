@@ -5,8 +5,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DISBURSEMENT_MODE_LABELS,
   DisbursementMode,
+  LiquidationStatus,
   UserRole,
   expectsReferenceNumber,
+  type AllowanceSummary,
+  type Liquidation,
   type Shipment,
 } from '@eztruckr/types';
 import { Loader2, Trash2 } from 'lucide-react';
@@ -29,11 +32,13 @@ import {
   getAllowances,
   issueAllowance,
   liquidationKeys,
+  listShipmentLiquidations,
   receiptContentUrl,
   removeAllowance,
 } from '@/lib/liquidation-api';
 import { shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
+import { crewOnTrip } from './trip-crew';
 import { ReceiptField } from './receipt-field';
 
 /**
@@ -43,6 +48,11 @@ import { ReceiptField } from './receipt-field';
  * trip carries an initial advance and whatever the road demands afterwards, so
  * a second release is a second row — with its own date, its own mode and its
  * own paper trail. A single editable figure would swallow the first one whole.
+ *
+ * EVERY RELEASE NAMES TWO PEOPLE, and they are not the same question. Who
+ * RECEIVED the cash is the crew member it was handed to; which ACCOUNT it is
+ * booked against is whose variance it moves. A helper can be given ferry money
+ * the driver answers for, so the form asks both.
  *
  * `totalAdvanced` comes from the API rather than being summed here. It is the
  * figure the variance is measured against, and a number a crew member may be
@@ -56,6 +66,13 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
   const summary = useQuery({
     queryKey: liquidationKeys.allowances(shipment.id),
     queryFn: () => getAllowances(shipment.id),
+  });
+
+  // The accounts a release can be booked against. Shares a cache key with the
+  // liquidation card, so showing both costs one request rather than two.
+  const accounts = useQuery({
+    queryKey: liquidationKeys.liquidations(shipment.id),
+    queryFn: () => listShipmentLiquidations(shipment.id),
   });
 
   const invalidate = () => {
@@ -108,6 +125,14 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
                     <Badge variant="outline">
                       {DISBURSEMENT_MODE_LABELS[release.disbursementMode]}
                     </Badge>
+                    {/* Whose variance this moves, which is not necessarily the
+                        person it was handed to. */}
+                    <span>
+                      on{' '}
+                      {release.custodianName
+                        ? `${release.custodianName}'s account`
+                        : 'the unassigned account'}
+                    </span>
                     {release.referenceNumber ? <span>Ref {release.referenceNumber}</span> : null}
                     {release.releasedByName ? <span>by {release.releasedByName}</span> : null}
                     {release.receiptId ? (
@@ -146,11 +171,16 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
 
         {canIssueRole ? (
           data?.canIssue ? (
-            <IssueForm shipment={shipment} summary={data} onIssued={invalidate} />
+            <IssueForm
+              shipment={shipment}
+              summary={data}
+              accounts={accounts.data ?? []}
+              onIssued={invalidate}
+            />
           ) : (
             <p className="text-muted-foreground border-t pt-4 text-xs">
-              The liquidation for this trip is approved, so the total advanced is frozen. Reverse
-              the approval, with a reason, to record another release.
+              No account on this trip can take a release — every liquidation is approved, or the
+              trip is closed. Reverse an approval, with a reason, to record another.
             </p>
           )
         ) : null}
@@ -162,21 +192,27 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
 function IssueForm({
   shipment,
   summary,
+  accounts,
   onIssued,
 }: {
   shipment: Shipment;
-  summary: { releaseCount: number; routeStandardAllowance: string | null };
+  summary: AllowanceSummary;
+  accounts: Liquidation[];
   onIssued: () => void;
 }) {
-  const crew = [
-    shipment.driverId ? { id: shipment.driverId, name: shipment.driverName ?? 'Driver' } : null,
-    shipment.helperId ? { id: shipment.helperId, name: shipment.helperName ?? 'Helper' } : null,
-  ].filter((entry): entry is { id: string; name: string } => entry !== null);
+  const crew = crewOnTrip(shipment);
+
+  // Only the accounts that would accept it. An approved account has its total
+  // advanced frozen, and offering it here would put the refusal after the
+  // typing rather than before it.
+  const open = accounts.filter((account) => account.status !== LiquidationStatus.APPROVED);
 
   // The route's standard allowance prefills the FIRST release only. A top-up is
   // whatever the road actually cost, and offering the standard figure again
   // would be suggesting a number nobody meant.
   const [draft, setDraft] = useState({
+    /** Empty until chosen; the default is resolved below, not frozen here. */
+    liquidationId: '',
     crewMemberId: crew[0]?.id ?? '',
     amount: summary.releaseCount === 0 ? (summary.routeStandardAllowance ?? '') : '',
     disbursementMode: String(DisbursementMode.CASH),
@@ -186,9 +222,17 @@ function IssueForm({
     remarks: '',
   });
 
+  // The trip's own account leads the list, so it is what a release lands on
+  // when nobody has chosen otherwise — the common case by far. Resolved on
+  // every render rather than seeded into `useState`, because the accounts
+  // arrive after this form first mounts and a state seeded from an empty list
+  // stays empty once it fills.
+  const liquidationId = draft.liquidationId || (open[0]?.id ?? '');
+
   const issue = useMutation({
     mutationFn: () =>
       issueAllowance(shipment.id, {
+        liquidationId,
         crewMemberId: draft.crewMemberId,
         amount: draft.amount,
         issuedAt: null,
@@ -234,6 +278,31 @@ function IssueForm({
         issue.mutate();
       }}
     >
+      <div className="space-y-1">
+        <Label htmlFor="allowance-account" className="text-xs">
+          Booked against
+        </Label>
+        <Select
+          value={liquidationId}
+          onValueChange={(value) => setDraft((current) => ({ ...current, liquidationId: value }))}
+        >
+          <SelectTrigger id="allowance-account">
+            <SelectValue placeholder="Account" />
+          </SelectTrigger>
+          <SelectContent>
+            {open.map((account) => (
+              <SelectItem key={account.id} value={account.id}>
+                {account.custodianName ?? 'Unassigned account'}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-muted-foreground text-[11px]">
+          Whose variance this moves. Not necessarily the person it is handed to — a helper can be
+          given ferry money the driver answers for.
+        </p>
+      </div>
+
       <div className="grid gap-2 sm:grid-cols-2">
         <div className="space-y-1">
           <Label htmlFor="allowance-crew" className="text-xs">
@@ -327,7 +396,7 @@ function IssueForm({
         }
       />
 
-      <Button type="submit" size="sm" disabled={issue.isPending}>
+      <Button type="submit" size="sm" disabled={issue.isPending || !liquidationId}>
         {issue.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
         Record release
       </Button>

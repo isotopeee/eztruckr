@@ -383,9 +383,13 @@ export class CommissionService {
     }
 
     return shipmentStatusAfterLiquidationMilestone(shipment.status, {
-      liquidationApproved: shipment.liquidations.some(
-        (liquidation) => liquidation.status === LiquidationStatus.APPROVED,
-      ),
+      // EVERY account, not any. A trip can carry one per cash holder, and the
+      // driver squaring up says nothing about the helper still holding change.
+      allLiquidationsApproved:
+        shipment.liquidations.length > 0 &&
+        shipment.liquidations.every(
+          (liquidation) => liquidation.status === LiquidationStatus.APPROVED,
+        ),
       // This is the computation that makes it true, so it is true by the time
       // the caller applies the result.
       commissionsComputed: true,

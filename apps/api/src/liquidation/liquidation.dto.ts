@@ -1,5 +1,6 @@
 import {
   approveLiquidationSchema,
+  createLiquidationSchema,
   carrySettlementToPayoutSchema,
   createLiquidationLineSchema,
   issueAllowanceSchema,
@@ -7,6 +8,7 @@ import {
   recordSettlementSchema,
   returnLiquidationSchema,
   reverseLiquidationSchema,
+  setCustodianSchema,
   submitLiquidationSchema,
   sweepOrphanReceiptsQuerySchema,
   updateAllowanceSchema,
@@ -32,6 +34,8 @@ export class UpdateLiquidationLineDto extends createZodDto(updateLiquidationLine
 export class SubmitLiquidationDto extends createZodDto(submitLiquidationSchema) {}
 export class ReturnLiquidationDto extends createZodDto(returnLiquidationSchema) {}
 export class ApproveLiquidationDto extends createZodDto(approveLiquidationSchema) {}
+export class CreateLiquidationDto extends createZodDto(createLiquidationSchema) {}
+export class SetCustodianDto extends createZodDto(setCustodianSchema) {}
 export class ReverseLiquidationDto extends createZodDto(reverseLiquidationSchema) {}
 
 export class SweepOrphanReceiptsQueryDto extends createZodDto(sweepOrphanReceiptsQuerySchema) {}

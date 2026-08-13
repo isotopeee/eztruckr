@@ -18,34 +18,53 @@ export class SettlementController {
     private readonly access: ShipmentAccessService,
   ) {}
 
-  @Get('shipments/:shipmentId/settlement')
+  /**
+   * Every account's settlement on one trip.
+   *
+   * A list, because a trip can carry one per cash holder — the driver may have
+   * squared up while the helper has not, and a single record could not say so.
+   */
+  @Get('shipments/:shipmentId/settlements')
   @Roles(...CAN_READ_SHIPMENTS, ...CAN_SUBMIT_LIQUIDATION)
-  async get(
+  async listForShipment(
     @Param('shipmentId') shipmentId: string,
     @CurrentUser() user: RequestUser,
-  ): Promise<Settlement> {
+  ): Promise<Settlement[]> {
     await this.access.assertMayRead(shipmentId, user);
 
-    return this.settlements.getForShipment(shipmentId);
+    return this.settlements.listForShipment(shipmentId);
   }
 
-  @Post('shipments/:shipmentId/settlement/record')
+  @Get('liquidations/:liquidationId/settlement')
+  @Roles(...CAN_READ_SHIPMENTS, ...CAN_SUBMIT_LIQUIDATION)
+  async get(
+    @Param('liquidationId') liquidationId: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Settlement> {
+    const settlement = await this.settlements.getForLiquidation(liquidationId);
+
+    await this.access.assertMayRead(settlement.shipmentId, user);
+
+    return settlement;
+  }
+
+  @Post('liquidations/:liquidationId/settlement/record')
   @Roles(...CAN_DECIDE_LIQUIDATION)
   record(
-    @Param('shipmentId') shipmentId: string,
+    @Param('liquidationId') liquidationId: string,
     @Body() dto: RecordSettlementDto,
     @CurrentUser() user: RequestUser,
   ): Promise<Settlement> {
-    return this.settlements.record(shipmentId, dto, user);
+    return this.settlements.record(liquidationId, dto, user);
   }
 
-  @Post('shipments/:shipmentId/settlement/carry-to-payout')
+  @Post('liquidations/:liquidationId/settlement/carry-to-payout')
   @Roles(...CAN_DECIDE_LIQUIDATION)
   carryToPayout(
-    @Param('shipmentId') shipmentId: string,
+    @Param('liquidationId') liquidationId: string,
     @Body() dto: CarrySettlementToPayoutDto,
   ): Promise<Settlement> {
-    return this.settlements.carryToPayout(shipmentId, dto);
+    return this.settlements.carryToPayout(liquidationId, dto);
   }
 
   /**

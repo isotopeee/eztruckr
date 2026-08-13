@@ -64,14 +64,33 @@ export type LiquidationHistoryEntry = z.infer<typeof liquidationHistoryEntrySche
 // The liquidation
 // ---------------------------------------------------------------------------
 
+/**
+ * ONE CUSTODIAN'S ACCOUNT of one trip's cash. There may be several per trip.
+ *
+ * It was one per shipment until the custodian existed, and that single row was
+ * blending two people's money: with a driver holding ₱10,000 and a helper
+ * holding ₱3,000, one `variance` could say what the TRIP was short by and never
+ * which of them owed it. Splitting it is what lets the settlement — and the
+ * outstanding-allowances alert built on it — name a person.
+ */
 export const liquidationSchema = auditFieldsSchema.extend({
   id: z.string(),
   shipmentId: z.string(),
   shipmentNumber: z.string().nullable(),
 
+  /**
+   * The crew member answerable for accounting for this cash.
+   *
+   * Null on the liquidation created with the shipment, because nobody has been
+   * assigned to drive it yet. NOT the same as an allowance's recipient: a
+   * helper can be handed ferry money the driver remains answerable for.
+   */
+  custodianId: z.string().nullable(),
+  custodianName: z.string().nullable(),
+
   status: liquidationStatusSchema,
 
-  /** Sum of every allowance released on the trip, frozen at approval. */
+  /** Sum of the releases booked against THIS account, frozen at approval. */
   totalAllowance: z.string(),
   totalLiquidated: z.string(),
   /** totalAllowance - totalLiquidated. Positive = crew return cash. */
@@ -109,6 +128,28 @@ export const liquidationSchema = auditFieldsSchema.extend({
 });
 
 export type Liquidation = z.infer<typeof liquidationSchema>;
+
+/**
+ * Opening a second account on a trip, for a second cash holder.
+ *
+ * The custodian is REQUIRED here, unlike on the column. The nullable column
+ * exists for exactly one row — the one created automatically with the shipment,
+ * before anybody is assigned — and a second account created by hand with nobody
+ * answerable for it would be indistinguishable from that one, which is the
+ * ambiguity the partial unique index refuses anyway.
+ */
+export const createLiquidationSchema = z.object({
+  custodianId: cuidSchema,
+});
+
+export type CreateLiquidationInput = z.infer<typeof createLiquidationSchema>;
+
+/** Naming, or renaming, who is answerable. Null hands it back to nobody. */
+export const setCustodianSchema = z.object({
+  custodianId: cuidSchema.nullish().transform((value) => value ?? null),
+});
+
+export type SetCustodianInput = z.infer<typeof setCustodianSchema>;
 
 // ---------------------------------------------------------------------------
 // The four moves
@@ -183,11 +224,17 @@ export type LiquidationListQuery = z.infer<typeof liquidationListQuerySchema>;
 /**
  * What a shipment's status should be, given the two facts that decide it.
  *
- * A shipment is LIQUIDATED when an approved liquidation exists AND commissions
- * have been computed. Neither half owns the transition: whichever lands second
- * applies it. Phase 4 wrote the commission half; this function is the whole
- * rule, called from both sides, so the two can never drift into disagreeing
- * about what "liquidated" means.
+ * A shipment is LIQUIDATED when EVERY liquidation on it is approved AND
+ * commissions have been computed. Neither half owns the transition: whichever
+ * lands second applies it. Phase 4 wrote the commission half; this function is
+ * the whole rule, called from both sides, so the two can never drift into
+ * disagreeing about what "liquidated" means.
+ *
+ * The first fact is `allLiquidationsApproved`, not "an approved liquidation
+ * exists", and the rename is the point. A trip can now carry one account per
+ * cash holder, and "somebody has squared up" is a much weaker claim than "the
+ * trip is accounted for" — the old wording would have marked a trip liquidated
+ * while a second custodian still held cash nobody had counted.
  *
  * It also runs backwards, and that is deliberate. Reversing an approval retracts
  * one of the two facts, and a shipment left sitting at LIQUIDATED with no
@@ -200,9 +247,9 @@ export type LiquidationListQuery = z.infer<typeof liquidationListQuerySchema>;
  */
 export function shipmentStatusAfterLiquidationMilestone(
   current: ShipmentStatus,
-  facts: { liquidationApproved: boolean; commissionsComputed: boolean },
+  facts: { allLiquidationsApproved: boolean; commissionsComputed: boolean },
 ): ShipmentStatus | null {
-  const earned = facts.liquidationApproved && facts.commissionsComputed;
+  const earned = facts.allLiquidationsApproved && facts.commissionsComputed;
 
   if (current === ShipmentStatus.PENDING_LIQUIDATION) {
     return earned ? ShipmentStatus.LIQUIDATED : null;

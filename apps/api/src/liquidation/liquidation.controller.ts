@@ -7,12 +7,15 @@ import {
   CAN_DECIDE_LIQUIDATION,
   CAN_READ_SHIPMENTS,
   CAN_SUBMIT_LIQUIDATION,
+  CAN_WRITE_SHIPMENT_MONEY,
 } from '../auth/role-policy';
 import {
   ApproveLiquidationDto,
+  CreateLiquidationDto,
   CreateLiquidationLineDto,
   ReturnLiquidationDto,
   ReverseLiquidationDto,
+  SetCustodianDto,
   SubmitLiquidationDto,
   UpdateLiquidationLineDto,
 } from './liquidation.dto';
@@ -20,7 +23,13 @@ import { LiquidationService } from './liquidation.service';
 import { ShipmentAccessService } from './shipment-access.service';
 
 /**
- * The liquidation of one trip, addressed through the trip.
+ * One custodian's account of a trip's cash.
+ *
+ * ADDRESSED BY ITS OWN ID, not through the shipment. It hung off
+ * `/shipments/:id/liquidation` while a trip could only have one, and that path
+ * stopped identifying anything the moment a second cash holder could exist —
+ * every action below is about one person's account, and only the list and the
+ * create are about the trip.
  *
  * FOUR NAMED ACTIONS rather than one `PATCH /status`. The shipment lifecycle
  * has a generic transition endpoint because every move there carries the same
@@ -30,83 +39,135 @@ import { ShipmentAccessService } from './shipment-access.service';
  * mandatory after all. The transition table in `@eztruckr/types` is still the
  * only thing that says which moves exist; each of these asks it.
  */
-@Controller('shipments/:shipmentId/liquidation')
+@Controller()
 export class LiquidationController {
   constructor(
     private readonly liquidations: LiquidationService,
     private readonly access: ShipmentAccessService,
   ) {}
 
-  @Get()
+  // --- through the trip ------------------------------------------------
+
+  @Get('shipments/:shipmentId/liquidations')
   @Roles(...CAN_SUBMIT_LIQUIDATION, ...CAN_READ_SHIPMENTS)
-  async get(
+  async listForShipment(
     @Param('shipmentId') shipmentId: string,
     @CurrentUser() user: RequestUser,
-  ): Promise<Liquidation> {
+  ): Promise<Liquidation[]> {
     await this.access.assertMayRead(shipmentId, user);
 
-    return this.liquidations.getForShipment(shipmentId);
+    return this.liquidations.listForShipment(shipmentId);
   }
 
-  @Post('lines')
+  /**
+   * Opening a second account, for a second cash holder.
+   *
+   * `CAN_WRITE_SHIPMENT_MONEY` rather than the wider submit list: deciding that
+   * a helper carries their own cash is the same kind of call as releasing it,
+   * and crews should not be able to open accounts for themselves.
+   */
+  @Post('shipments/:shipmentId/liquidations')
+  @Roles(...CAN_WRITE_SHIPMENT_MONEY)
+  create(
+    @Param('shipmentId') shipmentId: string,
+    @Body() dto: CreateLiquidationDto,
+  ): Promise<Liquidation> {
+    return this.liquidations.createForShipment(shipmentId, dto);
+  }
+
+  // --- the account itself ----------------------------------------------
+
+  @Get('liquidations/:liquidationId')
+  @Roles(...CAN_SUBMIT_LIQUIDATION, ...CAN_READ_SHIPMENTS)
+  async get(
+    @Param('liquidationId') liquidationId: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Liquidation> {
+    const liquidation = await this.liquidations.get(liquidationId);
+
+    await this.access.assertMayRead(liquidation.shipmentId, user);
+
+    return liquidation;
+  }
+
+  @Patch('liquidations/:liquidationId/custodian')
+  @Roles(...CAN_WRITE_SHIPMENT_MONEY)
+  setCustodian(
+    @Param('liquidationId') liquidationId: string,
+    @Body() dto: SetCustodianDto,
+  ): Promise<Liquidation> {
+    return this.liquidations.setCustodian(liquidationId, dto);
+  }
+
+  @Delete('liquidations/:liquidationId')
+  @Roles(...CAN_WRITE_SHIPMENT_MONEY)
+  remove(@Param('liquidationId') liquidationId: string): Promise<{ removed: true }> {
+    return this.liquidations.remove(liquidationId);
+  }
+
+  // --- lines -------------------------------------------------------------
+
+  @Post('liquidations/:liquidationId/lines')
   @Roles(...CAN_SUBMIT_LIQUIDATION)
   addLine(
-    @Param('shipmentId') shipmentId: string,
+    @Param('liquidationId') liquidationId: string,
     @Body() dto: CreateLiquidationLineDto,
     @CurrentUser() user: RequestUser,
   ): Promise<LiquidationLine> {
-    return this.liquidations.addLine(shipmentId, dto, user);
+    return this.liquidations.addLine(liquidationId, dto, user);
   }
 
-  @Patch('lines/:lineId')
+  @Patch('liquidations/:liquidationId/lines/:lineId')
   @Roles(...CAN_SUBMIT_LIQUIDATION)
   updateLine(
-    @Param('shipmentId') shipmentId: string,
+    @Param('liquidationId') liquidationId: string,
     @Param('lineId') lineId: string,
     @Body() dto: UpdateLiquidationLineDto,
     @CurrentUser() user: RequestUser,
   ): Promise<LiquidationLine> {
-    return this.liquidations.updateLine(shipmentId, lineId, dto, user);
+    return this.liquidations.updateLine(liquidationId, lineId, dto, user);
   }
 
-  @Delete('lines/:lineId')
+  @Delete('liquidations/:liquidationId/lines/:lineId')
   @Roles(...CAN_SUBMIT_LIQUIDATION)
   removeLine(
-    @Param('shipmentId') shipmentId: string,
+    @Param('liquidationId') liquidationId: string,
     @Param('lineId') lineId: string,
     @CurrentUser() user: RequestUser,
   ): Promise<{ removed: true }> {
-    return this.liquidations.removeLine(shipmentId, lineId, user);
+    return this.liquidations.removeLine(liquidationId, lineId, user);
   }
 
-  @Post('submit')
+  // --- the four moves ----------------------------------------------------
+
+  @Post('liquidations/:liquidationId/submit')
   @Roles(...CAN_SUBMIT_LIQUIDATION)
   submit(
-    @Param('shipmentId') shipmentId: string,
+    @Param('liquidationId') liquidationId: string,
     @Body() dto: SubmitLiquidationDto,
     @CurrentUser() user: RequestUser,
   ): Promise<Liquidation> {
-    return this.liquidations.submit(shipmentId, dto, user);
+    return this.liquidations.submit(liquidationId, dto, user);
   }
 
-  @Post('return')
+  @Post('liquidations/:liquidationId/return')
   @Roles(...CAN_DECIDE_LIQUIDATION)
   returnToCrew(
-    @Param('shipmentId') shipmentId: string,
+    @Param('liquidationId') liquidationId: string,
     @Body() dto: ReturnLiquidationDto,
     @CurrentUser() user: RequestUser,
   ): Promise<Liquidation> {
-    return this.liquidations.returnToCrew(shipmentId, dto, user);
+    return this.liquidations.returnToCrew(liquidationId, dto, user);
   }
 
-  @Post('approve')
+  @Post('liquidations/:liquidationId/approve')
   @Roles(...CAN_DECIDE_LIQUIDATION)
   approve(
-    @Param('shipmentId') shipmentId: string,
+    @Param('liquidationId') liquidationId: string,
     @Body() dto: ApproveLiquidationDto,
     @CurrentUser() user: RequestUser,
   ): Promise<Liquidation> {
-    return this.liquidations.approve(shipmentId, dto, user);
+    return this.liquidations.approve(liquidationId, dto, user);
   }
 
   /**
@@ -115,15 +176,15 @@ export class LiquidationController {
    * decided, so the trail records where the request came from as well as who
    * made it.
    */
-  @Post('reverse')
+  @Post('liquidations/:liquidationId/reverse')
   @Roles(...CAN_DECIDE_LIQUIDATION)
   reverse(
-    @Param('shipmentId') shipmentId: string,
+    @Param('liquidationId') liquidationId: string,
     @Body() dto: ReverseLiquidationDto,
     @CurrentUser() user: RequestUser,
     @Req() request: Request,
   ): Promise<Liquidation> {
-    return this.liquidations.reverse(shipmentId, dto, user, {
+    return this.liquidations.reverse(liquidationId, dto, user, {
       ipAddress: request.ip ?? null,
       userAgent: request.get('user-agent') ?? null,
     });

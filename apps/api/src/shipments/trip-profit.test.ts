@@ -398,10 +398,17 @@ describe('gross profit', () => {
 
     const before = await grossProfits.forShipment(SHIPMENT_ID);
 
+    // Booked against an account, because every release now is: an allowance
+    // with no liquidation is cash with nobody answerable for it.
+    const account = await act(async () =>
+      prisma.liquidation.create({ data: { shipmentId: SHIPMENT_ID } }),
+    );
+
     await act(async () =>
       prisma.allowance.create({
         data: {
           shipmentId: SHIPMENT_ID,
+          liquidationId: account.id,
           crewMemberId,
           amount: '12000.0000',
           releasedBy: adminId,

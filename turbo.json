@@ -42,6 +42,10 @@
     },
     "generate": {
       "cache": false
-    }
+    },
+
+    "@eztruckr/db#test": { "dependsOn": ["^build", "build"], "outputs": [] },
+    "@eztruckr/db#typecheck": { "dependsOn": ["^build", "build"], "outputs": [] },
+    "@eztruckr/db#lint": { "dependsOn": ["^build", "build"], "outputs": [] }
   }
 }

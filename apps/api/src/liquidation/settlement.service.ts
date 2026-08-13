@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { liveOne, type Prisma } from '@eztruckr/db';
+import type { Prisma } from '@eztruckr/db';
 import {
   isAllowanceOutstanding,
   isDisbursementMode,
@@ -35,12 +35,23 @@ import { ReceiptsService } from './receipts.service';
  * that inferred one from the other would report a trip as clear while the crew
  * still held the change.
  *
- * ONE RECORD PER SHIPMENT. With an advance and two top-ups there is no honest
- * way to say which release a returned amount came from, so nothing tries.
+ * ONE RECORD PER LIQUIDATION, not per shipment. Within one custodian's account
+ * there is still no honest way to say which release a returned amount came from,
+ * so nothing tries — but ACROSS custodians there is, and pretending otherwise is
+ * what the old shape did: two people each holding change shared one row, so the
+ * alert could name a trip and never a person, and squaring up was
+ * all-or-nothing for both of them.
  */
 
 const SETTLEMENT_INCLUDE = {
   shipment: { select: { shipmentNumber: true } },
+  liquidation: {
+    select: {
+      custodianId: true,
+      approvedAt: true,
+      custodian: { select: { firstName: true, lastName: true } },
+    },
+  },
   settledByUser: { select: { name: true } },
   receipt: { select: { fileName: true } },
   crewDeduction: {
@@ -57,8 +68,19 @@ export class SettlementService {
     private readonly receipts: ReceiptsService,
   ) {}
 
-  async getForShipment(shipmentId: string): Promise<Settlement> {
-    return toSettlement(await this.load(shipmentId));
+  async getForLiquidation(liquidationId: string): Promise<Settlement> {
+    return toSettlement(await this.load(liquidationId));
+  }
+
+  /** Every account's settlement on one trip, for the shipment screen. */
+  async listForShipment(shipmentId: string): Promise<Settlement[]> {
+    const rows = await this.prisma.client.settlement.findMany({
+      where: { shipmentId },
+      include: SETTLEMENT_INCLUDE,
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return rows.map(toSettlement);
   }
 
   /**
@@ -66,11 +88,11 @@ export class SettlementService {
    * release was: mode, optional reference, optional attachment.
    */
   async record(
-    shipmentId: string,
+    liquidationId: string,
     input: RecordSettlementInput,
     user: RequestUser,
   ): Promise<Settlement> {
-    const current = await this.load(shipmentId);
+    const current = await this.load(liquidationId);
 
     this.assertOutstanding(current, 'recorded as settled');
     await this.receipts.assertExists(input.receiptId);
@@ -88,7 +110,7 @@ export class SettlementService {
       },
     });
 
-    return this.getForShipment(shipmentId);
+    return this.getForLiquidation(liquidationId);
   }
 
   /**
@@ -104,30 +126,36 @@ export class SettlementService {
    * cash movement, which is what `record` is for.
    */
   async carryToPayout(
-    shipmentId: string,
+    liquidationId: string,
     input: CarrySettlementToPayoutInput,
   ): Promise<Settlement> {
-    const current = await this.load(shipmentId);
+    const current = await this.load(liquidationId);
 
     this.assertOutstanding(current, 'carried to payout');
 
     if (current.amount.lessThanOrEqualTo(0)) {
       throw new ConflictException(
-        `This trip's variance is ${current.amount.toString()}, which is money owed to the crew rather than by them. A payout run has nothing to recover — hand it over and record the movement instead.`,
+        `This variance is ${current.amount.toString()}, which is money owed to the crew rather than by them. A payout run has nothing to recover — hand it over and record the movement instead.`,
       );
     }
 
-    await this.assertWorkedTheTrip(shipmentId, input.crewMemberId);
+    await this.assertWorkedTheTrip(current.shipmentId, input.crewMemberId);
+
+    // Names the custodian as well as the trip. A deduction reading only
+    // "shipment 20260813001" was unambiguous while a trip had one account; with
+    // two it would sit on a payslip without saying which cash it was for.
+    const custodian = current.liquidation?.custodian;
+    const whose = custodian ? ` held by ${custodian.firstName} ${custodian.lastName}` : '';
 
     const reason =
       input.reason ??
-      `Unliquidated allowance on shipment ${current.shipment?.shipmentNumber ?? shipmentId}`;
+      `Unliquidated allowance${whose} on shipment ${current.shipment?.shipmentNumber ?? current.shipmentId}`;
 
     await this.prisma.client.$transaction(async (tx) => {
       const deduction = await tx.crewDeduction.create({
         data: {
           crewMemberId: input.crewMemberId,
-          shipmentId,
+          shipmentId: current.shipmentId,
           reason,
           amount: current.amount,
         },
@@ -146,7 +174,7 @@ export class SettlementService {
 
     // Deliberately not settled here. The money has not moved yet, so the trip
     // stays on the outstanding list until the run that recovers it is paid.
-    return this.getForShipment(shipmentId);
+    return this.getForLiquidation(liquidationId);
   }
 
   /**
@@ -216,8 +244,12 @@ export class SettlementService {
     const rows = await this.prisma.client.settlement.findMany({
       where: { status: { in: [SettlementStatus.OUTSTANDING, SettlementStatus.CARRIED_TO_PAYOUT] } },
       include: {
-        shipment: {
-          select: { shipmentNumber: true, liquidations: { select: { approvedAt: true } } },
+        shipment: { select: { shipmentNumber: true } },
+        liquidation: {
+          select: {
+            approvedAt: true,
+            custodian: { select: { firstName: true, lastName: true } },
+          },
         },
       },
       orderBy: { createdAt: 'asc' },
@@ -228,17 +260,21 @@ export class SettlementService {
         throw new Error(`Settlement ${row.id} has an unrecognised status code ${row.status}`);
       }
 
-      // `liquidations` is an array only because the uniqueness backing it is
-      // partial; `liveOne` asserts the single live row rather than trusting an
-      // index into it.
-      const liquidation = liveOne(row.shipment?.liquidations ?? [], 'liquidation');
-
+      // Read straight off THIS settlement's own liquidation. It used to walk
+      // the shipment's liquidations and assert there was exactly one live
+      // row — correct while a trip could only have one account, and the very
+      // assumption this change removes. The alert can now name the person
+      // holding the cash rather than just the trip it went out on.
       return {
         shipmentId: row.shipmentId,
         shipmentNumber: row.shipment?.shipmentNumber ?? row.shipmentId,
+        liquidationId: row.liquidationId,
+        custodianName: row.liquidation?.custodian
+          ? `${row.liquidation.custodian.firstName} ${row.liquidation.custodian.lastName}`
+          : null,
         status: row.status,
         amount: row.amount.toString(),
-        approvedAt: dateToIso(liquidation?.approvedAt ?? null),
+        approvedAt: dateToIso(row.liquidation?.approvedAt ?? null),
       };
     });
 
@@ -258,7 +294,7 @@ export class SettlementService {
 
     if (row.status !== SettlementStatus.OUTSTANDING) {
       throw new ConflictException(
-        `This trip's variance is already ${SETTLEMENT_STATUS_LABELS[row.status].toLowerCase()}, so it cannot be ${action}.`,
+        `This variance is already ${SETTLEMENT_STATUS_LABELS[row.status].toLowerCase()}, so it cannot be ${action}.`,
       );
     }
   }
@@ -295,15 +331,15 @@ export class SettlementService {
     }
   }
 
-  private async load(shipmentId: string): Promise<SettlementRow> {
+  private async load(liquidationId: string): Promise<SettlementRow> {
     const row = await this.prisma.client.settlement.findFirst({
-      where: { shipmentId },
+      where: { liquidationId },
       include: SETTLEMENT_INCLUDE,
     });
 
     if (!row) {
       throw new NotFoundException(
-        `Shipment ${shipmentId} has no settlement. One is created when its liquidation is approved.`,
+        `Liquidation ${liquidationId} has no settlement. One is created when it is approved.`,
       );
     }
 
@@ -324,6 +360,12 @@ export function toSettlement(row: SettlementRow): Settlement {
     id: row.id,
     shipmentId: row.shipmentId,
     shipmentNumber: row.shipment?.shipmentNumber ?? null,
+
+    liquidationId: row.liquidationId,
+    custodianId: row.liquidation?.custodianId ?? null,
+    custodianName: row.liquidation?.custodian
+      ? `${row.liquidation.custodian.firstName} ${row.liquidation.custodian.lastName}`
+      : null,
 
     status: row.status,
     amount: row.amount.toString(),

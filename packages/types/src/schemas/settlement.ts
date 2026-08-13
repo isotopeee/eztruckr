@@ -4,16 +4,27 @@ import { settlementStatusSchema } from '../codes/settlement-status';
 import { auditFieldsSchema, cuidSchema, optionalText } from './common';
 
 /**
- * What happened to the cash left over after a trip was liquidated.
+ * What happened to the cash left over after ONE CUSTODIAN liquidated.
  *
- * One per shipment. The amount is the variance, signed, and the movement is
- * documented exactly the way the release was — mode, optional reference,
- * optional attachment — so both directions of the trail read alike.
+ * One per liquidation, not per shipment — it moved when a trip gained more than
+ * one cash holder. Two people each holding change cannot share a row: the
+ * blended figure the old shape produced could only say what the trip was short
+ * by, so the alert could name a shipment and never a person, and squaring up
+ * was all-or-nothing for both of them.
+ *
+ * The amount is the variance, signed, and the movement is documented exactly
+ * the way the release was — mode, optional reference, optional attachment — so
+ * both directions of the trail read alike.
  */
 export const settlementSchema = auditFieldsSchema.extend({
   id: z.string(),
   shipmentId: z.string(),
   shipmentNumber: z.string().nullable(),
+
+  /** Whose account this squares. */
+  liquidationId: z.string(),
+  custodianId: z.string().nullable(),
+  custodianName: z.string().nullable(),
 
   status: settlementStatusSchema,
   /** Positive = crew return cash, negative = company reimburses crew. */
@@ -86,6 +97,9 @@ export type CarrySettlementToPayoutInput = z.infer<typeof carrySettlementToPayou
 export const outstandingAllowanceSchema = z.object({
   shipmentId: z.string(),
   shipmentNumber: z.string(),
+  /** The account, and the person holding it — the alert can now name both. */
+  liquidationId: z.string(),
+  custodianName: z.string().nullable(),
   status: settlementStatusSchema,
   amount: z.string(),
   approvedAt: z.string().nullable(),

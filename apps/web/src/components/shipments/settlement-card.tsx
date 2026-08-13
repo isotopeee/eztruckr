@@ -8,6 +8,7 @@ import {
   SETTLEMENT_STATUS_LABELS,
   SettlementStatus,
   UserRole,
+  type Settlement,
   type Shipment,
 } from '@eztruckr/types';
 import { Loader2 } from 'lucide-react';
@@ -28,32 +29,38 @@ import { ApiError } from '@/lib/api-client';
 import { formatDateTime, formatMoney } from '@/lib/format';
 import {
   carrySettlementToPayout,
-  getSettlement,
   liquidationKeys,
+  listSettlements,
   receiptContentUrl,
   recordSettlement,
 } from '@/lib/liquidation-api';
 import { shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
+import { crewOnTrip } from './trip-crew';
 import { ReceiptField } from './receipt-field';
 
 /**
- * What happened to the cash left over.
+ * What happened to the cash left over, per person who was holding it.
  *
  * This card and the liquidation card answer different questions, which is why
  * they are not merged: the liquidation says the spending was accounted for, and
- * this says whether the change came back. A trip can be approved and still owe
- * the company ₱1,400.
+ * this says whether the change came back. An account can be approved and still
+ * owe the company ₱1,400.
+ *
+ * ONE ROW PER CUSTODIAN, not per trip. A single settlement could only report
+ * what the TRIP was short by, so the driver squaring up and the helper still
+ * holding ₱900 were one blended figure that named nobody — and squaring up was
+ * all-or-nothing for both of them.
  */
 export function SettlementCard({ shipment }: { shipment: Shipment }) {
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
   const canSettle = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
 
-  const settlement = useQuery({
-    queryKey: liquidationKeys.settlement(shipment.id),
-    queryFn: () => getSettlement(shipment.id),
-    // No settlement until the liquidation is approved. Ordinary, not an error.
+  const settlements = useQuery({
+    queryKey: liquidationKeys.settlements(shipment.id),
+    queryFn: () => listSettlements(shipment.id),
+    // No settlement until an account is approved. Ordinary, not an error.
     retry: false,
   });
 
@@ -62,104 +69,137 @@ export function SettlementCard({ shipment }: { shipment: Shipment }) {
     void queryClient.invalidateQueries({ queryKey: shipmentKeys.all });
   };
 
-  if (settlement.isPending) {
+  const rows = settlements.data ?? [];
+
+  if (settlements.isPending || settlements.isError || rows.length === 0) {
     return null;
   }
-
-  if (settlement.isError || !settlement.data) {
-    return null;
-  }
-
-  const data = settlement.data;
-  const crewOwes = !data.amount.startsWith('-');
 
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center gap-3">
-          <CardTitle className="text-base">Settlement</CardTitle>
-          <Badge variant={data.isOutstanding ? 'outline' : 'secondary'}>
-            {SETTLEMENT_STATUS_LABELS[data.status]}
-          </Badge>
-        </div>
+        <CardTitle className="text-base">Settlements</CardTitle>
         <CardDescription>
-          The variance from the approved liquidation, and how it moved. One record for the trip —
-          with several advances there is no honest way to say which one a returned amount came from.
+          The variance from each approved liquidation, and how it moved. One record per cash holder
+          — with two people carrying change, a single figure could say what the trip was short by
+          and never who owed it.
         </CardDescription>
       </CardHeader>
 
-      <CardContent className="space-y-4">
-        <div className="flex items-baseline justify-between border-b pb-3">
-          <span className="text-muted-foreground text-sm">
-            {crewOwes ? 'Crew return' : 'Company reimburses crew'}
-          </span>
-          <span className="text-lg font-semibold tabular-nums">{formatMoney(data.amount)}</span>
-        </div>
-
-        {data.settledAt ? (
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-            <div>
-              <dt className="text-muted-foreground text-xs">Settled</dt>
-              <dd>{formatDateTime(data.settledAt)}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground text-xs">Moved by</dt>
-              <dd>
-                {data.disbursementMode
-                  ? DISBURSEMENT_MODE_LABELS[data.disbursementMode]
-                  : data.crewDeductionId
-                    ? 'Recovered from pay'
-                    : 'Nothing to move'}
-              </dd>
-            </div>
-            {data.referenceNumber ? (
-              <div>
-                <dt className="text-muted-foreground text-xs">Reference</dt>
-                <dd>{data.referenceNumber}</dd>
-              </div>
-            ) : null}
-            {data.receiptId ? (
-              <div>
-                <dt className="text-muted-foreground text-xs">Proof</dt>
-                <dd>
-                  <a
-                    className="underline underline-offset-4"
-                    href={receiptContentUrl(data.receiptId)}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {data.receiptFileName ?? 'Attachment'}
-                  </a>
-                </dd>
-              </div>
-            ) : null}
-          </dl>
-        ) : null}
-
-        {data.status === SettlementStatus.CARRIED_TO_PAYOUT ? (
-          <p className="text-muted-foreground text-sm">
-            Being recovered from the crew member&apos;s pay
-            {data.crewDeductionRecovered
-              ? ` — ${formatMoney(data.crewDeductionRecovered)} taken so far`
-              : ''}
-            . This trip stays on the outstanding list until the payout run recovering it is paid.
-          </p>
-        ) : null}
-
-        {canSettle && data.status === SettlementStatus.OUTSTANDING ? (
-          <SettleForm shipment={shipment} crewOwes={crewOwes} onChanged={invalidate} />
-        ) : null}
+      <CardContent className="space-y-6">
+        {rows.map((settlement) => (
+          <SettlementRow
+            key={settlement.id}
+            shipment={shipment}
+            settlement={settlement}
+            canSettle={canSettle}
+            onChanged={invalidate}
+          />
+        ))}
       </CardContent>
     </Card>
   );
 }
 
+function SettlementRow({
+  shipment,
+  settlement,
+  canSettle,
+  onChanged,
+}: {
+  shipment: Shipment;
+  settlement: Settlement;
+  canSettle: boolean;
+  onChanged: () => void;
+}) {
+  const crewOwes = !settlement.amount.startsWith('-');
+
+  return (
+    <section className="space-y-4 rounded-md border p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-medium">{settlement.custodianName ?? 'No custodian named'}</h3>
+        <Badge variant={settlement.isOutstanding ? 'outline' : 'secondary'}>
+          {SETTLEMENT_STATUS_LABELS[settlement.status]}
+        </Badge>
+      </div>
+
+      <div className="flex items-baseline justify-between border-b pb-3">
+        <span className="text-muted-foreground text-sm">
+          {crewOwes ? 'Crew return' : 'Company reimburses crew'}
+        </span>
+        <span className="text-lg font-semibold tabular-nums">{formatMoney(settlement.amount)}</span>
+      </div>
+
+      {settlement.settledAt ? (
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+          <div>
+            <dt className="text-muted-foreground text-xs">Settled</dt>
+            <dd>{formatDateTime(settlement.settledAt)}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground text-xs">Moved by</dt>
+            <dd>
+              {settlement.disbursementMode
+                ? DISBURSEMENT_MODE_LABELS[settlement.disbursementMode]
+                : settlement.crewDeductionId
+                  ? 'Recovered from pay'
+                  : 'Nothing to move'}
+            </dd>
+          </div>
+          {settlement.referenceNumber ? (
+            <div>
+              <dt className="text-muted-foreground text-xs">Reference</dt>
+              <dd>{settlement.referenceNumber}</dd>
+            </div>
+          ) : null}
+          {settlement.receiptId ? (
+            <div>
+              <dt className="text-muted-foreground text-xs">Proof</dt>
+              <dd>
+                <a
+                  className="underline underline-offset-4"
+                  href={receiptContentUrl(settlement.receiptId)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {settlement.receiptFileName ?? 'Attachment'}
+                </a>
+              </dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
+
+      {settlement.status === SettlementStatus.CARRIED_TO_PAYOUT ? (
+        <p className="text-muted-foreground text-sm">
+          Being recovered from the crew member&apos;s pay
+          {settlement.crewDeductionRecovered
+            ? ` — ${formatMoney(settlement.crewDeductionRecovered)} taken so far`
+            : ''}
+          . This trip stays on the outstanding list until the payout run recovering it is paid.
+        </p>
+      ) : null}
+
+      {canSettle && settlement.status === SettlementStatus.OUTSTANDING ? (
+        <SettleForm
+          shipment={shipment}
+          settlement={settlement}
+          crewOwes={crewOwes}
+          onChanged={onChanged}
+        />
+      ) : null}
+    </section>
+  );
+}
+
 function SettleForm({
   shipment,
+  settlement,
   crewOwes,
   onChanged,
 }: {
   shipment: Shipment;
+  settlement: Settlement;
   crewOwes: boolean;
   onChanged: () => void;
 }) {
@@ -169,7 +209,11 @@ function SettleForm({
     id: null,
     fileName: null,
   });
-  const [carryTo, setCarryTo] = useState(shipment.driverId ?? '');
+  // Deliberately empty. Who a carried balance is charged to is asked, never
+  // guessed — and now that the account names a custodian the temptation is
+  // worse, not better: they are answerable for ACCOUNTING for the cash, which
+  // is not the same as the company having decided to take it out of their pay.
+  const [carryTo, setCarryTo] = useState('');
 
   const reportFailure = (error: unknown) =>
     toast.error('That did not go through', {
@@ -178,7 +222,7 @@ function SettleForm({
 
   const record = useMutation({
     mutationFn: () =>
-      recordSettlement(shipment.id, {
+      recordSettlement(settlement.liquidationId, {
         disbursementMode: Number(mode) as DisbursementMode,
         referenceNumber: reference || null,
         receiptId: receipt.id,
@@ -192,7 +236,11 @@ function SettleForm({
   });
 
   const carry = useMutation({
-    mutationFn: () => carrySettlementToPayout(shipment.id, { crewMemberId: carryTo, reason: null }),
+    mutationFn: () =>
+      carrySettlementToPayout(settlement.liquidationId, {
+        crewMemberId: carryTo,
+        reason: null,
+      }),
     onSuccess: () => {
       toast.success('Carried to payout');
       onChanged();
@@ -200,10 +248,7 @@ function SettleForm({
     onError: reportFailure,
   });
 
-  const crew = [
-    shipment.driverId ? { id: shipment.driverId, name: shipment.driverName ?? 'Driver' } : null,
-    shipment.helperId ? { id: shipment.helperId, name: shipment.helperName ?? 'Helper' } : null,
-  ].filter((entry): entry is { id: string; name: string } => entry !== null);
+  const crew = crewOnTrip(shipment);
 
   return (
     <div className="space-y-4 border-t pt-4">
@@ -216,11 +261,11 @@ function SettleForm({
       >
         <div className="grid gap-2 sm:grid-cols-2">
           <div className="space-y-1">
-            <Label htmlFor="settlement-mode" className="text-xs">
+            <Label htmlFor={`settlement-mode-${settlement.id}`} className="text-xs">
               Moved by
             </Label>
             <Select value={mode} onValueChange={setMode}>
-              <SelectTrigger id="settlement-mode">
+              <SelectTrigger id={`settlement-mode-${settlement.id}`}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -233,11 +278,11 @@ function SettleForm({
             </Select>
           </div>
           <div className="space-y-1">
-            <Label htmlFor="settlement-reference" className="text-xs">
+            <Label htmlFor={`settlement-reference-${settlement.id}`} className="text-xs">
               Reference
             </Label>
             <Input
-              id="settlement-reference"
+              id={`settlement-reference-${settlement.id}`}
               placeholder="Optional"
               value={reference}
               onChange={(event) => setReference(event.target.value)}
@@ -270,11 +315,11 @@ function SettleForm({
           }}
         >
           <div className="space-y-1">
-            <Label htmlFor="settlement-carry" className="text-xs">
+            <Label htmlFor={`settlement-carry-${settlement.id}`} className="text-xs">
               Or recover it from pay — whose?
             </Label>
             <Select value={carryTo} onValueChange={setCarryTo}>
-              <SelectTrigger id="settlement-carry">
+              <SelectTrigger id={`settlement-carry-${settlement.id}`}>
                 <SelectValue placeholder="Crew member" />
               </SelectTrigger>
               <SelectContent>
@@ -286,8 +331,9 @@ function SettleForm({
               </SelectContent>
             </Select>
             <p className="text-muted-foreground text-[11px]">
-              Creates a crew deduction. Nothing is guessed here: the settlement belongs to the trip,
-              but a deduction has to name a person.
+              Creates a crew deduction. Nothing is preselected: this account is
+              {settlement.custodianName ? ` ${settlement.custodianName}'s` : ' unassigned'} to
+              explain, but whose pay the company takes it out of is a decision, not a lookup.
             </p>
           </div>
           <Button type="submit" size="sm" variant="outline" disabled={carry.isPending || !carryTo}>

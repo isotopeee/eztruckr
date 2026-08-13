@@ -21,6 +21,19 @@ export const allowanceSchema = auditFieldsSchema.extend({
   id: z.string(),
   shipmentId: z.string(),
 
+  /**
+   * Which custodian's account this release is booked against — whose variance
+   * it moves. A trip can carry one per cash holder, and until this existed
+   * every release counted against a single blended total.
+   */
+  liquidationId: z.string(),
+  custodianName: z.string().nullable(),
+
+  /**
+   * Who physically RECEIVED the cash. Deliberately independent of the account's
+   * custodian: a helper can be handed ferry money the driver stays answerable
+   * for, and flattening the two would lose one of the facts.
+   */
   crewMemberId: z.string(),
   crewMemberName: z.string().nullable(),
 
@@ -54,6 +67,12 @@ export const releasedMoneySchema = moneyStringSchema.refine(
 );
 
 export const issueAllowanceSchema = z.object({
+  /**
+   * Required: every release belongs to exactly one account. There is always at
+   * least one to choose — a trip's first liquidation is created with the
+   * shipment — so this never leaves the caller with nothing to name.
+   */
+  liquidationId: cuidSchema,
   crewMemberId: cuidSchema,
   amount: releasedMoneySchema,
 
@@ -93,11 +112,20 @@ export type UpdateAllowanceInput = z.infer<typeof updateAllowanceSchema>;
  */
 export const allowanceSummarySchema = z.object({
   shipmentId: z.string(),
+  /** Every release on the trip, across all its accounts. */
   totalAdvanced: z.string(),
   releaseCount: z.number().int().nonnegative(),
   /** From the shipment's route, offered as a default for the first release. */
   routeStandardAllowance: z.string().nullable(),
-  /** False once the trip's liquidation is approved and the variance is frozen. */
+  /**
+   * At least one account is still open.
+   *
+   * A trip-level answer to a per-account question, so it is the permissive
+   * half: it says whether the screen should offer the form at all. Which
+   * particular account a release may be booked against is decided when one is
+   * named, because approving the driver's liquidation must not stop cash being
+   * released against the helper's.
+   */
   canIssue: z.boolean(),
   allowances: z.array(allowanceSchema),
 });

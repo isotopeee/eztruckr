@@ -2,18 +2,15 @@
 
 Trucking operations system. Turborepo monorepo, Philippine haulage domain (₱, Asia/Manila).
 
-**Last commit: `a9d1702`.** The working tree is **NOT clean** — see the next section before
-doing anything else.
+**Last commit: `HEAD`.** Working tree clean, `pnpm run check` green.
 
 ---
 
-## ⚠️ STOP — unfinished refactor in the working tree
+## The per-custodian refactor — landed
 
-A structural change was in progress when the session ended: **many liquidations per
-shipment, each with a custodian, with allowances tied to one.** The API half is finished
-and its tests pass. **The web app is broken.** Nothing is committed.
-
-### What the change is
+The change that was mid-flight across the previous two sessions is **complete**: many
+liquidations per shipment, each with a custodian, with allowances and settlements tied to
+one.
 
 `Liquidation` was one row per shipment, which silently blended two people's money. With a
 driver holding ₱10,000 and a helper holding ₱3,000, a single `variance` could say what the
@@ -21,53 +18,37 @@ TRIP was short by and never which of them owed it — and `Settlement`, built di
 that figure, inherited the blindness, so the outstanding-allowances alert could name a
 shipment but was structurally unable to name a person.
 
-Now: **a liquidation is one custodian's account of one trip's cash.**
+Now: **a liquidation is one custodian's account of one trip's cash.** The dashboard alert
+names the person.
 
-### Done, and verified
+### Where the routes went, since the shapes changed
 
-| Area                              | State                                                                     |
-| --------------------------------- | ------------------------------------------------------------------------- |
-| `schema.prisma`                   | Done. `prisma migrate diff` reports **no drift**.                         |
-| Migration `20260813160000_*`      | **Applied**, with the backfill. 15 allowances + 6 settlements retargeted. |
-| `packages/types`                  | Done, builds.                                                             |
-| API services + controllers + DTOs | Done, typechecks.                                                         |
-| Existing API tests                | Rekeyed. **139 API tests pass.**                                          |
+| Old                                                               | New                                                                 |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `GET /shipments/:id/liquidation`                                  | `GET /shipments/:id/liquidations` (a list)                          |
+| `POST /shipments/:id/liquidation/lines`                           | `POST /liquidations/:id/lines`                                      |
+| `DELETE /shipments/:id/liquidation/lines/:lineId`                 | `DELETE /liquidations/:id/lines/:lineId`                            |
+| `POST /shipments/:id/liquidation/{submit,return,approve,reverse}` | `POST /liquidations/:id/{…}`                                        |
+| `GET /shipments/:id/settlement`                                   | `GET /liquidations/:id/settlement` (+ `/shipments/:id/settlements`) |
+| `POST /shipments/:id/settlement/record`                           | `POST /liquidations/:id/settlement/record`                          |
+| `POST /shipments/:id/settlement/carry-to-payout`                  | `POST /liquidations/:id/settlement/carry-to-payout`                 |
 
-### NOT done
+Unchanged: `GET /liquidations` (queue), `GET|POST /shipments/:id/allowances`,
+`GET /settlements/outstanding`, receipts.
 
-1. **The web app.** One compile error (`allowances-card.tsx:191` — `issueAllowance` now
-   needs `liquidationId`), and **more breakage the compiler cannot see**: every path in
-   `apps/web/src/lib/liquidation-api.ts` still points at the old routes. All of these
-   moved and will 404:
+New: `POST /shipments/:id/liquidations` (open an account, requires `custodianId`),
+`PATCH /liquidations/:id/custodian`, `DELETE /liquidations/:id` (only while empty).
 
-   | Old                                                               | New                                                                 |
-   | ----------------------------------------------------------------- | ------------------------------------------------------------------- |
-   | `GET /shipments/:id/liquidation`                                  | `GET /shipments/:id/liquidations` (a list)                          |
-   | `POST /shipments/:id/liquidation/lines`                           | `POST /liquidations/:id/lines`                                      |
-   | `DELETE /shipments/:id/liquidation/lines/:lineId`                 | `DELETE /liquidations/:id/lines/:lineId`                            |
-   | `POST /shipments/:id/liquidation/{submit,return,approve,reverse}` | `POST /liquidations/:id/{…}`                                        |
-   | `GET /shipments/:id/settlement`                                   | `GET /liquidations/:id/settlement` (+ `/shipments/:id/settlements`) |
-   | `POST /shipments/:id/settlement/record`                           | `POST /liquidations/:id/settlement/record`                          |
-   | `POST /shipments/:id/settlement/carry-to-payout`                  | `POST /liquidations/:id/settlement/carry-to-payout`                 |
+### Two things the earlier sessions' notes did not anticipate
 
-   Unchanged: `GET /liquidations` (queue), `GET|POST /shipments/:id/allowances`,
-   `GET /settlements/outstanding`, receipts.
-
-   New: `POST /shipments/:id/liquidations` (open an account, requires `custodianId`),
-   `PATCH /liquidations/:id/custodian`, `DELETE /liquidations/:id` (only while empty).
-
-   Files needing work: `liquidation-api.ts`, `liquidation-card.tsx`,
-   `settlement-card.tsx`, `allowances-card.tsx` (needs an account picker on the release
-   form), `my-record/page.tsx`, `app/(app)/page.tsx` (the alert can now show
-   `custodianName`).
-
-2. **No tests for the new behaviour.** The 139 that pass are the old ones, rekeyed. Nothing
-   yet asserts: two custodians with separate variances; the composite FK refusing an
-   allowance booked against another trip's account; `NULLS NOT DISTINCT` refusing a second
-   custodian-less account; the close guard requiring **every** account approved;
-   a crew member being refused their colleague's account.
-
-3. **Not committed, and `pnpm run check` is red** (web typecheck). Last green: `a9d1702`.
+- **The crew queue's scope disagreed with the write guard.** `LiquidationService.list`
+  still scoped a crew session by _trip worked_ while `assertCrewMayAccount` had narrowed to
+  _custodianship_. A helper would have been shown the driver's ₱10,000 under "waiting on
+  you", offered a row to open, and had the write refused. It now filters on
+  `custodianId`, admitting the custodian-less account for anyone who worked the trip —
+  the same two branches the guard uses. Pinned by a test.
+- **The outstanding alert keyed its list on `shipmentId`**, which a trip carrying two
+  custodians turns into duplicate React keys. Keyed on `liquidationId` now.
 
 ### The decisions already made, so they are not relitigated
 
@@ -96,10 +77,24 @@ Now: **a liquidation is one custodian's account of one trip's cash.**
   any account is open. Whether a particular account accepts a release is decided when one
   is named, so approving the driver's must not stop cash going to the helper.
 
+### What the web app does with it
+
+`liquidation-card.tsx` renders **one section per account** — its own figures, its own four
+moves, its own history — so approving the driver's visibly does not touch the helper's.
+`settlement-card.tsx` is a list for the same reason. The release form on
+`allowances-card.tsx` asks **two** questions that look like one: who received the cash, and
+which account it is booked against. `trip-crew.ts` is the shared driver/helper list all
+three pickers use, because all three are refused the same way by the API.
+
+Verified live, not only by tests: a trip with the driver holding ₱10,500 (including ₱500 of
+ferry money handed to the helper) and the helper holding ₱3,100 shows two variances,
+refuses a release against the approved account while accepting one against the open account,
+and puts "Ricardo Dela Cruz" on the dashboard alert. That trip is `20260813002` in the
+development database — delete it, or `docker compose down -v`, when it stops being useful.
+
 ### Resume checklist
 
 ```bash
-pnpm --filter @eztruckr/web exec tsc --noEmit -p tsconfig.json   # start here
 pnpm run check                                                   # the gate
 docker compose up -d --build api web                             # baked images, not mounts
 ```
@@ -254,6 +249,11 @@ unreachable from the UI.
 - `a9d1702` — crew commission adjustments (increase/decrease + reason), scoped by
   `shipmentId` **not** `commissionId` because recompute soft-deletes and recreates
   commissions.
+- **many liquidations per shipment** — one account per custodian, above. Spanned three
+  sessions: schema and migration, then the API, then the web app and the tests. The
+  recurring lesson held again — `variance` was one column answering for two people, and no
+  CHECK could express the rule until the schema gained the column that names whose money it
+  is.
 
 ---
 
@@ -301,14 +301,39 @@ child rows **by relationship, not id prefix**, because the services generate cui
 | Crew scoping off a shipment           | `apps/api/src/liquidation/shipment-access.service.ts`                            |
 | DB-backed service tests               | `apps/api/src/liquidation/liquidation-lifecycle.test.ts` — the pattern           |
 
+### Known flake — `pnpm run check` can go red without anything being wrong
+
+Two separate causes were found and one is fixed:
+
+- **Fixed.** `turbo.json` declared `test`/`typecheck`/`lint` as `dependsOn: ["^build"]` —
+  UPSTREAM packages' builds, not the package's own. So `@eztruckr/db#test` did not wait for
+  `@eztruckr/db#build`, which runs `prisma generate` and rewrites the very client the tests
+  import, failing with `Cannot find module './runtime/library.js'`. It only bit when the db
+  build cache missed, i.e. immediately after a schema change — exactly when somebody is
+  most likely to blame their own edit. Package-scoped overrides now add `"build"`.
+- **Open.** `adjustments.test.ts > survives a recompute that replaces every commission row`
+  failed twice under the full gate and has not reproduced since: 5/5 standalone runs and
+  3/3 concurrent with `packages/db`'s suite all pass. It is scoped entirely to
+  `adjtest-` fixtures, so the suspicion is cross-suite interference through shared master
+  data (commission rules are global, and rule resolution has no fallback). If it resurfaces,
+  that is the thread to pull.
+
 ### Still worth doing
 
 - **An API e2e harness (supertest).** The biggest hole. Guards, per-route role policy and
   crew scoping are proved only by Python scripts driving the running stack, not by anything
-  CI re-runs.
+  CI re-runs. The per-custodian work made this bigger, not smaller: `assertCrewMayAccount`
+  is now the difference between two crew members on the same trip, and no CI job exercises
+  it through a real session.
 - **`CommissionService.computeForShipment` has no test**, only live verification. The
   pattern to copy now exists, so it is a short job rather than a design question.
-- **The web app has no tests at all**, and its cards now carry real conditional logic.
+- **The web app has no tests at all**, and its cards now carry real conditional logic —
+  which account may take a release, which crew member may edit which section, whether the
+  remove button should appear at all.
+- **Renaming a custodian is API-only.** `PATCH /liquidations/:id/custodian` accepts it and
+  the web only offers the picker while the account has nobody, which is the case that
+  actually arises. If reassigning mid-trip turns out to be real, the releases already booked
+  stay where they are and that needs saying on screen.
 
 ---
 

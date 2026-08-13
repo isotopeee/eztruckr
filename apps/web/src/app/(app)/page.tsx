@@ -74,12 +74,17 @@ export default function DashboardPage() {
 }
 
 /**
- * Trips whose leftover cash has not come back.
+ * Cash that has not come back, and who is holding it.
  *
  * READS THE SETTLEMENT STATUS DIRECTLY. Inferring it from the liquidation would
  * answer a different question — whether the spending was accounted for — and
  * would report a trip as clear while the crew still held the change. A carried
  * balance stays on this list until the payout run recovering it is paid.
+ *
+ * IT NAMES A PERSON, which is the point of the whole change behind it. A trip
+ * can appear twice, once per custodian, so the row is keyed on the account and
+ * not on the shipment — and while the settlement was one blended figure per
+ * trip, this alert was structurally unable to say whose ₱1,400 it was.
  */
 function OutstandingAllowancesCard() {
   const outstanding = useQuery({
@@ -108,13 +113,18 @@ function OutstandingAllowancesCard() {
       <CardContent>
         <ul className="divide-y text-sm">
           {report.items.map((item) => (
-            <li key={item.shipmentId} className="flex items-center justify-between gap-3 py-2">
-              <Link
-                href={`/shipments/${item.shipmentId}`}
-                className="font-medium underline-offset-4 hover:underline"
-              >
-                {item.shipmentNumber}
-              </Link>
+            <li key={item.liquidationId} className="flex items-center justify-between gap-3 py-2">
+              <div className="min-w-0">
+                <Link
+                  href={`/shipments/${item.shipmentId}`}
+                  className="font-medium underline-offset-4 hover:underline"
+                >
+                  {item.shipmentNumber}
+                </Link>
+                <p className="text-muted-foreground truncate text-xs">
+                  {item.custodianName ?? 'No custodian named'}
+                </p>
+              </div>
               <div className="flex items-center gap-2">
                 <span className="tabular-nums">{formatMoney(item.amount)}</span>
                 <Badge variant="outline">{SETTLEMENT_STATUS_LABELS[item.status]}</Badge>
@@ -160,12 +170,19 @@ function ReturnedForCorrectionCard() {
         <ul className="divide-y text-sm">
           {rows.map((liquidation) => (
             <li key={liquidation.id} className="space-y-1 py-2">
-              <Link
-                href={`/shipments/${liquidation.shipmentId}`}
-                className="font-medium underline-offset-4 hover:underline"
-              >
-                {liquidation.shipmentNumber ?? 'Trip'}
-              </Link>
+              <div className="flex flex-wrap items-baseline gap-2">
+                <Link
+                  href={`/shipments/${liquidation.shipmentId}`}
+                  className="font-medium underline-offset-4 hover:underline"
+                >
+                  {liquidation.shipmentNumber ?? 'Trip'}
+                </Link>
+                {/* A trip can appear once per custodian, so the person is what
+                    tells two rows apart. */}
+                <span className="text-muted-foreground text-xs">
+                  {liquidation.custodianName ?? 'No custodian named'}
+                </span>
+              </div>
               {liquidation.latestReturnReason ? (
                 <p className="text-muted-foreground text-xs">{liquidation.latestReturnReason}</p>
               ) : null}

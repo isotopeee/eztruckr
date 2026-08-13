@@ -672,15 +672,28 @@ export class ShipmentsService {
     // cleared by the liquidation. Cash handed over and never accounted for is
     // exactly what closing a trip must not be able to hide.
     //
+    // EVERY ACCOUNT, not any one of them. This counted approvals and passed on
+    // one, which was the same test while a trip could only have one — with a
+    // driver and a helper each holding cash it would close the trip on the
+    // driver's paperwork alone, stranding the helper's advance in a shipment
+    // nothing can reopen.
+    //
     // APPROVED is the only status that counts, and it is the last one: approval
     // is the lock, so there is nothing beyond it to also accept here.
-    const settled = await this.prisma.client.liquidation.count({
-      where: { shipmentId: shipment.id, status: LiquidationStatus.APPROVED },
+    const outstanding = await this.prisma.client.liquidation.findMany({
+      where: { shipmentId: shipment.id, status: { not: LiquidationStatus.APPROVED } },
+      select: { custodian: { select: { firstName: true, lastName: true } } },
     });
 
-    if (settled === 0) {
+    if (outstanding.length > 0) {
+      const who = outstanding
+        .map((row) =>
+          row.custodian ? `${row.custodian.firstName} ${row.custodian.lastName}` : 'unassigned',
+        )
+        .join(', ');
+
       throw new ConflictException(
-        `Shipment ${shipment.shipmentNumber} has ${advances} allowance(s) advanced to the crew and no approved liquidation. Cash advanced has to be accounted for before the trip can close.`,
+        `Shipment ${shipment.shipmentNumber} has ${advances} allowance(s) advanced to the crew and ${outstanding.length} unapproved liquidation(s) — ${who}. Cash advanced has to be accounted for before the trip can close.`,
       );
     }
   }
