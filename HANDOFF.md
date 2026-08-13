@@ -4,15 +4,22 @@ Trucking management system for a Philippine hauling company. Turborepo monorepo,
 
 **Git.** Branch `main`, no remote configured.
 
-| Commit           | What                                                    |
-| ---------------- | ------------------------------------------------------- |
-| `3af269a`        | Phase 1 foundation + Phase 2 data model                 |
-| `61195ff`        | Handoff formatting, git init recorded                   |
-| `fdd7a52`        | Phase 3 — auth, role guards, master data                |
-| `56b371d`        | System settings made administrator-only, read included  |
-| `b399139`        | CommissionRule becomes the only source of truth for pay |
-| `8af6c76`        | Handoff brought current for a Phase 4 session           |
-| _(this session)_ | Phase 4 — shipments, the money engine, FORMULA          |
+| Commit    | What                                                    |
+| --------- | ------------------------------------------------------- |
+| `3af269a` | Phase 1 foundation + Phase 2 data model                 |
+| `61195ff` | Handoff formatting, git init recorded                   |
+| `fdd7a52` | Phase 3 — auth, role guards, master data                |
+| `56b371d` | System settings made administrator-only, read included  |
+| `b399139` | CommissionRule becomes the only source of truth for pay |
+| `8af9c76` | Handoff brought current for a Phase 4 session           |
+| `7bf90f7` | **Phase 4** — shipments, the money engine, FORMULA      |
+| `eaa1405` | Gas rate override split from the frozen applied rate    |
+| `d92c56a` | Crew deductions recovered in slices across payout runs  |
+| `d872cd4` | Write-off decision recorded, question list closed       |
+| `a138387` | Commissions record which rule produced them             |
+
+The last four are Phase 4 follow-ups, each made on an explicit decision after the phase
+was first reported. They are not loose ends — see the decision record below.
 
 ---
 
@@ -24,7 +31,7 @@ eztruckr/
 │  ├─ web/          # Next.js 15 App Router, Tailwind v4, shadcn/ui, TanStack Query
 │  └─ api/          # NestJS 11, health check, Zod validation pipe
 ├─ packages/
-│  ├─ db/           # Prisma schema (27 tables), migrations, audit + soft-delete extensions
+│  ├─ db/           # Prisma schema (27 domain tables), migrations, audit + soft-delete extensions
 │  ├─ types/        # Money helper, Zod schemas, code sets (const-object enums)
 │  └─ config/       # Shared tsconfig/eslint/prettier, imported via workspace protocol
 ├─ docker-compose.yml   # postgres (5433), minio (9010/9011), api (4000), web (3000)
@@ -276,14 +283,18 @@ the crew set off, not when the paperwork caught up.
 
 ### Later schema work in the same phase
 
-Two follow-ups, each on an explicit decision rather than as part of the original build.
-Both are described under the resolved open questions below:
+Three follow-ups, each on an explicit decision rather than as part of the original build.
+All three are described under the decision record below:
 
 - `20260812181020_split_gas_rate_override_from_applied` — the gas rate becomes an input
   column and an output column, so override-ness is structural.
 - `20260812192500_crew_deduction_recovery_join_table` — deduction recovery becomes
   divisible across payout runs. **This is the 24th business table**, so the counts in the
   Phase 2 section above (23 business, 26 total) are the Phase 2 figures; it is now 24 and 27.
+- `20260812203000_commission_records_its_rule` — `Commission.appliedRuleId` +
+  `appliedRuleName`, frozen as a pair. **This changed removal semantics for commission
+  rules**: a rule that has paid anything is now DEACTIVATED rather than soft-deleted,
+  because history holds a link to it.
 
 ### Schema changes (migration `20260812170815_phase4_formula_and_status_codes`)
 
@@ -422,10 +433,14 @@ visible, own detail 200, colleague's commissions 403, all writes 403.
   values, the gas override showing 30% against the 25% system default with its reason,
   and both charge lists.
 - `prisma migrate status`: 9 migrations applied, no drift. Seed still idempotent.
+- **Table count, so a re-run of the obvious query matches**: 24 business + 3 Better Auth
+  infra (`session`, `account`, `verification`) = **27 domain tables**. Counting
+  `information_schema.tables` returns **28**, because Prisma's own `_prisma_migrations`
+  is in there too.
 - **The migration chain was replayed from scratch** into a throwaway database
   (`eztruckr_migrationtest`, since dropped) — worth doing because Phase 4's migrations are
   largely hand-written SQL. All nine applied cleanly and the invariants held on a virgin
-  schema: 0 enum types, 0 float columns, 0 naive timestamps, 27 tables, 9 payout
+  schema: 0 enum types, 0 float columns, 0 naive timestamps, 27 domain tables, 9 payout
   triggers, 17 partial unique indexes, 22 `_created_by_required` CHECKs,
   `shipment_status_code_valid` accepting 1–7, and `commission.appliedRate` as
   `numeric(9,4)`.
@@ -434,16 +449,24 @@ visible, own detail 200, colleague's commissions 403, all writes 403.
 
 Phase 4 verification created rows in the local Postgres. A fresh volume is unaffected.
 
-- `SH-2026-0001`, closed, with commissions and one additional charge, and `SH-2026-0002`,
-  pending liquidation — used to prove the gas-rate split end to end.
-- A client-scoped FORMULA rule (`Northport driver formula`) and a replacement
-  `Default helper commission` rule — the seeded original was soft-deleted while proving
-  the removal guard.
+- `SH-2026-0001` — closed, with commissions and one commissionable additional charge.
+  Carries the 30% gas override that proved the freeze.
+- `SH-2026-0002` — pending liquidation, one driver, commissions computed by the FORMULA
+  rule. Used to prove the gas-rate split and the rule-tracing columns end to end.
+- A client-scoped FORMULA rule (`Northport driver formula`, expression
+  `(net_rate + additional_charges) * 0.12`) and a replacement `Default helper commission`
+  rule — the seeded original was soft-deleted while proving the removal guard. The
+  FORMULA rule was renamed and deactivated during testing, then restored to its original
+  name and `isActive: true`.
 - **One hand-inserted `liquidation` row (`itest-liq-1`)**, written with raw SQL to
   exercise the LIQUIDATED transition, since Phase 5 owns liquidation. It has
-  `totalLiquidated = 0` and no lines. Delete it or reset the volume before building
-  Phase 5 against it.
+  `totalLiquidated = 0` and no lines. **Delete it or reset the volume before building
+  Phase 5 against it** — it is the one row here the application could not have created,
+  and it will not behave like a real liquidation.
 - `driver@eztruckr.ph`'s password was reset to `eztruckr-dev-crew` to test crew scoping.
+
+`docker compose down -v && docker compose up -d --build` gives a clean database with the
+seed only, if you would rather start Phase 5 from nothing.
 
 ---
 
@@ -527,56 +550,107 @@ with that lens before Phase 5 adds behaviour to them.
 
 ---
 
-## Phase 5 — what a new session needs to know
+## Phase 5 — start here
 
-Phase 5 is allowance, liquidation and receipts. Everything it depends on exists.
+### First: the brief does not define Phase 5
 
-### The contract Phase 4 leaves for it
+The specification supplied by the user covers **Phases 1 to 4 only**. Everything below is
+inferred from the domain concepts and the tables that exist but have no behaviour yet.
+
+**Ask the user for the Phase 5 scope before building.** Do not infer it from this
+document. The most likely shape, from the brief's own domain concepts and the P&L formula
+it specifies, is **allowance → liquidation → receipts**, with payout runs and P&L after
+that — but that is a guess, and the user has been specific about scope every time they
+have been asked.
+
+What is certain is what remains unbuilt: `Allowance`, `Liquidation`, `LiquidationLine`,
+`Receipt`, `PayoutRun`, `PayoutLine`, `Adjustment`, `AuditLog` (partially used by
+settings), and `CrewDeduction` / `CrewDeductionRecovery`. All exist as tables with full
+audit, soft-delete and constraint coverage; none has a service, controller or screen.
+
+### The contract Phase 4 leaves
+
+Whatever the scope turns out to be, these hold:
 
 - **`Shipment` reaches LIQUIDATED when two things are true**: an approved liquidation
   exists, and commissions are computed. `CommissionService.statusAfterComputing` applies
   the move from the commission side. **Phase 5 must apply it from the other side** — when
   a liquidation reaches APPROVED on a shipment whose commissions are already computed.
-  The predicate is deliberately symmetric; do not duplicate the status logic, lift it.
+  The predicate is deliberately symmetric; lift it into one place rather than writing a
+  second copy.
 - **The allowance is not a P&L cost.** It is a receivable from the crew, cleared by the
   liquidation, and only liquidated actual expenses are recognised as cost. The close
-  guard already refuses to close a shipment with allowances and no approved liquidation.
+  guard already refuses to close a shipment carrying allowances with no approved
+  liquidation.
 - **The gas deduction is not a cost line either.** Actual fuel is recognised through the
-  liquidation. Counting it in the P&L as well would double it. Both traps are documented
+  liquidation; counting it in the P&L as well would double it. Both traps are documented
   in `commission-chain.ts` and in the formula field catalog.
-- **Charges lock on `paid`, not on `computed`** — see the Phase 4 note above. Apply the
-  same rule to liquidation lines rather than inventing a second one.
+- **Money locks on `paid`, not on `computed`.** Charges, crew and the gas override stay
+  editable until a commission is attached to a payout line. Apply the same rule to
+  liquidation lines rather than inventing a second one — locking at computation was tried
+  in Phase 4 and is a dead end.
+- **A rule that has paid anything deactivates rather than deletes.** Commissions now hold
+  `appliedRuleId`, so history references the rule. Expect the same to become true of
+  anything Phase 5 links from a payout.
+- **There is still no fallback rate.** A shipment matching no commission rule raises. If
+  Phase 5 adds a screen that computes, it inherits that refusal — do not add a default to
+  make a screen simpler.
+
+### Where the useful machinery already is
+
+| Need                                  | Use                                                                              |
+| ------------------------------------- | -------------------------------------------------------------------------------- |
+| Money arithmetic                      | `money()`, `multiplyByRate()`, `sum()`, `toDecimalString()` in `@eztruckr/types` |
+| Exact arithmetic with no 2dp rounding | `apps/api/src/commission/rational.ts`                                            |
+| Reference-aware removal               | `apps/api/src/master-data/removal.ts` — probes, then deactivate vs delete        |
+| Role policy                           | `apps/api/src/auth/role-policy.ts` — declared once, never inline                 |
+| Soft-delete escape hatches            | `withDeleted()`, `withHardDelete()` from `@eztruckr/db`                          |
+| Single live row from a partial-unique | `liveOne()` / `liveOneOrThrow()`                                                 |
+| Row → response conversion             | `apps/api/src/master-data/serialize.ts` — decimals as strings, dates as ISO      |
+| Declarative master-data screens       | `apps/web/src/lib/resource-spec.ts` + `resources.tsx`                            |
 
 ### Still worth doing
 
-- **An API e2e harness (supertest).** Still absent, and now the biggest gap in the suite.
-  Phase 4's verification was thorough but manual: a Python script driving the
-  containerised stack, not something CI re-runs. The commission engine's _arithmetic_ is
-  well covered by unit tests; its _wiring_ — status guards, role policy per transition,
-  crew scoping — is proved only by hand.
+Two genuine gaps, both in test coverage rather than design:
+
+- **An API e2e harness (supertest).** The biggest hole in the suite. Phase 4's
+  verification was thorough but manual — a Python script driving the containerised stack,
+  not something CI re-runs. The commission engine's _arithmetic_ is well covered by unit
+  tests; its _wiring_ — status guards, per-transition role policy, crew scoping — is
+  proved only by hand. Worth building before Phase 5 adds more wiring to it.
 - **`CommissionService.computeForShipment` has no unit test**, only live verification,
   because it needs Prisma. The pure pieces around it are covered; the orchestration is
-  not. A test client against the real Postgres (as `packages/db` does) would close it.
-- ~~The commission row does not record which rule produced it.~~ **Done at the end of
-  Phase 4**, on request. `Commission.appliedRuleId` + `appliedRuleName` are frozen as a
-  pair: the id traces, the name reads. The name is stored rather than joined because
-  following the id gives the rule as it stands TODAY — a rename would otherwise relabel
-  an old voucher, which is the exact failure every other `applied*` column exists to
-  prevent. A CHECK requires both or neither.
+  not. A test client against the real Postgres (as `packages/db` already does) would
+  close it.
 
-  Two knock-on effects worth knowing:
-  - **Removal semantics changed.** `CommissionRulesService.remove()` now probes
-    commissions, so a rule that has paid anything is DEACTIVATED rather than
-    soft-deleted, keeping the audit trail walkable. Previously it had nothing to count.
-  - **Old rows were deliberately not backfilled.** Resolution depends on the rules and
-    dates as they stood; re-running it today would produce a confident wrong answer on
-    exactly the rows an auditor would trust. Null means "computed before the column
-    existed".
+### How this codebase expects to be worked on
+
+Learned across four phases; following it will make a Phase 5 session much smoother.
+
+- **Structural enforcement over convention.** If a rule matters, express it as a
+  constraint, a trigger, or a type — not a comment and not discipline. `RolesGuard` fails
+  closed, the soft-delete filter lives in one extension, `MoneyInput` excludes `number`.
+  The pattern that caught three bugs in Phase 4: **if no CHECK can express the rule, the
+  schema is probably missing a column.**
+- **Never invent a number.** Every failure in the money path refuses and says why. There
+  is no default rate, no clamp to zero, no silent fallback.
+- **Freeze what a figure depended on**, onto the row it produced. Anything named
+  `applied*` is one of those copies and is written only by the engine.
+- **Comments explain why, not what** — particularly where a choice looks odd. Most of the
+  long docblocks in this repo exist because the obvious alternative is wrong for a reason
+  that is not visible locally.
+- **`pnpm run check` is the gate**: format, lint, typecheck, test across every workspace.
+  It was green at every commit of Phase 4.
+- **Verify against the running stack, not just the tests.** Every Phase 4 claim about
+  behaviour was checked live through the API before it was written down.
 
 ### Housekeeping on the development machine
 
-The Docker VM ran out of disk during Phase 4 (Postgres could not extend a file, which
-failed a migration mid-run; it rolled back cleanly and was re-applied). Pruning dangling
-images reclaimed 9GB, leaving ~9GB free. Roughly 19GB of build cache and 14GB of unused
-images remain reclaimable via `docker builder prune` / `docker image prune -a` if it
-becomes tight again. The host volume is separately at 97% (35GB free of 926GB).
+The Docker VM ran out of disk during Phase 4 — Postgres could not extend a file, which
+failed a migration mid-run (it rolled back cleanly and was re-applied after pruning).
+Pruning dangling images reclaimed 9GB, leaving ~9GB free. Roughly 19GB of build cache and
+14GB of unused images remain reclaimable via `docker builder prune` / `docker image prune
+-a` if it gets tight again. The host volume is separately at 97% (35GB free of 926GB).
+
+Repeated `docker compose up --build` cycles are what filled it, so a long Phase 5 session
+will do the same. Worth watching if a migration fails for no apparent reason.
