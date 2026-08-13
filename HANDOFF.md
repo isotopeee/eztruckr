@@ -2,7 +2,7 @@
 
 Trucking operations system. Turborepo monorepo, Philippine haulage domain (₱, Asia/Manila).
 
-**Last commit: `HEAD`.** Working tree clean, `pnpm run check` green.
+**Last commit: `605aeb1`.** Working tree clean, `pnpm run check` green.
 
 ---
 
@@ -249,7 +249,7 @@ unreachable from the UI.
 - `a9d1702` — crew commission adjustments (increase/decrease + reason), scoped by
   `shipmentId` **not** `commissionId` because recompute soft-deletes and recreates
   commissions.
-- **many liquidations per shipment** — one account per custodian, above. Spanned three
+- `605aeb1` — **many liquidations per shipment**, one account per custodian, above. Spanned three
   sessions: schema and migration, then the API, then the web app and the tests. The
   recurring lesson held again — `variance` was one column answering for two people, and no
   CHECK could express the rule until the schema gained the column that names whose money it
