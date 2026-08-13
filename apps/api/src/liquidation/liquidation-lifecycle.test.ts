@@ -1101,6 +1101,28 @@ describe('a dispatch manager holds cash without being on the truck', () => {
     expect(served.licenseNumber).toBeNull();
   });
 
+  /**
+   * The queue is titled "waiting on you" in the portal, and a dispatch manager
+   * cannot approve, return or reverse anything — so accounting's queue is not
+   * theirs to read. They are unscoped everywhere else on purpose: every trip
+   * through `/shipments`, every account on one through
+   * `/shipments/:id/liquidations`. This one list is the exception, and it is
+   * the same defect the crew scope already had if it is got wrong.
+   */
+  it('sees only their own accounts in the work queue, not accounting’s', async () => {
+    if (!available) return;
+
+    const { shipmentId } = await deliveredTrip('dispatch-queue', '1000.00');
+    const theirs = await act(async () =>
+      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId }),
+    );
+
+    const queue = await liquidations.list({ returnedOnly: false }, dispatcherId);
+
+    expect(queue.map((row) => row.id)).toContain(theirs.id);
+    expect(queue.every((row) => row.custodianId === dispatcherId)).toBe(true);
+  });
+
   it('may be made custodian of a trip they are not assigned to', async () => {
     if (!available) return;
 

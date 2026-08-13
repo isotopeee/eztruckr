@@ -2,7 +2,7 @@
 
 Trucking operations system. Turborepo monorepo, Philippine haulage domain (₱, Asia/Manila).
 
-**Last commit: `cbb1d7e`.** Working tree clean, `pnpm run check` green.
+**Last commit: `HEAD`.** Working tree clean, `pnpm run check` green.
 
 ---
 
@@ -41,14 +41,32 @@ every picker looking for DISPATCH_MANAGER offered nobody. Neither the compiler n
 tests caught it; driving the API did, in one line of output. There is now a test pinning
 the round trip.
 
+### A dispatch manager signs in — `UserRole.DISPATCH_MANAGER` (6)
+
+Added after the fact, reversing the earlier "staff function only" call. They dispatch trips
+AND hold their cash floats, which no existing role combined: OPERATIONS dispatches but
+never holds cash, CREW holds cash but does not dispatch.
+
+- **What they may do**: read shipments and master data, book/assign/dispatch a trip as far
+  as DELIVERED, submit liquidations, upload receipts.
+- **What they may NOT do, and this is a control rather than a job description**: approve,
+  return or reverse a liquidation, release cash, or close a trip. They are custodians, so
+  releasing would let them pay themselves and approving would let them sign off their own
+  float. `CAN_DECIDE_LIQUIDATION` is `CAN_WRITE_SHIPMENT_MONEY`, so keeping them out of
+  both is one edit — and `role-policy.test.ts` asserts it, because "the dispatcher
+  obviously needs to approve things to get their job done" is exactly the change somebody
+  will propose.
+- **Their login names their `staff` row**, which until now only a crew login did. The rule
+  is `ROLES_LINKED_TO_STAFF`, and the two roles are linked for opposite reasons: a crew
+  link IS the scope key every crew-facing query filters on, while a dispatch manager is not
+  scoped by it and carries it so their own floats can be told apart.
+- **Unscoped, with one exception.** They see every trip. `GET /liquidations` is the
+  exception and scopes every linked role, because it is a work queue the portal titles
+  "waiting on you" — handing accounting's queue to somebody who cannot act on any of it is
+  the same defect the crew scope already had. Found by looking at her screen, not by a test.
+
 ### Deliberately not done
 
-- **No login is linked to a dispatch manager.** `hasCrewLinkMatchingRole` still means: a
-  link is required for a CREW login and forbidden for every other role. A dispatch manager
-  is a `staff` row and, if they sign in, does so as OPERATIONS — already in
-  `CAN_SUBMIT_LIQUIDATION` and unrestricted by `assertCrewMayAccount`. Nine
-  `if (user.role !== UserRole.CREW) return;` early-exits rest on that assumption; flipping
-  it is its own piece of work.
 - **Nothing recovers a carried debt yet, for anybody.** Carrying a settlement creates an
   ordinary `CrewDeduction` and the database is entirely role-agnostic about it — but
   **there is no payout-run builder in the codebase**: no service creates a `PayoutRun` or a
@@ -195,7 +213,7 @@ Ports are deliberately non-standard: postgres **5433**, minio **9010/9011**, api
 
 27 business tables + 3 Better Auth infra = **30 domain tables** (31 with
 `_prisma_migrations`). 25 `_created_by_required` CHECKs, 27 `_soft_delete_consistent`,
-22 partial unique indexes, 9 payout triggers, **15 migrations**, no drift.
+22 partial unique indexes, 9 payout triggers, **16 migrations**, no drift.
 
 ### The cash trail of a trip
 
@@ -315,11 +333,12 @@ unreachable from the UI.
 
 ### Logins
 
-| Email                | Password             | Role          | Seeded? |
-| -------------------- | -------------------- | ------------- | ------- |
-| `admin@eztruckr.ph`  | `eztruckr-dev-admin` | Administrator | yes     |
-| `driver@eztruckr.ph` | `eztruckr-dev-crew`  | Crew          | adopted |
-| `ops@eztruckr.ph`    | (set by hand)        | Operations    | no      |
+| Email                       | Password                | Role             | Seeded? |
+| --------------------------- | ----------------------- | ---------------- | ------- |
+| `admin@eztruckr.ph`         | `eztruckr-dev-admin`    | Administrator    | yes     |
+| `driver@eztruckr.ph`        | `eztruckr-dev-crew`     | Crew             | adopted |
+| `marites.reyes@eztruckr.ph` | `eztruckr-dev-dispatch` | Dispatch manager | yes     |
+| `ops@eztruckr.ph`           | (set by hand)           | Operations       | no      |
 
 The crew seed keys on **`staffId`**, not the email — that column is what the partial
 unique index constrains and what every crew-facing query filters on. It adopted the

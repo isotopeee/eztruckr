@@ -1,5 +1,5 @@
 import { Controller, ForbiddenException, Get, Query } from '@nestjs/common';
-import { UserRole, type Liquidation } from '@eztruckr/types';
+import { roleRequiresStaffLink, type Liquidation } from '@eztruckr/types';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
 import { CAN_READ_SHIPMENTS, CAN_SUBMIT_LIQUIDATION } from '../auth/role-policy';
@@ -31,16 +31,26 @@ export class LiquidationsController {
    * The scope key, from the session and nowhere else. Returning null for an
    * office role is what makes the same endpoint serve both audiences without a
    * query parameter that could be forged.
+   *
+   * SCOPED FOR EVERY LINKED ROLE, not just CREW. This list is a WORK QUEUE —
+   * the portal renders it under "liquidations waiting on you" — and the only
+   * people it can be waiting on are the ones who may act on it. A dispatch
+   * manager is unscoped everywhere else, and deliberately: they see every trip
+   * through `/shipments` and every account on one through
+   * `/shipments/:id/liquidations`. But they cannot approve, return or reverse
+   * anything, so accounting's queue is not theirs to read, and handing it to
+   * them under that heading would be the same defect the crew scope already
+   * had — a list that disagrees with the guard behind it.
    */
   private scopeToCaller(user: RequestUser): string | null {
-    if (user.role !== UserRole.CREW) {
+    if (!roleRequiresStaffLink(user.role)) {
       return null;
     }
 
     if (!user.staffId) {
-      // A crew login with no crew member is a broken account, not an
+      // A linked login with no staff member is a broken account, not an
       // unfiltered one. Refusing beats returning every liquidation.
-      throw new ForbiddenException('This crew account is not linked to a crew member.');
+      throw new ForbiddenException('This account is not linked to a staff member.');
     }
 
     return user.staffId;

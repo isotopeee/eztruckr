@@ -7,8 +7,9 @@ import {
 } from '@nestjs/common';
 import { liveOne, type Prisma } from '@eztruckr/db';
 import {
-  CREW_LINK_MESSAGE,
-  hasCrewLinkMatchingRole,
+  STAFF_LINK_MESSAGE,
+  hasStaffLinkMatchingRole,
+  roleRequiresStaffLink,
   isUserRole,
   UserRole,
   type CreateUserInput,
@@ -123,7 +124,7 @@ export class UsersService {
    * behind as a usable login nobody meant to create.
    */
   async create(input: CreateUserInput): Promise<User> {
-    await this.assertCrewLinkIsUsable(input.role, input.staffId);
+    await this.assertStaffLinkIsUsable(input.role, input.staffId);
 
     let createdId: string;
 
@@ -171,14 +172,14 @@ export class UsersService {
       staffId: input.staffId === undefined ? current.staffId : input.staffId,
     };
 
-    if (!hasCrewLinkMatchingRole(merged)) {
+    if (!hasStaffLinkMatchingRole(merged)) {
       throw new BadRequestException({
         message: 'Validation failed',
-        errors: [{ path: 'staffId', message: CREW_LINK_MESSAGE }],
+        errors: [{ path: 'staffId', message: STAFF_LINK_MESSAGE }],
       });
     }
 
-    await this.assertCrewLinkIsUsable(merged.role, merged.staffId);
+    await this.assertStaffLinkIsUsable(merged.role, merged.staffId);
 
     return toUser(await this.users.update({ where: { id }, data: input }));
   }
@@ -230,8 +231,8 @@ export class UsersService {
    * only one login may point at each — the partial unique index enforces the
    * second half, but a clear message beats a 409 from an index name.
    */
-  private async assertCrewLinkIsUsable(role: UserRole, staffId: string | null): Promise<void> {
-    if (role !== UserRole.CREW || !staffId) {
+  private async assertStaffLinkIsUsable(role: UserRole, staffId: string | null): Promise<void> {
+    if (!roleRequiresStaffLink(role) || !staffId) {
       return;
     }
 
@@ -242,7 +243,7 @@ export class UsersService {
     if (!staff) {
       throw new BadRequestException({
         message: 'Validation failed',
-        errors: [{ path: 'staffId', message: `No crew member with id ${staffId}` }],
+        errors: [{ path: 'staffId', message: `No staff member with id ${staffId}` }],
       });
     }
   }

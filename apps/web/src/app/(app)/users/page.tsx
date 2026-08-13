@@ -99,7 +99,7 @@ export default function UsersPage() {
     },
     {
       name: 'staffId',
-      label: 'Linked crew member',
+      label: 'Linked staff member',
       type: 'select',
       options: (crew.data?.items ?? [])
         .filter((member) => !linkedStaffIds.has(member.id))
@@ -107,7 +107,7 @@ export default function UsersPage() {
           value: member.id,
           label: `${member.staffCode} — ${member.lastName}, ${member.firstName}`,
         })),
-      help: 'Required for a crew login, and forbidden for any other role.',
+      help: 'Required for a crew or dispatch-manager login, and forbidden for any other role.',
     },
     { name: 'isActive', label: 'Account active', type: 'boolean' },
   ];
@@ -210,7 +210,7 @@ export default function UsersPage() {
               <TableHead>Name</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Role</TableHead>
-              <TableHead>Crew link</TableHead>
+              <TableHead>Staff link</TableHead>
               <TableHead>Last signed in</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-32 text-right">Actions</TableHead>
@@ -231,7 +231,7 @@ export default function UsersPage() {
                   <TableCell>{user.email}</TableCell>
                   <TableCell>{USER_ROLE_LABELS[user.role]}</TableCell>
                   <TableCell>
-                    {user.staffId ? crewLabel(crew.data?.items ?? [], user.staffId) : '—'}
+                    {user.staffId ? staffLabel(crew.data?.items ?? [], user.staffId) : '—'}
                   </TableCell>
                   <TableCell>
                     {user.lastLoginAt ? formatDateTime(user.lastLoginAt) : 'Never'}
@@ -393,7 +393,7 @@ export default function UsersPage() {
   );
 }
 
-function crewLabel(members: Staff[], id: string): string {
+function staffLabel(members: Staff[], id: string): string {
   const member = members.find((entry) => entry.id === id);
   return member ? member.staffCode : id.slice(0, 8);
 }

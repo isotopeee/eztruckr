@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { UserRole, userRoleSchema } from '../codes/user-role';
+import { roleRequiresStaffLink, userRoleSchema, type UserRole } from '../codes/user-role';
 import { auditFieldsSchema, optionalText, requiredText } from './common';
 
 /**
@@ -34,9 +34,15 @@ const userFields = z.object({
   name: requiredText(120),
   role: userRoleSchema,
   /**
-   * Required for CREW and forbidden otherwise. A crew login that resolves to
-   * no crew member would see an empty portal; an office login that resolves to
-   * one would be silently scoped to a single person's records.
+   * Which `staff` row this login belongs to.
+   *
+   * Required for the roles in `ROLES_LINKED_TO_STAFF` and forbidden for every
+   * other, but for two different reasons. A CREW login that resolved to nobody
+   * would see an empty portal, because the link IS its scope key. A
+   * DISPATCH_MANAGER is not scoped by it at all — they see every trip — and is
+   * linked so the system can tell which of the floats out there are theirs. An
+   * office login that resolved to a person would be silently narrowed to that
+   * person's records by any query that filtered on it.
    */
   staffId: z
     .string()
@@ -46,20 +52,20 @@ const userFields = z.object({
   isActive: z.boolean().default(true),
 });
 
-export function hasCrewLinkMatchingRole(value: {
+export function hasStaffLinkMatchingRole(value: {
   role: UserRole;
   staffId: string | null;
 }): boolean {
-  return value.role === UserRole.CREW ? value.staffId !== null : value.staffId === null;
+  return roleRequiresStaffLink(value.role) ? value.staffId !== null : value.staffId === null;
 }
 
-export const CREW_LINK_MESSAGE =
-  'a crew login must be linked to a crew member, and only a crew login may be';
+export const STAFF_LINK_MESSAGE =
+  'a crew or dispatch-manager login must name the staff member it belongs to, and no other role may';
 
 export const createUserSchema = userFields
   .extend({ password: passwordSchema })
-  .refine(hasCrewLinkMatchingRole, {
-    message: CREW_LINK_MESSAGE,
+  .refine(hasStaffLinkMatchingRole, {
+    message: STAFF_LINK_MESSAGE,
     path: ['staffId'],
   });
 

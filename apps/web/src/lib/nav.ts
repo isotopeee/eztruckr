@@ -21,6 +21,17 @@ const OFFICE_ROLES = [
   UserRole.MANAGEMENT,
 ] as const;
 
+/**
+ * Office roles plus the dispatch manager, who works trips rather than books.
+ *
+ * A separate bundle rather than an addition to `OFFICE_ROLES`, because the
+ * dispatch manager is deliberately absent from the Finance and Administration
+ * sections: they may not write commission rules or expense categories, and the
+ * server refuses either way. Showing them a door they cannot open is exactly
+ * what this file exists to avoid.
+ */
+const OPERATIONAL_ROLES = [...OFFICE_ROLES, UserRole.DISPATCH_MANAGER] as const;
+
 export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
   {
     title: 'Overview',
@@ -28,9 +39,15 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
       {
         href: '/',
         label: 'Dashboard',
-        roles: [...OFFICE_ROLES, UserRole.CREW],
+        roles: [...OPERATIONAL_ROLES, UserRole.CREW],
       },
-      { href: '/my-record', label: 'My record', roles: [UserRole.CREW] },
+      // Both linked roles have a staff row to show. A dispatch manager is not
+      // scoped by the link, but it still names the person they are.
+      {
+        href: '/my-record',
+        label: 'My record',
+        roles: [UserRole.CREW, UserRole.DISPATCH_MANAGER],
+      },
     ],
   },
   {
@@ -38,12 +55,12 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
     items: [
       // Crew see this too: it is their own trip list, scoped server-side to
       // the shipments they actually worked.
-      { href: '/shipments', label: 'Shipments', roles: [...OFFICE_ROLES, UserRole.CREW] },
-      { href: '/trucks', label: 'Trucks', roles: OFFICE_ROLES },
-      { href: '/staff', label: 'Staff', roles: OFFICE_ROLES },
-      { href: '/clients', label: 'Clients', roles: OFFICE_ROLES },
-      { href: '/third-parties', label: 'Third parties', roles: OFFICE_ROLES },
-      { href: '/routes', label: 'Routes', roles: OFFICE_ROLES },
+      { href: '/shipments', label: 'Shipments', roles: [...OPERATIONAL_ROLES, UserRole.CREW] },
+      { href: '/trucks', label: 'Trucks', roles: OPERATIONAL_ROLES },
+      { href: '/staff', label: 'Staff', roles: OPERATIONAL_ROLES },
+      { href: '/clients', label: 'Clients', roles: OPERATIONAL_ROLES },
+      { href: '/third-parties', label: 'Third parties', roles: OPERATIONAL_ROLES },
+      { href: '/routes', label: 'Routes', roles: OPERATIONAL_ROLES },
     ],
   },
   {

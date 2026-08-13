@@ -10,6 +10,7 @@ import {
   PayoutRunStatus,
   SettlementStatus,
   ShipmentStatus,
+  StaffRole,
   UserRole,
   isAllowedLiquidationTransition,
   isCommissionMethod,
@@ -87,6 +88,17 @@ describe('code sets are permanent', () => {
     expect(CrewRole).toEqual({ DRIVER: 1, HELPER: 2 });
   });
 
+  /**
+   * The superset CrewRole is carved out of. They share a numbering on purpose —
+   * `CrewRole` is derived from this — so a value here is a value there, and 3
+   * is the one that deliberately has no crew meaning.
+   */
+  it('pins every StaffRole code', () => {
+    expect(StaffRole).toEqual({ DRIVER: 1, HELPER: 2, DISPATCH_MANAGER: 3 });
+    expect(CrewRole.DRIVER).toBe(StaffRole.DRIVER);
+    expect(CrewRole.HELPER).toBe(StaffRole.HELPER);
+  });
+
   it('pins every AdjustmentDirection code', () => {
     expect(AdjustmentDirection).toEqual({ INCREASE: 1, DECREASE: 2 });
   });
@@ -98,6 +110,9 @@ describe('code sets are permanent', () => {
       ACCOUNTING: 3,
       MANAGEMENT: 4,
       CREW: 5,
+      // Appended, never renumbered: a dispatch manager dispatches trips and
+      // holds their cash floats, which no earlier role combined.
+      DISPATCH_MANAGER: 6,
     });
   });
 
@@ -128,6 +143,7 @@ describe('code sets are permanent', () => {
       DisbursementMode,
       SettlementStatus,
       CrewRole,
+      StaffRole,
       AdjustmentDirection,
       UserRole,
       CommissionMethod,

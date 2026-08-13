@@ -34,18 +34,36 @@ const ADMIN_EMAIL = 'admin@eztruckr.ph';
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'eztruckr-dev-admin';
 
 /**
- * The staff member who gets a portal login, by staff code.
+ * The staff who get a login, by staff code.
  *
- * ONE OF THEM, not all four, and that is the point of the fixture: the crew
+ * ONE CREW MEMBER, not all four, and that is the point of the fixture: the crew
  * portal's whole job is showing a signed-in person their own records and
  * nobody else's, and a seed where every crew member can log in cannot
  * demonstrate the difference. Joel Bautista is helper-only with no licence on
  * file, so he also exercises the case where the crew scoping has to hold for
  * someone who can never be the driver.
+ *
+ * The dispatch manager is the OTHER kind of linked login, and the pair is what
+ * makes the difference visible: both name a staff row, and only the crew one is
+ * scoped by it. Marites Reyes sees every trip and can dispatch, and still
+ * cannot approve the float she is holding.
  */
-const CREW_LOGIN_STAFF_CODE = 'CRW-003';
-const CREW_LOGIN_EMAIL = 'joel.bautista@eztruckr.ph';
-const CREW_PASSWORD = process.env.SEED_CREW_PASSWORD ?? 'eztruckr-dev-crew';
+const STAFF_LOGINS = [
+  {
+    staffCode: 'CRW-003',
+    email: 'joel.bautista@eztruckr.ph',
+    password: process.env.SEED_CREW_PASSWORD ?? 'eztruckr-dev-crew',
+    role: UserRole.CREW,
+    label: 'crew',
+  },
+  {
+    staffCode: 'OPS-001',
+    email: 'marites.reyes@eztruckr.ph',
+    password: process.env.SEED_DISPATCH_PASSWORD ?? 'eztruckr-dev-dispatch',
+    role: UserRole.DISPATCH_MANAGER,
+    label: 'dispatch manager',
+  },
+];
 
 /**
  * Gives a seeded user a password they can actually sign in with.
@@ -326,35 +344,38 @@ async function seedMasterData() {
 }
 
 /**
- * A working crew login, linked to the crew member it speaks for.
+ * A working login, linked to the staff member it speaks for.
  *
- * `staffId` is the whole account. Every crew-facing query filters on it,
- * and the API refuses outright — rather than returning an unfiltered list —
- * when a CREW user has none, so a crew login without the link is a broken
- * account rather than a permissive one. That is why this runs after the crew
- * members exist and reads the id back rather than assuming one.
+ * `staffId` is the whole account for a CREW login: every crew-facing query
+ * filters on it, and the API refuses outright — rather than returning an
+ * unfiltered list — when a CREW user has none, so a crew login without the link
+ * is a broken account rather than a permissive one. A DISPATCH_MANAGER carries
+ * the same link for the opposite reason: nothing scopes them by it, and it is
+ * there so their own floats can be told apart from everyone else's. Either way
+ * this runs after the staff exist and reads the id back rather than assuming
+ * one.
  *
  * Created directly through Prisma rather than through the API's `signUpEmail`
  * path, because that path deliberately cannot set `role` or `staffId` —
  * they are `input: false` in the Better Auth config, which is what stops a
  * request body choosing its own privileges. The seed is not a request.
  */
-async function seedCrewLogin() {
+async function seedStaffLogin(spec: (typeof STAFF_LOGINS)[number]) {
   const staffMember = await prisma.staff.findFirst({
-    where: { staffCode: CREW_LOGIN_STAFF_CODE },
+    where: { staffCode: spec.staffCode },
   });
 
   if (!staffMember) {
-    throw new Error(`Crew member ${CREW_LOGIN_STAFF_CODE} is missing; cannot seed its login`);
+    throw new Error(`Staff member ${spec.staffCode} is missing; cannot seed its login`);
   }
 
   const name = `${staffMember.firstName} ${staffMember.lastName}`;
 
   // Keyed on `staffId`, not on the email. That column is what the partial
   // unique index constrains and what every crew-facing query filters on, so it
-  // is the honest answer to "does this crew member already have a login" — an
-  // email lookup would miss one created under a different address and then
-  // fail on the index instead of finding it. A login provisioned by hand in
+  // is the honest answer to "does this person already have a login" — an email
+  // lookup would miss one created under a different address and then fail on
+  // the index instead of finding it. A login provisioned by hand in
   // development is exactly that case.
   const existing = await prisma.user.findFirst({ where: { staffId: staffMember.id } });
 
@@ -362,26 +383,28 @@ async function seedCrewLogin() {
     existing ??
     (await prisma.user.create({
       data: {
-        email: CREW_LOGIN_EMAIL,
+        email: spec.email,
         name,
-        role: UserRole.CREW,
+        role: spec.role,
         staffId: staffMember.id,
         emailVerified: true,
       },
     }));
 
   // The one thing an adopted login is allowed to have corrected. A display
-  // name that disagrees with the crew member the account is LINKED to is not a
-  // cosmetic difference: the link decides which trips the session can see, so
-  // a login labelled with someone else's name shows one person's records under
-  // another person's heading. The email and the password are left alone —
-  // those are credentials somebody may be signing in with.
+  // name that disagrees with the staff member the account is LINKED to is not a
+  // cosmetic difference: for a crew login the link decides which trips the
+  // session can see, so a login labelled with someone else's name shows one
+  // person's records under another person's heading. The email and the password
+  // are left alone — those are credentials somebody may be signing in with.
   if (user.name !== name) {
-    console.warn(`[seed] crew login ${user.email} was named "${user.name}"; corrected to ${name}`);
+    console.warn(
+      `[seed] ${spec.label} login ${user.email} was named "${user.name}"; corrected to ${name}`,
+    );
     await prisma.user.update({ where: { id: user.id }, data: { name } });
   }
 
-  await seedCredential(user.id, CREW_PASSWORD, `crew (${user.email})`);
+  await seedCredential(user.id, spec.password, `${spec.label} (${user.email})`);
 
   const profile = await prisma.userProfile.findFirst({ where: { userId: user.id } });
   if (!profile) {
@@ -418,8 +441,11 @@ async function main() {
 
     const setting = await seedSystemSetting();
     await seedMasterData();
-    // After the crew members exist — the login is nothing without its link.
-    const crew = await seedCrewLogin();
+    // After the staff exist — a linked login is nothing without its link.
+    const logins = [];
+    for (const spec of STAFF_LOGINS) {
+      logins.push({ spec, user: await seedStaffLogin(spec) });
+    }
 
     const counts = {
       users: await prisma.user.count(),
@@ -438,7 +464,9 @@ async function main() {
       admin.email,
       `(createdBy=${String(admin.createdBy)} — bootstrap)`,
     );
-    console.warn('[seed] crew:', crew.email, `(staffId=${String(crew.staffId)})`);
+    for (const { spec, user } of logins) {
+      console.warn(`[seed] ${spec.label}:`, user.email, `(staffId=${String(user.staffId)})`);
+    }
     console.warn('[seed] gasExpenseDeductionRate:', setting.gasExpenseDeductionRate.toString());
     console.warn('[seed] counts:', counts);
   });
