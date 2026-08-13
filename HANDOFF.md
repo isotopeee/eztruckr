@@ -4,21 +4,21 @@ Trucking management system for a Philippine hauling company. Turborepo monorepo,
 
 **Git.** Branch `main`, no remote configured.
 
-| Commit     | What                                                       |
-| ---------- | ---------------------------------------------------------- |
-| `3af269a`  | Phase 1 foundation + Phase 2 data model                    |
-| `61195ff`  | Handoff formatting, git init recorded                      |
-| `fdd7a52`  | Phase 3 — auth, role guards, master data                   |
-| `56b371d`  | System settings made administrator-only, read included     |
-| `b399139`  | CommissionRule becomes the only source of truth for pay    |
-| `8af9c76`  | Handoff brought current for a Phase 4 session              |
-| `7bf90f7`  | **Phase 4** — shipments, the money engine, FORMULA         |
-| `eaa1405`  | Gas rate override split from the frozen applied rate       |
-| `d92c56a`  | Crew deductions recovered in slices across payout runs     |
-| `d872cd4`  | Write-off decision recorded, question list closed          |
-| `a138387`  | Commissions record which rule produced them                |
-| `25c9c5c`  | Handoff brought current for a Phase 5 session              |
-| `<phase5>` | **Phase 5** — allowance, liquidation, receipts, settlement |
+| Commit    | What                                                       |
+| --------- | ---------------------------------------------------------- |
+| `3af269a` | Phase 1 foundation + Phase 2 data model                    |
+| `61195ff` | Handoff formatting, git init recorded                      |
+| `fdd7a52` | Phase 3 — auth, role guards, master data                   |
+| `56b371d` | System settings made administrator-only, read included     |
+| `b399139` | CommissionRule becomes the only source of truth for pay    |
+| `8af9c76` | Handoff brought current for a Phase 4 session              |
+| `7bf90f7` | **Phase 4** — shipments, the money engine, FORMULA         |
+| `eaa1405` | Gas rate override split from the frozen applied rate       |
+| `d92c56a` | Crew deductions recovered in slices across payout runs     |
+| `d872cd4` | Write-off decision recorded, question list closed          |
+| `a138387` | Commissions record which rule produced them                |
+| `25c9c5c` | Handoff brought current for a Phase 5 session              |
+| `d5405ad` | **Phase 5** — allowance, liquidation, receipts, settlement |
 
 `eaa1405` through `a138387` are Phase 4 follow-ups, each made on an explicit decision
 after the phase was first reported. They are not loose ends — see the decision record
