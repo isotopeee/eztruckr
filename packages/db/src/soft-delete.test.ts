@@ -381,10 +381,10 @@ describe('code CHECK constraints', () => {
 
     await expect(
       withActor({ userId: adminId }, async () =>
-        prisma.crewMember.create({
+        prisma.staff.create({
           data: {
             id: testId('sd-badrole'),
-            employeeCode: testId('SD-BADROLE'),
+            staffCode: testId('SD-BADROLE'),
             firstName: 'Bad',
             lastName: 'Role',
             eligibleRoles: [CrewRole.DRIVER, 42],

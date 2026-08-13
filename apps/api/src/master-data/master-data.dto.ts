@@ -1,7 +1,7 @@
 import {
   createClientSchema,
   createCommissionRuleSchema,
-  createCrewMemberSchema,
+  createStaffSchema,
   createExpenseCategorySchema,
   createRouteSchema,
   createThirdPartySchema,
@@ -9,7 +9,7 @@ import {
   masterDataListQuerySchema,
   updateClientSchema,
   updateCommissionRuleSchema,
-  updateCrewMemberSchema,
+  updateStaffSchema,
   updateExpenseCategorySchema,
   updateRouteSchema,
   updateThirdPartySchema,
@@ -32,8 +32,8 @@ export class ListQueryDto extends createZodDto(masterDataListQuerySchema) {}
 export class CreateTruckDto extends createZodDto(createTruckSchema) {}
 export class UpdateTruckDto extends createZodDto(updateTruckSchema) {}
 
-export class CreateCrewMemberDto extends createZodDto(createCrewMemberSchema) {}
-export class UpdateCrewMemberDto extends createZodDto(updateCrewMemberSchema) {}
+export class CreateStaffDto extends createZodDto(createStaffSchema) {}
+export class UpdateStaffDto extends createZodDto(updateStaffSchema) {}
 
 export class CreateClientDto extends createZodDto(createClientSchema) {}
 export class UpdateClientDto extends createZodDto(updateClientSchema) {}

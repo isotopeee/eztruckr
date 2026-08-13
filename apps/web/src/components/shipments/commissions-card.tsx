@@ -141,7 +141,7 @@ export function CommissionsCard({ shipment }: { shipment: Shipment }) {
           <div className="space-y-3">
             {lines.map((line) => (
               <CrewPayRow
-                key={line.crewMemberId}
+                key={line.staffId}
                 shipmentId={shipment.id}
                 line={line}
                 canAdjust={canCompute}
@@ -188,7 +188,7 @@ function CrewPayRow({
     <div className="rounded-md border p-3 text-sm">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span className="font-medium">{line.crewMemberName}</span>
+          <span className="font-medium">{line.staffName}</span>
           {line.commission ? (
             <Badge variant="secondary">{CREW_ROLE_LABELS[line.commission.role]}</Badge>
           ) : null}
@@ -235,7 +235,7 @@ function CrewPayRow({
         adding ? (
           <AdjustmentForm
             shipmentId={shipmentId}
-            crewMemberId={line.crewMemberId}
+            staffId={line.staffId}
             onDone={() => {
               setAdding(false);
               invalidate();
@@ -245,7 +245,7 @@ function CrewPayRow({
         ) : (
           <Button variant="ghost" size="sm" className="mt-2 -ml-2" onClick={() => setAdding(true)}>
             <Plus className="mr-1 h-3 w-3" />
-            Adjust {line.crewMemberName.split(' ')[0]}&apos;s pay
+            Adjust {line.staffName.split(' ')[0]}&apos;s pay
           </Button>
         )
       ) : null}
@@ -314,12 +314,12 @@ function AdjustmentRow({
  */
 function AdjustmentForm({
   shipmentId,
-  crewMemberId,
+  staffId,
   onDone,
   onCancel,
 }: {
   shipmentId: string;
-  crewMemberId: string;
+  staffId: string;
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -332,7 +332,7 @@ function AdjustmentForm({
   const save = useMutation({
     mutationFn: () =>
       addAdjustment({
-        crewMemberId,
+        staffId,
         shipmentId,
         direction: Number(draft.direction) as AdjustmentDirection,
         amount: draft.amount,
@@ -358,14 +358,14 @@ function AdjustmentForm({
     >
       <div className="grid gap-2 sm:grid-cols-[9rem_1fr]">
         <div className="space-y-1">
-          <Label htmlFor={`adj-direction-${crewMemberId}`} className="text-xs">
+          <Label htmlFor={`adj-direction-${staffId}`} className="text-xs">
             Direction
           </Label>
           <Select
             value={draft.direction}
             onValueChange={(value) => setDraft((current) => ({ ...current, direction: value }))}
           >
-            <SelectTrigger id={`adj-direction-${crewMemberId}`}>
+            <SelectTrigger id={`adj-direction-${staffId}`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -379,11 +379,11 @@ function AdjustmentForm({
           </Select>
         </div>
         <div className="space-y-1">
-          <Label htmlFor={`adj-amount-${crewMemberId}`} className="text-xs">
+          <Label htmlFor={`adj-amount-${staffId}`} className="text-xs">
             Amount
           </Label>
           <Input
-            id={`adj-amount-${crewMemberId}`}
+            id={`adj-amount-${staffId}`}
             placeholder="0.00"
             inputMode="decimal"
             required
@@ -396,11 +396,11 @@ function AdjustmentForm({
       </div>
 
       <div className="space-y-1">
-        <Label htmlFor={`adj-reason-${crewMemberId}`} className="text-xs">
+        <Label htmlFor={`adj-reason-${staffId}`} className="text-xs">
           Reason
         </Label>
         <Input
-          id={`adj-reason-${crewMemberId}`}
+          id={`adj-reason-${staffId}`}
           placeholder="Why this trip's pay is being changed"
           required
           value={draft.reason}

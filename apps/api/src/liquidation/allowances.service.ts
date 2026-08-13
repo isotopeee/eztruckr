@@ -21,6 +21,7 @@ import { auditFields, decimalToString } from '../master-data/serialize';
 import { PrismaService } from '../prisma/prisma.service';
 import { LiquidationService } from './liquidation.service';
 import { ReceiptsService } from './receipts.service';
+import { assertMayHoldTripCash } from './trip-cash-participants';
 
 /**
  * Issuing allowances: one row per release, never an editable running total.
@@ -33,7 +34,7 @@ import { ReceiptsService } from './receipts.service';
  */
 
 const ALLOWANCE_INCLUDE = {
-  crewMember: { select: { firstName: true, lastName: true } },
+  staff: { select: { firstName: true, lastName: true } },
   liquidation: { select: { custodian: { select: { firstName: true, lastName: true } } } },
   releasedByUser: { select: { name: true } },
   receipt: { select: { fileName: true } },
@@ -84,7 +85,7 @@ export class AllowancesService {
   ): Promise<Allowance> {
     await this.assertShipmentOpen(shipmentId);
     await this.assertAccountAccepts(shipmentId, input.liquidationId);
-    await this.assertCrewOnTrip(shipmentId, input.crewMemberId);
+    await this.assertMayReceiveCash(shipmentId, input.staffId);
     await this.receipts.assertExists(input.receiptId);
 
     const releasedBy = input.releasedBy ?? user.id;
@@ -94,7 +95,7 @@ export class AllowancesService {
       data: {
         shipmentId,
         liquidationId: input.liquidationId,
-        crewMemberId: input.crewMemberId,
+        staffId: input.staffId,
         amount: input.amount,
         issuedAt: input.issuedAt === null ? new Date() : new Date(input.issuedAt),
         disbursementMode: input.disbursementMode,
@@ -127,8 +128,8 @@ export class AllowancesService {
       await this.assertAccountAccepts(shipmentId, input.liquidationId);
     }
 
-    if (input.crewMemberId !== undefined) {
-      await this.assertCrewOnTrip(shipmentId, input.crewMemberId);
+    if (input.staffId !== undefined) {
+      await this.assertMayReceiveCash(shipmentId, input.staffId);
     }
 
     await this.receipts.assertExists(input.receiptId);
@@ -141,7 +142,7 @@ export class AllowancesService {
       where: { id },
       data: {
         ...(input.liquidationId === undefined ? {} : { liquidationId: input.liquidationId }),
-        ...(input.crewMemberId === undefined ? {} : { crewMemberId: input.crewMemberId }),
+        ...(input.staffId === undefined ? {} : { staffId: input.staffId }),
         ...(input.amount === undefined ? {} : { amount: input.amount }),
         ...(input.issuedAt === undefined || input.issuedAt === null
           ? {}
@@ -257,21 +258,25 @@ export class AllowancesService {
   }
 
   /**
-   * Cash goes to somebody who is on the trip.
+   * Cash goes to somebody the trip's money could actually reach.
    *
-   * Not merely to an existing crew member: an allowance against a shipment
-   * names the person accountable for that trip's money, and a release to
-   * somebody who never worked it is either a typo or a problem.
+   * The crew who worked it, or a dispatch manager holding its float — the same
+   * rule the custodian and the carried deduction obey, asked once in
+   * `assertMayHoldTripCash`. A dispatch manager is a recipient and not only an
+   * answerable party, because the float is physically handed to them.
+   *
+   * Not merely an existing staff member: a release to somebody with no
+   * connection to the trip is either a typo or a problem.
    */
-  private async assertCrewOnTrip(shipmentId: string, crewMemberId: string): Promise<void> {
-    const shipment = await this.loadShipment(shipmentId);
-
-    if (shipment.driverId !== crewMemberId && shipment.helperId !== crewMemberId) {
-      throw badRequest(
-        'crewMemberId',
-        `That crew member is not assigned to shipment ${shipment.shipmentNumber}.`,
-      );
-    }
+  private assertMayReceiveCash(shipmentId: string, staffId: string): Promise<void> {
+    return assertMayHoldTripCash(
+      this.prisma,
+      shipmentId,
+      staffId,
+      'staffId',
+      (shipmentNumber) =>
+        `That person neither worked shipment ${shipmentNumber} nor is a dispatch manager, so cash cannot be released to them against it.`,
+    );
   }
 
   private async assertUserExists(userId: string): Promise<void> {
@@ -345,10 +350,8 @@ export function toAllowance(row: AllowanceRow): Allowance {
     custodianName: row.liquidation?.custodian
       ? `${row.liquidation.custodian.firstName} ${row.liquidation.custodian.lastName}`
       : null,
-    crewMemberId: row.crewMemberId,
-    crewMemberName: row.crewMember
-      ? `${row.crewMember.firstName} ${row.crewMember.lastName}`
-      : null,
+    staffId: row.staffId,
+    staffName: row.staff ? `${row.staff.firstName} ${row.staff.lastName}` : null,
     amount: row.amount.toString(),
     issuedAt: row.issuedAt.toISOString(),
     remarks: row.remarks,

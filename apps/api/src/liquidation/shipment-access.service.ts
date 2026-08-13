@@ -31,8 +31,8 @@ export class ShipmentAccessService {
     }
 
     const worked =
-      user.crewMemberId !== null &&
-      (shipment.driverId === user.crewMemberId || shipment.helperId === user.crewMemberId);
+      user.staffId !== null &&
+      (shipment.driverId === user.staffId || shipment.helperId === user.staffId);
 
     if (!worked) {
       // Deliberately the same shape as the shipments controller's refusal:

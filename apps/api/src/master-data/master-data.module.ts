@@ -3,8 +3,8 @@ import { ClientsController } from './clients.controller';
 import { ClientsService } from './clients.service';
 import { CommissionRulesController } from './commission-rules.controller';
 import { CommissionRulesService } from './commission-rules.service';
-import { CrewMembersController } from './crew-members.controller';
-import { CrewMembersService } from './crew-members.service';
+import { StaffController } from './staff.controller';
+import { StaffService } from './staff.service';
 import { ExpenseCategoriesController } from './expense-categories.controller';
 import { ExpenseCategoriesService } from './expense-categories.service';
 import { RoutesController } from './routes.controller';
@@ -24,7 +24,7 @@ import { TrucksService } from './trucks.service';
 @Module({
   controllers: [
     TrucksController,
-    CrewMembersController,
+    StaffController,
     ClientsController,
     ThirdPartiesController,
     RoutesController,
@@ -33,13 +33,13 @@ import { TrucksService } from './trucks.service';
   ],
   providers: [
     TrucksService,
-    CrewMembersService,
+    StaffService,
     ClientsService,
     ThirdPartiesService,
     RoutesService,
     ExpenseCategoriesService,
     CommissionRulesService,
   ],
-  exports: [CrewMembersService],
+  exports: [StaffService],
 })
 export class MasterDataModule {}

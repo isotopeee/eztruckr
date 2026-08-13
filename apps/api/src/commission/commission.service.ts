@@ -51,7 +51,7 @@ type ShipmentWithChain = Prisma.ShipmentGetPayload<{ include: typeof SHIPMENT_IN
 
 interface SlotAssignment {
   readonly role: CrewRoleCode;
-  readonly crewMemberId: string;
+  readonly staffId: string;
 }
 
 @Injectable()
@@ -123,7 +123,7 @@ export class CommissionService {
           await tx.commission.create({
             data: {
               shipmentId,
-              crewMemberId: entry.crewMemberId,
+              staffId: entry.staffId,
               role: entry.role,
               appliedMethod: entry.rule.method,
               // Frozen as a pair: the id to trace, the name as it reads now.
@@ -137,7 +137,7 @@ export class CommissionService {
               appliedFormulaExpression: entry.result.formula?.expression ?? null,
               appliedFormulaFields: entry.result.formula?.resolvedFields ?? undefined,
             },
-            include: { crewMember: { select: { firstName: true, lastName: true } } },
+            include: { staff: { select: { firstName: true, lastName: true } } },
           }),
         );
       }
@@ -167,7 +167,7 @@ export class CommissionService {
       where: { shipmentId },
       orderBy: { role: 'asc' },
       include: {
-        crewMember: { select: { firstName: true, lastName: true } },
+        staff: { select: { firstName: true, lastName: true } },
         shipment: { select: { shipmentNumber: true } },
       },
     });
@@ -182,12 +182,12 @@ export class CommissionService {
    * session may only ever pass its own id — enforced in the controller, where
    * the session is.
    */
-  async listForCrewMember(crewMemberId: string): Promise<CommissionResponse[]> {
+  async listForStaff(staffId: string): Promise<CommissionResponse[]> {
     const rows = await this.prisma.client.commission.findMany({
-      where: { crewMemberId },
+      where: { staffId },
       orderBy: { computedAt: 'desc' },
       include: {
-        crewMember: { select: { firstName: true, lastName: true } },
+        staff: { select: { firstName: true, lastName: true } },
         shipment: { select: { shipmentNumber: true } },
       },
     });
@@ -288,8 +288,8 @@ export class CommissionService {
   private assignedSlots(shipment: ShipmentWithChain): SlotAssignment[] {
     const slots: SlotAssignment[] = [];
 
-    if (shipment.driverId) slots.push({ role: CrewRole.DRIVER, crewMemberId: shipment.driverId });
-    if (shipment.helperId) slots.push({ role: CrewRole.HELPER, crewMemberId: shipment.helperId });
+    if (shipment.driverId) slots.push({ role: CrewRole.DRIVER, staffId: shipment.driverId });
+    if (shipment.helperId) slots.push({ role: CrewRole.HELPER, staffId: shipment.helperId });
 
     return slots;
   }
@@ -428,7 +428,7 @@ function toStrategyRule(rule: {
 }
 
 type CommissionRow = Prisma.CommissionGetPayload<{
-  include: { crewMember: { select: { firstName: true; lastName: true } } };
+  include: { staff: { select: { firstName: true; lastName: true } } };
 }>;
 
 export function toCommissionResponse(
@@ -445,8 +445,8 @@ export function toCommissionResponse(
     id: row.id,
     shipmentId: row.shipmentId,
     shipmentNumber,
-    crewMemberId: row.crewMemberId,
-    crewMemberName: `${row.crewMember.firstName} ${row.crewMember.lastName}`,
+    staffId: row.staffId,
+    staffName: `${row.staff.firstName} ${row.staff.lastName}`,
     role: row.role,
     appliedMethod: row.appliedMethod,
     appliedRuleId: row.appliedRuleId,

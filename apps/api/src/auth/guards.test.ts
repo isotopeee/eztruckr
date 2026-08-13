@@ -32,7 +32,7 @@ const admin: RequestUser = {
   name: 'Admin',
   role: UserRole.ADMINISTRATOR,
   isActive: true,
-  crewMemberId: null,
+  staffId: null,
 };
 
 const crew: RequestUser = {
@@ -41,7 +41,7 @@ const crew: RequestUser = {
   name: 'Driver',
   role: UserRole.CREW,
   isActive: true,
-  crewMemberId: 'crew-1',
+  staffId: 'crew-1',
 };
 
 describe('AuthenticatedGuard', () => {

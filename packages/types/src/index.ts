@@ -9,7 +9,7 @@ export * from './schemas/health';
 export * from './schemas/session';
 export * from './schemas/user';
 export * from './schemas/truck';
-export * from './schemas/crew-member';
+export * from './schemas/staff';
 export * from './schemas/client';
 export * from './schemas/third-party';
 export * from './schemas/route';

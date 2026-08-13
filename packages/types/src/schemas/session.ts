@@ -14,7 +14,7 @@ export const sessionUserSchema = z.object({
   name: z.string(),
   role: userRoleSchema,
   isActive: z.boolean(),
-  crewMemberId: z.string().nullable(),
+  staffId: z.string().nullable(),
   displayName: z.string().nullable(),
 });
 

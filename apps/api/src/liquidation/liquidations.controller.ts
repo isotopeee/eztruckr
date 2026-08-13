@@ -37,12 +37,12 @@ export class LiquidationsController {
       return null;
     }
 
-    if (!user.crewMemberId) {
+    if (!user.staffId) {
       // A crew login with no crew member is a broken account, not an
       // unfiltered one. Refusing beats returning every liquidation.
       throw new ForbiddenException('This crew account is not linked to a crew member.');
     }
 
-    return user.crewMemberId;
+    return user.staffId;
   }
 }

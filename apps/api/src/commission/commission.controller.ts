@@ -54,18 +54,18 @@ export class CommissionController {
    * Everything owed to one crew member.
    *
    * A crew session may only ask about itself, checked against the session's
-   * own `crewMemberId` rather than anything in the request.
+   * own `staffId` rather than anything in the request.
    */
-  @Get('crew/:crewMemberId')
+  @Get('crew/:staffId')
   @Roles(...CAN_READ_SHIPMENTS, UserRole.CREW)
   listForCrew(
-    @Param('crewMemberId') crewMemberId: string,
+    @Param('staffId') staffId: string,
     @CurrentUser() user: RequestUser,
   ): Promise<Commission[]> {
-    if (user.role === UserRole.CREW && user.crewMemberId !== crewMemberId) {
+    if (user.role === UserRole.CREW && user.staffId !== staffId) {
       throw new ForbiddenException('You can only view your own commissions.');
     }
 
-    return this.commissions.listForCrewMember(crewMemberId);
+    return this.commissions.listForStaff(staffId);
   }
 }

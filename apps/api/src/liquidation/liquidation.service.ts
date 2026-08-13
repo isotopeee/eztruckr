@@ -39,6 +39,7 @@ import {
 import type { RequestUser } from '../auth/request-user';
 import { auditFields, dateToIso } from '../master-data/serialize';
 import { PrismaService } from '../prisma/prisma.service';
+import { assertMayHoldTripCash } from './trip-cash-participants';
 import { ReceiptsService } from './receipts.service';
 
 /**
@@ -143,7 +144,7 @@ export class LiquidationService {
    * behave identically to PENDING in every other query; this is the one that
    * needs to tell them apart, and the history table is what tells it.
    *
-   * `crewMemberId` is passed by the controller from the session, never from the
+   * `staffId` is passed by the controller from the session, never from the
    * query string, and when it is set it OVERWRITES rather than narrows — there
    * is no parameter a crew login can send to widen its own list.
    *
@@ -164,7 +165,7 @@ export class LiquidationService {
    * portal's. The row is still reachable through the shipment; what this list
    * is, is a work queue, and work that has not started is not on it.
    */
-  async list(query: LiquidationListQuery, crewMemberId: string | null): Promise<Liquidation[]> {
+  async list(query: LiquidationListQuery, staffId: string | null): Promise<Liquidation[]> {
     const rows = await this.prisma.client.liquidation.findMany({
       where: {
         ...(query.returnedOnly
@@ -172,14 +173,14 @@ export class LiquidationService {
           : query.status === undefined
             ? {}
             : { status: query.status }),
-        ...(crewMemberId
+        ...(staffId
           ? {
               OR: [
-                { custodianId: crewMemberId },
+                { custodianId: staffId },
                 {
                   custodianId: null,
                   shipment: {
-                    OR: [{ driverId: crewMemberId }, { helperId: crewMemberId }],
+                    OR: [{ driverId: staffId }, { helperId: staffId }],
                   },
                 },
               ],
@@ -206,7 +207,7 @@ export class LiquidationService {
    * failing at an index name.
    */
   async createForShipment(shipmentId: string, input: CreateLiquidationInput): Promise<Liquidation> {
-    await this.assertWorkedTheTrip(shipmentId, input.custodianId);
+    await this.assertMayBeCustodian(shipmentId, input.custodianId);
     await this.assertNoOpenAccountFor(shipmentId, input.custodianId, null);
 
     const row = await this.prisma.client.liquidation.create({
@@ -239,7 +240,7 @@ export class LiquidationService {
     }
 
     if (input.custodianId !== null) {
-      await this.assertWorkedTheTrip(current.shipmentId, input.custodianId);
+      await this.assertMayBeCustodian(current.shipmentId, input.custodianId);
       await this.assertNoOpenAccountFor(current.shipmentId, input.custodianId, liquidationId);
     }
 
@@ -721,12 +722,12 @@ export class LiquidationService {
   private assertCrewMayAccount(row: LiquidationRow, user: RequestUser): void {
     if (user.role !== UserRole.CREW) return;
 
-    if (!user.crewMemberId) {
+    if (!user.staffId) {
       throw new ForbiddenException('This crew account is not linked to a crew member.');
     }
 
     if (row.custodianId !== null) {
-      if (row.custodianId !== user.crewMemberId) {
+      if (row.custodianId !== user.staffId) {
         throw new ForbiddenException(
           'This cash is another crew member’s to account for. You can only liquidate what you were made custodian of.',
         );
@@ -735,8 +736,7 @@ export class LiquidationService {
       return;
     }
 
-    const worked =
-      row.shipment.driverId === user.crewMemberId || row.shipment.helperId === user.crewMemberId;
+    const worked = row.shipment.driverId === user.staffId || row.shipment.helperId === user.staffId;
 
     if (!worked) {
       throw new ForbiddenException('You can only liquidate trips you worked on.');
@@ -810,28 +810,22 @@ export class LiquidationService {
   }
 
   /**
-   * A custodian is somebody who was on the trip.
+   * A custodian is somebody the trip's cash could actually be in the hands of.
    *
-   * Not merely an existing crew member: being answerable for a trip's cash
-   * without having been on it is either a typo or a problem, and it is the same
-   * rule an allowance recipient and a carried deduction already obey.
+   * The crew who worked it, or a dispatch manager holding its float — see
+   * `assertMayHoldTripCash`, which the allowance recipient and the carried
+   * deduction ask as well. Not merely an existing staff member: being
+   * answerable for a trip's cash with no connection to it is a typo.
    */
-  private async assertWorkedTheTrip(shipmentId: string, custodianId: string): Promise<void> {
-    const shipment = await this.prisma.client.shipment.findFirst({
-      where: { id: shipmentId },
-      select: { shipmentNumber: true, driverId: true, helperId: true },
-    });
-
-    if (!shipment) {
-      throw new NotFoundException(`No shipment with id ${shipmentId}`);
-    }
-
-    if (shipment.driverId !== custodianId && shipment.helperId !== custodianId) {
-      throw badRequest(
-        'custodianId',
-        `That crew member is not assigned to shipment ${shipment.shipmentNumber}, so they cannot be made custodian of its cash.`,
-      );
-    }
+  private assertMayBeCustodian(shipmentId: string, custodianId: string): Promise<void> {
+    return assertMayHoldTripCash(
+      this.prisma,
+      shipmentId,
+      custodianId,
+      'custodianId',
+      (shipmentNumber) =>
+        `That person neither worked shipment ${shipmentNumber} nor is a dispatch manager, so they cannot be made custodian of its cash.`,
+    );
   }
 
   /**

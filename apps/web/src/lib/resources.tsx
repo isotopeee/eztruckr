@@ -1,14 +1,16 @@
 import {
   COMMISSION_METHOD_LABELS,
+  CREW_ROLE_CODES,
   CREW_ROLE_LABELS,
-  CrewRole,
   IMPLEMENTED_COMMISSION_METHODS,
+  STAFF_ROLE_CODES,
+  STAFF_ROLE_LABELS,
   UserRole,
   type Client,
   type CommissionRule,
-  type CrewMember,
   type ExpenseCategory,
   type Route,
+  type Staff,
   type ThirdParty,
   type Truck,
 } from '@eztruckr/types';
@@ -96,31 +98,31 @@ export const truckResource: ResourceSpec<Truck> = {
   }),
 };
 
-export const crewMemberResource: ResourceSpec<CrewMember> = {
-  key: 'crew-members',
-  apiPath: '/crew-members',
-  title: 'Crew members',
-  singular: 'Crew member',
+export const staffResource: ResourceSpec<Staff> = {
+  key: 'staff',
+  apiPath: '/staff',
+  title: 'Staff',
+  singular: 'Staff member',
   description:
-    'Drivers and helpers. Eligibility says what someone may be assigned as; the role filled comes from the trip.',
+    'Everyone who works here. Eligibility says what someone may be engaged as; the role filled on a trip comes from the trip. A dispatch manager holds a trip’s cash without driving it.',
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
-      key: 'employeeCode',
+      key: 'staffCode',
       label: 'Code',
-      render: (row) => <span className="font-medium">{row.employeeCode}</span>,
+      render: (row) => <span className="font-medium">{row.staffCode}</span>,
     },
     { key: 'name', label: 'Name', render: (row) => `${row.lastName}, ${row.firstName}` },
     {
       key: 'eligibleRoles',
       label: 'Eligible as',
-      render: (row) => row.eligibleRoles.map((role) => CREW_ROLE_LABELS[role]).join(', ') || '—',
+      render: (row) => row.eligibleRoles.map((role) => STAFF_ROLE_LABELS[role]).join(', ') || '—',
     },
     { key: 'phone', label: 'Phone', render: (row) => text(row.phone) },
     { key: 'licenseNumber', label: 'Licence', render: (row) => text(row.licenseNumber) },
   ],
   fields: [
-    { name: 'employeeCode', label: 'Employee code', type: 'text', required: true },
+    { name: 'staffCode', label: 'Staff code', type: 'text', required: true },
     { name: 'firstName', label: 'First name', type: 'text', required: true },
     { name: 'lastName', label: 'Last name', type: 'text', required: true },
     {
@@ -128,11 +130,13 @@ export const crewMemberResource: ResourceSpec<CrewMember> = {
       label: 'Eligible roles',
       type: 'multiselect',
       required: true,
-      options: [
-        { value: CrewRole.DRIVER, label: CREW_ROLE_LABELS[CrewRole.DRIVER] },
-        { value: CrewRole.HELPER, label: CREW_ROLE_LABELS[CrewRole.HELPER] },
-      ],
-      help: 'Anyone eligible to drive needs a licence number on file.',
+      // Listed from the code set rather than by hand, so a role appended to
+      // StaffRole cannot be declared and then quietly unofferable here.
+      options: STAFF_ROLE_CODES.map((role) => ({
+        value: role,
+        label: STAFF_ROLE_LABELS[role],
+      })),
+      help: 'Anyone eligible to drive needs a licence number on file. A dispatch manager may hold a trip’s cash without being assigned to it, and earns no commission.',
     },
     { name: 'phone', label: 'Phone', type: 'text' },
     { name: 'address', label: 'Address', type: 'text' },
@@ -142,7 +146,7 @@ export const crewMemberResource: ResourceSpec<CrewMember> = {
     { name: 'isActive', label: 'Offered for new assignments', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    employeeCode: row.employeeCode,
+    staffCode: row.staffCode,
     firstName: row.firstName,
     lastName: row.lastName,
     eligibleRoles: row.eligibleRoles.map(String),
@@ -411,8 +415,9 @@ export const commissionRuleResource: ResourceSpec<CommissionRule> = {
       type: 'select',
       required: true,
       options: [
-        { value: CrewRole.DRIVER, label: CREW_ROLE_LABELS[CrewRole.DRIVER] },
-        { value: CrewRole.HELPER, label: CREW_ROLE_LABELS[CrewRole.HELPER] },
+        // The CREW subset, not every staff role: a commission rule decides what
+        // somebody is paid for a trip, and a dispatch manager earns none.
+        ...CREW_ROLE_CODES.map((role) => ({ value: role, label: CREW_ROLE_LABELS[role] })),
       ],
     },
     {

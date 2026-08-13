@@ -14,7 +14,7 @@ import { APIError, createAuthMiddleware } from 'better-auth/api';
  * it, so Better Auth's own schema stays intact.
  *
  * The three EZTruckr columns that do sit on `user` — role, isActive,
- * crewMemberId — are declared below as `additionalFields`, which is Better
+ * staffId — are declared below as `additionalFields`, which is Better
  * Auth's supported extension mechanism. They are deliberately kept off
  * UserProfile: a profile row is soft-deletable and partial-unique, so a user
  * can legitimately have zero live profiles, and a user with no resolvable role
@@ -77,7 +77,7 @@ export function createAuth(prisma: ExtendedPrismaClient, options: AuthOptions) {
           input: false,
         },
         /** Set only for CREW logins; scopes every crew-facing query. */
-        crewMemberId: {
+        staffId: {
           type: 'string',
           required: false,
           input: false,

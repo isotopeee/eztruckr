@@ -15,7 +15,7 @@ export const userSchema = auditFieldsSchema.extend({
   role: userRoleSchema,
   isActive: z.boolean(),
   emailVerified: z.boolean(),
-  crewMemberId: z.string().nullable(),
+  staffId: z.string().nullable(),
   lastLoginAt: z.string().nullable(),
 });
 
@@ -38,7 +38,7 @@ const userFields = z.object({
    * no crew member would see an empty portal; an office login that resolves to
    * one would be silently scoped to a single person's records.
    */
-  crewMemberId: z
+  staffId: z
     .string()
     .min(1)
     .nullish()
@@ -48,9 +48,9 @@ const userFields = z.object({
 
 export function hasCrewLinkMatchingRole(value: {
   role: UserRole;
-  crewMemberId: string | null;
+  staffId: string | null;
 }): boolean {
-  return value.role === UserRole.CREW ? value.crewMemberId !== null : value.crewMemberId === null;
+  return value.role === UserRole.CREW ? value.staffId !== null : value.staffId === null;
 }
 
 export const CREW_LINK_MESSAGE =
@@ -60,7 +60,7 @@ export const createUserSchema = userFields
   .extend({ password: passwordSchema })
   .refine(hasCrewLinkMatchingRole, {
     message: CREW_LINK_MESSAGE,
-    path: ['crewMemberId'],
+    path: ['staffId'],
   });
 
 export type CreateUserInput = z.infer<typeof createUserSchema>;

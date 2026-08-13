@@ -28,7 +28,7 @@ let grossProfits: GrossProfitService;
 
 let adminId: string;
 let clientId: string;
-let crewMemberId: string;
+let staffId: string;
 let fuelCategoryId: string;
 
 /** Not `itest-`: see the note in liquidation-lifecycle.test.ts. */
@@ -85,10 +85,10 @@ beforeAll(async () => {
   if (!admin) throw new Error('Seed the database first: pnpm db:seed');
   adminId = admin.id;
 
-  const crew = await prisma.crewMember.findFirst({ where: { employeeCode: 'CRW-001' } });
+  const crew = await prisma.staff.findFirst({ where: { staffCode: 'CRW-001' } });
   const fuel = await prisma.expenseCategory.findFirst({ where: { code: 'FUEL' } });
   if (!crew || !fuel) throw new Error('Seed the database first: pnpm db:seed');
-  crewMemberId = crew.id;
+  staffId = crew.id;
   fuelCategoryId = fuel.id;
 
   const service = { client: prisma } as unknown as PrismaService;
@@ -120,7 +120,7 @@ beforeEach(async () => {
         shipmentNumber: id('SHP').toUpperCase(),
         status: ShipmentStatus.IN_TRANSIT,
         clientId,
-        driverId: crewMemberId,
+        driverId: staffId,
         origin: 'Manila',
         destination: 'Batangas',
         // 50,000 gross with a 5,000 broker cut leaves 45,000 net.
@@ -409,7 +409,7 @@ describe('gross profit', () => {
         data: {
           shipmentId: SHIPMENT_ID,
           liquidationId: account.id,
-          crewMemberId,
+          staffId,
           amount: '12000.0000',
           releasedBy: adminId,
           disbursementMode: 1,
@@ -461,7 +461,7 @@ describe('gross profit', () => {
       prisma.commission.create({
         data: {
           shipmentId: SHIPMENT_ID,
-          crewMemberId,
+          staffId,
           role: CrewRole.DRIVER,
           commissionableBase: '45000.0000',
           amount: '6750.0000',
@@ -519,7 +519,7 @@ describe('gross profit', () => {
       prisma.commission.create({
         data: {
           shipmentId: SHIPMENT_ID,
-          crewMemberId,
+          staffId,
           role: CrewRole.DRIVER,
           commissionableBase: '45000.0000',
           amount: '6750.0000',

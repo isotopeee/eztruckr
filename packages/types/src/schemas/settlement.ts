@@ -73,14 +73,14 @@ export type RecordSettlementInput = z.infer<typeof recordSettlementSchema>;
 /**
  * Recovering the balance from the crew's pay instead of in cash.
  *
- * `crewMemberId` is required and is not guessed. The settlement is per trip
+ * `staffId` is required and is not guessed. The settlement is per trip
  * because there is no honest way to attribute a returned amount to one release;
  * a payout deduction, by contrast, has to name a person, and the system does
  * not know which of the driver and the helper the company holds responsible.
  * Asking is the only answer that is not an invention.
  */
 export const carrySettlementToPayoutSchema = z.object({
-  crewMemberId: cuidSchema,
+  staffId: cuidSchema,
   /** Defaults to naming the shipment. Becomes the crew deduction's reason. */
   reason: optionalText(200),
 });

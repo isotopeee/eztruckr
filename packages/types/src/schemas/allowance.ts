@@ -34,8 +34,8 @@ export const allowanceSchema = auditFieldsSchema.extend({
    * custodian: a helper can be handed ferry money the driver stays answerable
    * for, and flattening the two would lose one of the facts.
    */
-  crewMemberId: z.string(),
-  crewMemberName: z.string().nullable(),
+  staffId: z.string(),
+  staffName: z.string().nullable(),
 
   amount: z.string(),
   issuedAt: z.string(),
@@ -73,7 +73,7 @@ export const issueAllowanceSchema = z.object({
    * shipment — so this never leaves the caller with nothing to name.
    */
   liquidationId: cuidSchema,
-  crewMemberId: cuidSchema,
+  staffId: cuidSchema,
   amount: releasedMoneySchema,
 
   /** Defaults to now, so a release can be recorded after the fact. */

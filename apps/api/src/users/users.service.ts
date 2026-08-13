@@ -103,7 +103,7 @@ export class UsersService {
       name: row.name,
       role: user.role,
       isActive: row.isActive,
-      crewMemberId: row.crewMemberId,
+      staffId: row.staffId,
       displayName: profile?.displayName ?? null,
     };
   }
@@ -123,7 +123,7 @@ export class UsersService {
    * behind as a usable login nobody meant to create.
    */
   async create(input: CreateUserInput): Promise<User> {
-    await this.assertCrewLinkIsUsable(input.role, input.crewMemberId);
+    await this.assertCrewLinkIsUsable(input.role, input.staffId);
 
     let createdId: string;
 
@@ -144,7 +144,7 @@ export class UsersService {
         where: { id: createdId },
         data: {
           role: input.role,
-          crewMemberId: input.crewMemberId,
+          staffId: input.staffId,
           isActive: input.isActive,
           // No outbound mail is configured, and an administrator handing over
           // credentials in person has already done the verifying.
@@ -168,17 +168,17 @@ export class UsersService {
 
     const merged = {
       role: input.role ?? current.role,
-      crewMemberId: input.crewMemberId === undefined ? current.crewMemberId : input.crewMemberId,
+      staffId: input.staffId === undefined ? current.staffId : input.staffId,
     };
 
     if (!hasCrewLinkMatchingRole(merged)) {
       throw new BadRequestException({
         message: 'Validation failed',
-        errors: [{ path: 'crewMemberId', message: CREW_LINK_MESSAGE }],
+        errors: [{ path: 'staffId', message: CREW_LINK_MESSAGE }],
       });
     }
 
-    await this.assertCrewLinkIsUsable(merged.role, merged.crewMemberId);
+    await this.assertCrewLinkIsUsable(merged.role, merged.staffId);
 
     return toUser(await this.users.update({ where: { id }, data: input }));
   }
@@ -230,19 +230,19 @@ export class UsersService {
    * only one login may point at each — the partial unique index enforces the
    * second half, but a clear message beats a 409 from an index name.
    */
-  private async assertCrewLinkIsUsable(role: UserRole, crewMemberId: string | null): Promise<void> {
-    if (role !== UserRole.CREW || !crewMemberId) {
+  private async assertCrewLinkIsUsable(role: UserRole, staffId: string | null): Promise<void> {
+    if (role !== UserRole.CREW || !staffId) {
       return;
     }
 
-    const crewMember = await this.prisma.client.crewMember.findFirst({
-      where: { id: crewMemberId },
+    const staff = await this.prisma.client.staff.findFirst({
+      where: { id: staffId },
     });
 
-    if (!crewMember) {
+    if (!staff) {
       throw new BadRequestException({
         message: 'Validation failed',
-        errors: [{ path: 'crewMemberId', message: `No crew member with id ${crewMemberId}` }],
+        errors: [{ path: 'staffId', message: `No crew member with id ${staffId}` }],
       });
     }
   }
@@ -260,7 +260,7 @@ function toUser(row: UserRow): User {
     role: row.role,
     isActive: row.isActive,
     emailVerified: row.emailVerified,
-    crewMemberId: row.crewMemberId,
+    staffId: row.staffId,
     lastLoginAt: dateToIso(row.lastLoginAt),
     ...auditFields(row),
   };

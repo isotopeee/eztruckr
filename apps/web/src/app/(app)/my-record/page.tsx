@@ -3,10 +3,10 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
-  CREW_ROLE_LABELS,
+  STAFF_ROLE_LABELS,
   LIQUIDATION_STATUS_LABELS,
   LiquidationStatus,
-  type CrewMember,
+  type Staff,
 } from '@eztruckr/types';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -25,17 +25,17 @@ import { useCurrentUser } from '@/lib/use-current-user';
  */
 export default function MyRecordPage() {
   const { user } = useCurrentUser();
-  const crewMemberId = user?.crewMemberId ?? null;
+  const staffId = user?.staffId ?? null;
 
   const record = useQuery({
-    queryKey: ['crew-members', crewMemberId],
-    queryFn: () => apiFetch<CrewMember>(`/crew-members/${crewMemberId}`),
-    enabled: !!crewMemberId,
+    queryKey: ['staff', staffId],
+    queryFn: () => apiFetch<Staff>(`/staff/${staffId}`),
+    enabled: !!staffId,
   });
 
   if (!user) return null;
 
-  if (!crewMemberId) {
+  if (!staffId) {
     return (
       <Card>
         <CardHeader>
@@ -69,7 +69,7 @@ export default function MyRecordPage() {
               </Badge>
             ) : null}
           </CardTitle>
-          <CardDescription>{record.data?.employeeCode}</CardDescription>
+          <CardDescription>{record.data?.staffCode}</CardDescription>
         </CardHeader>
         <CardContent>
           {record.isPending ? (
@@ -83,7 +83,7 @@ export default function MyRecordPage() {
           ) : record.data ? (
             <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2">
               <Row label="Eligible as">
-                {record.data.eligibleRoles.map((role) => CREW_ROLE_LABELS[role]).join(', ') || '—'}
+                {record.data.eligibleRoles.map((role) => STAFF_ROLE_LABELS[role]).join(', ') || '—'}
               </Row>
               <Row label="Phone">{record.data.phone ?? '—'}</Row>
               <Row label="Address">{record.data.address ?? '—'}</Row>

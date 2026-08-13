@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@eztruckr/db';
 import {
   isAllowanceOutstanding,
@@ -24,6 +19,7 @@ import type { RequestUser } from '../auth/request-user';
 import { auditFields, dateToIso } from '../master-data/serialize';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReceiptsService } from './receipts.service';
+import { assertMayHoldTripCash } from './trip-cash-participants';
 
 /**
  * What happened to the cash left over after a trip was liquidated.
@@ -139,7 +135,7 @@ export class SettlementService {
       );
     }
 
-    await this.assertWorkedTheTrip(current.shipmentId, input.crewMemberId);
+    await this.assertMayBeCharged(current.shipmentId, input.staffId);
 
     // Names the custodian as well as the trip. A deduction reading only
     // "shipment 20260813001" was unambiguous while a trip had one account; with
@@ -154,7 +150,7 @@ export class SettlementService {
     await this.prisma.client.$transaction(async (tx) => {
       const deduction = await tx.crewDeduction.create({
         data: {
-          crewMemberId: input.crewMemberId,
+          staffId: input.staffId,
           shipmentId: current.shipmentId,
           reason,
           amount: current.amount,
@@ -300,35 +296,28 @@ export class SettlementService {
   }
 
   /**
-   * The debt is charged to somebody who worked the trip.
+   * The debt is charged to somebody the trip's cash was actually with.
+   *
+   * The crew who worked it, or a dispatch manager who held its float — the same
+   * rule the custodian and the allowance recipient obey, asked once in
+   * `assertMayHoldTripCash`.
    *
    * Required rather than derived, and that is the point: the settlement is per
-   * trip because there is no honest way to attribute a returned amount to one
-   * release, while a deduction has to name a person. Defaulting to the driver
-   * would be the system inventing an answer to a question only the company can
-   * settle.
+   * account because there is no honest way to attribute a returned amount to
+   * one release, while a deduction has to name a person. Defaulting to the
+   * custodian would be the system inventing an answer to a question only the
+   * company can settle — being answerable for ACCOUNTING for cash is not the
+   * same as the company having decided to take it out of somebody's pay.
    */
-  private async assertWorkedTheTrip(shipmentId: string, crewMemberId: string): Promise<void> {
-    const shipment = await this.prisma.client.shipment.findFirst({
-      where: { id: shipmentId },
-      select: { shipmentNumber: true, driverId: true, helperId: true },
-    });
-
-    if (!shipment) {
-      throw new NotFoundException(`No shipment with id ${shipmentId}`);
-    }
-
-    if (shipment.driverId !== crewMemberId && shipment.helperId !== crewMemberId) {
-      throw new BadRequestException({
-        message: 'Validation failed',
-        errors: [
-          {
-            path: 'crewMemberId',
-            message: `That crew member did not work shipment ${shipment.shipmentNumber}, so this trip's balance cannot be recovered from their pay.`,
-          },
-        ],
-      });
-    }
+  private assertMayBeCharged(shipmentId: string, staffId: string): Promise<void> {
+    return assertMayHoldTripCash(
+      this.prisma,
+      shipmentId,
+      staffId,
+      'staffId',
+      (shipmentNumber) =>
+        `That person neither worked shipment ${shipmentNumber} nor is a dispatch manager, so this trip's balance cannot be recovered from their pay.`,
+    );
   }
 
   private async load(liquidationId: string): Promise<SettlementRow> {

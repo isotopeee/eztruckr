@@ -2,37 +2,37 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import type { Prisma } from '@eztruckr/db';
 import {
   hasLicenceIfDriver,
-  isCrewRole,
+  isStaffRole,
   LICENCE_REQUIRED_MESSAGE,
-  type CreateCrewMemberInput,
-  type CrewMember,
-  type CrewRole,
+  type CreateStaffInput,
+  type Staff,
+  type StaffRole,
   type MasterDataListQuery,
   type Page,
   type RemovalResult,
-  type UpdateCrewMemberInput,
+  type UpdateStaffInput,
 } from '@eztruckr/types';
 import { PrismaService } from '../prisma/prisma.service';
 import { removeRecord } from './removal';
 import { auditFields, dateToIso } from './serialize';
 
-type CrewMemberRow = Prisma.CrewMemberGetPayload<Record<string, never>>;
+type StaffRow = Prisma.StaffGetPayload<Record<string, never>>;
 
 @Injectable()
-export class CrewMembersService {
+export class StaffService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private get crew() {
-    return this.prisma.client.crewMember;
+  private get staff() {
+    return this.prisma.client.staff;
   }
 
-  async list(query: MasterDataListQuery): Promise<Page<CrewMember>> {
-    const where: Prisma.CrewMemberWhereInput = {
+  async list(query: MasterDataListQuery): Promise<Page<Staff>> {
+    const where: Prisma.StaffWhereInput = {
       ...(query.includeInactive ? {} : { isActive: true }),
       ...(query.search
         ? {
             OR: [
-              { employeeCode: { contains: query.search, mode: 'insensitive' } },
+              { staffCode: { contains: query.search, mode: 'insensitive' } },
               { firstName: { contains: query.search, mode: 'insensitive' } },
               { lastName: { contains: query.search, mode: 'insensitive' } },
               { phone: { contains: query.search, mode: 'insensitive' } },
@@ -42,32 +42,32 @@ export class CrewMembersService {
     };
 
     const [rows, total] = await Promise.all([
-      this.crew.findMany({
+      this.staff.findMany({
         where,
         orderBy: [{ isActive: 'desc' }, { lastName: 'asc' }, { firstName: 'asc' }],
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
       }),
-      this.crew.count({ where }),
+      this.staff.count({ where }),
     ]);
 
-    return { items: rows.map(toCrewMember), total, page: query.page, pageSize: query.pageSize };
+    return { items: rows.map(toStaff), total, page: query.page, pageSize: query.pageSize };
   }
 
-  async get(id: string): Promise<CrewMember> {
-    const row = await this.crew.findFirst({ where: { id } });
+  async get(id: string): Promise<Staff> {
+    const row = await this.staff.findFirst({ where: { id } });
 
     if (!row) {
-      throw new NotFoundException(`No crew member with id ${id}`);
+      throw new NotFoundException(`No staff member with id ${id}`);
     }
 
-    return toCrewMember(row);
+    return toStaff(row);
   }
 
-  async create(input: CreateCrewMemberInput): Promise<CrewMember> {
-    const row = await this.crew.create({
+  async create(input: CreateStaffInput): Promise<Staff> {
+    const row = await this.staff.create({
       data: {
-        employeeCode: input.employeeCode,
+        staffCode: input.staffCode,
         firstName: input.firstName,
         lastName: input.lastName,
         phone: input.phone,
@@ -80,7 +80,7 @@ export class CrewMembersService {
       },
     });
 
-    return toCrewMember(row);
+    return toStaff(row);
   }
 
   /**
@@ -91,7 +91,7 @@ export class CrewMembersService {
    * adding DRIVER eligibility to an existing helper would slip through with no
    * licence on file.
    */
-  async update(id: string, input: UpdateCrewMemberInput): Promise<CrewMember> {
+  async update(id: string, input: UpdateStaffInput): Promise<Staff> {
     const current = await this.get(id);
 
     const merged = {
@@ -107,7 +107,7 @@ export class CrewMembersService {
       });
     }
 
-    const row = await this.crew.update({
+    const row = await this.staff.update({
       where: { id },
       data: {
         ...input,
@@ -115,11 +115,11 @@ export class CrewMembersService {
       },
     });
 
-    return toCrewMember(row);
+    return toStaff(row);
   }
 
   /**
-   * A crew member who has driven, been paid or owed anything is permanently
+   * A staff member who has driven, been paid or owed anything is permanently
    * part of that record. In practice almost every removal here lands on
    * DEACTIVATED, which is the correct state for someone who has left.
    */
@@ -137,39 +137,48 @@ export class CrewMembersService {
         },
         {
           entity: 'commissions',
-          count: () => client.commission.count({ where: { crewMemberId: id } }),
+          count: () => client.commission.count({ where: { staffId: id } }),
         },
         {
           entity: 'allowances',
-          count: () => client.allowance.count({ where: { crewMemberId: id } }),
+          count: () => client.allowance.count({ where: { staffId: id } }),
         },
         {
           entity: 'deductions',
-          count: () => client.crewDeduction.count({ where: { crewMemberId: id } }),
+          count: () => client.crewDeduction.count({ where: { staffId: id } }),
         },
         {
           entity: 'adjustments',
-          count: () => client.adjustment.count({ where: { crewMemberId: id } }),
+          count: () => client.adjustment.count({ where: { staffId: id } }),
         },
         {
           entity: 'payout lines',
-          count: () => client.payoutLine.count({ where: { crewMemberId: id } }),
+          count: () => client.payoutLine.count({ where: { staffId: id } }),
+        },
+        {
+          // Trips whose cash this person is answerable for. Missing until now:
+          // the column arrived with per-custodian liquidations and this list is
+          // enumerated by hand, one probe per relation. A soft delete does not
+          // fire the ON DELETE RESTRICT foreign key, so without this probe the
+          // person simply vanished from a liquidation that still named them.
+          entity: 'liquidations held',
+          count: () => client.liquidation.count({ where: { custodianId: id } }),
         },
         {
           entity: 'portal logins',
-          count: () => client.user.count({ where: { crewMemberId: id } }),
+          count: () => client.user.count({ where: { staffId: id } }),
         },
       ],
-      deactivate: () => this.crew.update({ where: { id }, data: { isActive: false } }),
-      softDelete: () => this.crew.softDelete({ id }),
+      deactivate: () => this.staff.update({ where: { id }, data: { isActive: false } }),
+      softDelete: () => this.staff.softDelete({ id }),
     });
   }
 }
 
-function toCrewMember(row: CrewMemberRow): CrewMember {
+function toStaff(row: StaffRow): Staff {
   return {
     id: row.id,
-    employeeCode: row.employeeCode,
+    staffCode: row.staffCode,
     firstName: row.firstName,
     lastName: row.lastName,
     phone: row.phone,
@@ -179,7 +188,7 @@ function toCrewMember(row: CrewMemberRow): CrewMember {
     // The column is SMALLINT[]; a value outside the code set means the array
     // CHECK constraint was bypassed, so drop it rather than hand the UI a code
     // it has no label for.
-    eligibleRoles: row.eligibleRoles.filter((role): role is CrewRole => isCrewRole(role)),
+    eligibleRoles: row.eligibleRoles.filter((role): role is StaffRole => isStaffRole(role)),
     licenseNumber: row.licenseNumber,
     licenseExpiry: dateToIso(row.licenseExpiry),
     ...auditFields(row),

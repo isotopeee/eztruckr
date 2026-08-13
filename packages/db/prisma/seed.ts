@@ -1,4 +1,4 @@
-import { CommissionMethod, CrewRole, UserRole } from '@eztruckr/types';
+import { CommissionMethod, CrewRole, StaffRole, UserRole } from '@eztruckr/types';
 import { hashPassword } from 'better-auth/crypto';
 import { withActor } from '../src/actor-context';
 import { createPrismaClient } from '../src/prisma-client';
@@ -34,7 +34,7 @@ const ADMIN_EMAIL = 'admin@eztruckr.ph';
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'eztruckr-dev-admin';
 
 /**
- * The crew member who gets a portal login, by employee code.
+ * The staff member who gets a portal login, by staff code.
  *
  * ONE OF THEM, not all four, and that is the point of the fixture: the crew
  * portal's whole job is showing a signed-in person their own records and
@@ -43,7 +43,7 @@ const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'eztruckr-dev-admin';
  * file, so he also exercises the case where the crew scoping has to hold for
  * someone who can never be the driver.
  */
-const CREW_LOGIN_EMPLOYEE_CODE = 'CRW-003';
+const CREW_LOGIN_STAFF_CODE = 'CRW-003';
 const CREW_LOGIN_EMAIL = 'joel.bautista@eztruckr.ph';
 const CREW_PASSWORD = process.env.SEED_CREW_PASSWORD ?? 'eztruckr-dev-crew';
 
@@ -133,9 +133,9 @@ const TRUCKS = [
   },
 ];
 
-const CREW_MEMBERS = [
+const STAFF = [
   {
-    employeeCode: 'CRW-001',
+    staffCode: 'CRW-001',
     firstName: 'Ricardo',
     lastName: 'Dela Cruz',
     phone: '+63 917 555 0101',
@@ -144,7 +144,7 @@ const CREW_MEMBERS = [
     licenseExpiry: new Date('2028-04-30T00:00:00Z'),
   },
   {
-    employeeCode: 'CRW-002',
+    staffCode: 'CRW-002',
     firstName: 'Ernesto',
     lastName: 'Ramos',
     phone: '+63 918 555 0102',
@@ -153,7 +153,7 @@ const CREW_MEMBERS = [
     licenseExpiry: new Date('2027-11-15T00:00:00Z'),
   },
   {
-    employeeCode: 'CRW-003',
+    staffCode: 'CRW-003',
     firstName: 'Joel',
     lastName: 'Bautista',
     phone: '+63 919 555 0103',
@@ -163,11 +163,23 @@ const CREW_MEMBERS = [
     licenseExpiry: null,
   },
   {
-    employeeCode: 'CRW-004',
+    staffCode: 'CRW-004',
     firstName: 'Michael',
     lastName: 'Santos',
     phone: '+63 920 555 0104',
     eligibleRoles: [CrewRole.HELPER],
+    licenseNumber: null,
+    licenseExpiry: null,
+  },
+  {
+    // Office, not crew: never in a shipment slot, never on a commission, and
+    // deliberately without a licence. She is here so a trip's float can be
+    // handed to somebody who is answerable for it without driving it.
+    staffCode: 'OPS-001',
+    firstName: 'Marites',
+    lastName: 'Reyes',
+    phone: '+63 921 555 0105',
+    eligibleRoles: [StaffRole.DISPATCH_MANAGER],
     licenseNumber: null,
     licenseExpiry: null,
   },
@@ -279,11 +291,11 @@ async function seedMasterData() {
     if (!existing) await prisma.truck.create({ data: truck });
   }
 
-  for (const crew of CREW_MEMBERS) {
-    const existing = await prisma.crewMember.findFirst({
-      where: { employeeCode: crew.employeeCode },
+  for (const crew of STAFF) {
+    const existing = await prisma.staff.findFirst({
+      where: { staffCode: crew.staffCode },
     });
-    if (!existing) await prisma.crewMember.create({ data: crew });
+    if (!existing) await prisma.staff.create({ data: crew });
   }
 
   for (const client of CLIENTS) {
@@ -316,35 +328,35 @@ async function seedMasterData() {
 /**
  * A working crew login, linked to the crew member it speaks for.
  *
- * `crewMemberId` is the whole account. Every crew-facing query filters on it,
+ * `staffId` is the whole account. Every crew-facing query filters on it,
  * and the API refuses outright — rather than returning an unfiltered list —
  * when a CREW user has none, so a crew login without the link is a broken
  * account rather than a permissive one. That is why this runs after the crew
  * members exist and reads the id back rather than assuming one.
  *
  * Created directly through Prisma rather than through the API's `signUpEmail`
- * path, because that path deliberately cannot set `role` or `crewMemberId` —
+ * path, because that path deliberately cannot set `role` or `staffId` —
  * they are `input: false` in the Better Auth config, which is what stops a
  * request body choosing its own privileges. The seed is not a request.
  */
 async function seedCrewLogin() {
-  const crewMember = await prisma.crewMember.findFirst({
-    where: { employeeCode: CREW_LOGIN_EMPLOYEE_CODE },
+  const staffMember = await prisma.staff.findFirst({
+    where: { staffCode: CREW_LOGIN_STAFF_CODE },
   });
 
-  if (!crewMember) {
-    throw new Error(`Crew member ${CREW_LOGIN_EMPLOYEE_CODE} is missing; cannot seed its login`);
+  if (!staffMember) {
+    throw new Error(`Crew member ${CREW_LOGIN_STAFF_CODE} is missing; cannot seed its login`);
   }
 
-  const name = `${crewMember.firstName} ${crewMember.lastName}`;
+  const name = `${staffMember.firstName} ${staffMember.lastName}`;
 
-  // Keyed on `crewMemberId`, not on the email. That column is what the partial
+  // Keyed on `staffId`, not on the email. That column is what the partial
   // unique index constrains and what every crew-facing query filters on, so it
   // is the honest answer to "does this crew member already have a login" — an
   // email lookup would miss one created under a different address and then
   // fail on the index instead of finding it. A login provisioned by hand in
   // development is exactly that case.
-  const existing = await prisma.user.findFirst({ where: { crewMemberId: crewMember.id } });
+  const existing = await prisma.user.findFirst({ where: { staffId: staffMember.id } });
 
   const user =
     existing ??
@@ -353,7 +365,7 @@ async function seedCrewLogin() {
         email: CREW_LOGIN_EMAIL,
         name,
         role: UserRole.CREW,
-        crewMemberId: crewMember.id,
+        staffId: staffMember.id,
         emailVerified: true,
       },
     }));
@@ -374,7 +386,7 @@ async function seedCrewLogin() {
   const profile = await prisma.userProfile.findFirst({ where: { userId: user.id } });
   if (!profile) {
     await prisma.userProfile.create({
-      data: { userId: user.id, displayName: name, phone: crewMember.phone },
+      data: { userId: user.id, displayName: name, phone: staffMember.phone },
     });
   }
 
@@ -412,7 +424,7 @@ async function main() {
     const counts = {
       users: await prisma.user.count(),
       trucks: await prisma.truck.count(),
-      crewMembers: await prisma.crewMember.count(),
+      staff: await prisma.staff.count(),
       clients: await prisma.client.count(),
       thirdParties: await prisma.thirdParty.count(),
       routes: await prisma.route.count(),
@@ -426,7 +438,7 @@ async function main() {
       admin.email,
       `(createdBy=${String(admin.createdBy)} — bootstrap)`,
     );
-    console.warn('[seed] crew:', crew.email, `(crewMemberId=${String(crew.crewMemberId)})`);
+    console.warn('[seed] crew:', crew.email, `(staffId=${String(crew.staffId)})`);
     console.warn('[seed] gasExpenseDeductionRate:', setting.gasExpenseDeductionRate.toString());
     console.warn('[seed] counts:', counts);
   });

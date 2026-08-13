@@ -54,7 +54,7 @@ export class ShipmentsController {
    * A crew session is confined to its own trips here, server-side.
    *
    * The filter is overwritten rather than validated, so a crew member passing
-   * someone else's `crewMemberId` gets their own list rather than an error —
+   * someone else's `staffId` gets their own list rather than an error —
    * there is no query string that widens it. This is the hard requirement from
    * the brief, and it is enforced at the only place that can enforce it: where
    * the session is known.
@@ -172,7 +172,7 @@ export class ShipmentsController {
     // A crew member sees their own pay on a shared trip, never their
     // colleague's.
     return user.role === UserRole.CREW
-      ? commissions.filter((row) => row.crewMemberId === user.crewMemberId)
+      ? commissions.filter((row) => row.staffId === user.staffId)
       : commissions;
   }
 
@@ -202,7 +202,7 @@ export class ShipmentsController {
     const lines = await this.adjustments.crewPayForShipment(id);
 
     return user.role === UserRole.CREW
-      ? lines.filter((line) => line.crewMemberId === user.crewMemberId)
+      ? lines.filter((line) => line.staffId === user.staffId)
       : lines;
   }
 
@@ -213,13 +213,13 @@ export class ShipmentsController {
       return query;
     }
 
-    if (!user.crewMemberId) {
+    if (!user.staffId) {
       // A crew login with no crew member is a broken account, not an
       // unfiltered one. Refusing beats returning the whole table.
       throw new ForbiddenException('This crew account is not linked to a crew member.');
     }
 
-    return { ...query, crewMemberId: user.crewMemberId };
+    return { ...query, staffId: user.staffId };
   }
 
   private assertCrewMayRead(shipment: Shipment, user: RequestUser): void {
@@ -228,8 +228,8 @@ export class ShipmentsController {
     }
 
     const worked =
-      user.crewMemberId !== null &&
-      (shipment.driverId === user.crewMemberId || shipment.helperId === user.crewMemberId);
+      user.staffId !== null &&
+      (shipment.driverId === user.staffId || shipment.helperId === user.staffId);
 
     if (!worked) {
       // Deliberately the same shape as a missing record: confirming that a

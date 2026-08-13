@@ -6,7 +6,7 @@ import {
   PASSWORD_MIN_LENGTH,
   USER_ROLE_LABELS,
   UserRole,
-  type CrewMember,
+  type Staff,
   type Page,
   type RemovalResult,
   type User,
@@ -66,14 +66,14 @@ export default function UsersPage() {
   // guarantee, and offering a taken one would produce a 409 the user cannot
   // act on.
   const crew = useQuery({
-    queryKey: ['crew-members', 'for-linking'],
-    queryFn: () => apiFetch<Page<CrewMember>>('/crew-members?pageSize=200'),
+    queryKey: ['staff', 'for-linking'],
+    queryFn: () => apiFetch<Page<Staff>>('/staff?pageSize=200'),
   });
 
-  const linkedCrewIds = new Set(
+  const linkedStaffIds = new Set(
     (users.data?.items ?? [])
-      .filter((user) => user.crewMemberId && user.id !== editing?.id)
-      .map((user) => user.crewMemberId),
+      .filter((user) => user.staffId && user.id !== editing?.id)
+      .map((user) => user.staffId),
   );
 
   const fields: FieldSpec[] = [
@@ -98,14 +98,14 @@ export default function UsersPage() {
       })),
     },
     {
-      name: 'crewMemberId',
+      name: 'staffId',
       label: 'Linked crew member',
       type: 'select',
       options: (crew.data?.items ?? [])
-        .filter((member) => !linkedCrewIds.has(member.id))
+        .filter((member) => !linkedStaffIds.has(member.id))
         .map((member) => ({
           value: member.id,
-          label: `${member.employeeCode} — ${member.lastName}, ${member.firstName}`,
+          label: `${member.staffCode} — ${member.lastName}, ${member.firstName}`,
         })),
       help: 'Required for a crew login, and forbidden for any other role.',
     },
@@ -126,7 +126,7 @@ export default function UsersPage() {
       const body = JSON.stringify({
         ...payload,
         role: payload.role ? Number(payload.role) : undefined,
-        crewMemberId: payload.crewMemberId ? payload.crewMemberId : null,
+        staffId: payload.staffId ? payload.staffId : null,
         isActive: payload.isActive === true,
       });
 
@@ -231,7 +231,7 @@ export default function UsersPage() {
                   <TableCell>{user.email}</TableCell>
                   <TableCell>{USER_ROLE_LABELS[user.role]}</TableCell>
                   <TableCell>
-                    {user.crewMemberId ? crewLabel(crew.data?.items ?? [], user.crewMemberId) : '—'}
+                    {user.staffId ? crewLabel(crew.data?.items ?? [], user.staffId) : '—'}
                   </TableCell>
                   <TableCell>
                     {user.lastLoginAt ? formatDateTime(user.lastLoginAt) : 'Never'}
@@ -259,7 +259,7 @@ export default function UsersPage() {
                           email: user.email,
                           name: user.name,
                           role: String(user.role),
-                          crewMemberId: user.crewMemberId ?? '',
+                          staffId: user.staffId ?? '',
                           isActive: user.isActive,
                         });
                         setEditing(user);
@@ -393,7 +393,7 @@ export default function UsersPage() {
   );
 }
 
-function crewLabel(members: CrewMember[], id: string): string {
+function crewLabel(members: Staff[], id: string): string {
   const member = members.find((entry) => entry.id === id);
-  return member ? member.employeeCode : id.slice(0, 8);
+  return member ? member.staffCode : id.slice(0, 8);
 }

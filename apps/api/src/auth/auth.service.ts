@@ -77,7 +77,7 @@ export class AuthService {
       name: user.name,
       role: user.role,
       isActive: user.isActive !== false,
-      crewMemberId: user.crewMemberId ?? null,
+      staffId: user.staffId ?? null,
     };
   }
 }

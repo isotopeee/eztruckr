@@ -108,9 +108,7 @@ export class ShipmentsService {
       ...(query.clientId ? { clientId: query.clientId } : {}),
       // One filter for "trips this person worked", either slot. The crew
       // portal relies on this, so it is scoped server-side by the controller.
-      ...(query.crewMemberId
-        ? { OR: [{ driverId: query.crewMemberId }, { helperId: query.crewMemberId }] }
-        : {}),
+      ...(query.staffId ? { OR: [{ driverId: query.staffId }, { helperId: query.staffId }] } : {}),
       ...(query.search
         ? {
             OR: [
@@ -703,9 +701,9 @@ export class ShipmentsService {
    * has not expired. The licence columns are nullable precisely because they
    * are required at this moment and not before: a helper never needs one.
    */
-  private async assertEligible(crewMemberId: string, role: CrewRole): Promise<void> {
-    const crew = await this.prisma.client.crewMember.findFirst({
-      where: { id: crewMemberId },
+  private async assertEligible(staffId: string, role: CrewRole): Promise<void> {
+    const crew = await this.prisma.client.staff.findFirst({
+      where: { id: staffId },
       select: {
         firstName: true,
         lastName: true,
@@ -719,7 +717,7 @@ export class ShipmentsService {
     const field = role === CrewRole.DRIVER ? 'driverId' : 'helperId';
 
     if (!crew) {
-      throw badRequest(field, `No crew member with id ${crewMemberId}`);
+      throw badRequest(field, `No crew member with id ${staffId}`);
     }
 
     const name = `${crew.firstName} ${crew.lastName}`;

@@ -36,7 +36,7 @@ import {
 } from '@/lib/liquidation-api';
 import { shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { crewOnTrip } from './trip-crew';
+import { useTripCashHolders } from './trip-cash-holders';
 import { ReceiptField } from './receipt-field';
 
 /**
@@ -238,7 +238,7 @@ function SettleForm({
   const carry = useMutation({
     mutationFn: () =>
       carrySettlementToPayout(settlement.liquidationId, {
-        crewMemberId: carryTo,
+        staffId: carryTo,
         reason: null,
       }),
     onSuccess: () => {
@@ -248,7 +248,7 @@ function SettleForm({
     onError: reportFailure,
   });
 
-  const crew = crewOnTrip(shipment);
+  const crew = useTripCashHolders(shipment);
 
   return (
     <div className="space-y-4 border-t pt-4">
@@ -326,6 +326,7 @@ function SettleForm({
                 {crew.map((member) => (
                   <SelectItem key={member.id} value={member.id}>
                     {member.name}
+                    {member.note ? ` · ${member.note}` : ''}
                   </SelectItem>
                 ))}
               </SelectContent>

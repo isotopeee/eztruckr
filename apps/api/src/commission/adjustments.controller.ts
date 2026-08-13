@@ -24,7 +24,7 @@ import {
  * Increases and decreases to crew pay.
  *
  * ONE RESOURCE, FILTERED — not `/shipments/:id/adjustments` and
- * `/crew-members/:id/adjustments` as two paths to the same rows. An adjustment
+ * `/staff/:id/adjustments` as two paths to the same rows. An adjustment
  * belongs to a crew member and OPTIONALLY to a trip, so a nested path would
  * have no home for the standing case and would invite a second service to
  * grow behind it.
@@ -78,12 +78,12 @@ export class AdjustmentsController {
       return query;
     }
 
-    if (!user.crewMemberId) {
+    if (!user.staffId) {
       // A crew login with no crew member is a broken account, not an
       // unfiltered one. Refusing beats returning everybody's pay changes.
       throw new ForbiddenException('This crew account is not linked to a crew member.');
     }
 
-    return { ...query, crewMemberId: user.crewMemberId };
+    return { ...query, staffId: user.staffId };
   }
 }

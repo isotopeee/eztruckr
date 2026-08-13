@@ -6,7 +6,9 @@ import {
   type ExtendedPrismaClient,
 } from '@eztruckr/db';
 import {
+  CommissionMethod,
   CrewRole,
+  StaffRole,
   DisbursementMode,
   LiquidationHistoryAction,
   LiquidationStatus,
@@ -19,6 +21,7 @@ import type { RequestUser } from '../auth/request-user';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { StorageService } from '../storage/storage.service';
 import { ShipmentsService } from '../shipments/shipments.service';
+import { StaffService } from '../master-data/staff.service';
 import { AllowancesService } from './allowances.service';
 import { LiquidationService } from './liquidation.service';
 import { ReceiptsService } from './receipts.service';
@@ -47,6 +50,7 @@ let allowances: AllowancesService;
 let settlements: SettlementService;
 let receipts: ReceiptsService;
 let shipments: ShipmentsService;
+let staff: StaffService;
 let storage: { removed: string[]; service: StorageService };
 
 let adminId: string;
@@ -54,6 +58,7 @@ let actor: RequestUser;
 let clientId: string;
 let driverId: string;
 let helperId: string;
+let dispatcherId: string;
 let fuelCategoryId: string;
 
 /**
@@ -106,6 +111,7 @@ function serviceStubs(client: ExtendedPrismaClient, storage: StorageService) {
     // The close guard lives here, and it is the one caller that has to know
     // about EVERY account on a trip rather than one of them.
     shipments: new ShipmentsService(prismaService),
+    staff: new StaffService(prismaService),
   };
 }
 
@@ -136,7 +142,7 @@ const CLEANUP_STATEMENTS = [
      (SELECT id FROM "liquidation")`,
   `DELETE FROM "shipment" WHERE id LIKE '${PREFIX}%'`,
   `DELETE FROM "expense_category" WHERE id LIKE '${PREFIX}%'`,
-  `DELETE FROM "crew_member" WHERE id LIKE '${PREFIX}%'`,
+  `DELETE FROM "staff" WHERE id LIKE '${PREFIX}%'`,
   `DELETE FROM "client" WHERE id LIKE '${PREFIX}%'`,
 ];
 
@@ -174,11 +180,11 @@ beforeAll(async () => {
     name: admin.name,
     role: UserRole.ADMINISTRATOR,
     isActive: true,
-    crewMemberId: null,
+    staffId: null,
   };
 
   storage = recordingStorage();
-  ({ liquidations, allowances, settlements, receipts, shipments } = serviceStubs(
+  ({ liquidations, allowances, settlements, receipts, shipments, staff } = serviceStubs(
     prisma,
     storage.service,
   ));
@@ -191,10 +197,10 @@ beforeAll(async () => {
     });
     clientId = client.id;
 
-    const driver = await prisma.crewMember.create({
+    const driver = await prisma.staff.create({
       data: {
         id: id('driver'),
-        employeeCode: id('CREW').toUpperCase(),
+        staffCode: id('CREW').toUpperCase(),
         firstName: 'Test',
         lastName: 'Driver',
         eligibleRoles: [CrewRole.DRIVER],
@@ -202,12 +208,25 @@ beforeAll(async () => {
     });
     driverId = driver.id;
 
+    // Office staff, in no slot on any trip and eligible for no crew role at
+    // all. Everything about them is the case `crew_member` could not express.
+    const dispatcher = await prisma.staff.create({
+      data: {
+        id: id('dispatcher'),
+        staffCode: id('OPS').toUpperCase(),
+        firstName: 'Test',
+        lastName: 'Dispatcher',
+        eligibleRoles: [StaffRole.DISPATCH_MANAGER],
+      },
+    });
+    dispatcherId = dispatcher.id;
+
     // A second person on the truck, which is what the whole per-custodian
     // change exists for: two people holding cash on one trip.
-    const helper = await prisma.crewMember.create({
+    const helper = await prisma.staff.create({
       data: {
         id: id('helper'),
-        employeeCode: id('CREW2').toUpperCase(),
+        staffCode: id('CREW2').toUpperCase(),
         firstName: 'Test',
         lastName: 'Helper',
         eligibleRoles: [CrewRole.HELPER],
@@ -266,7 +285,7 @@ async function deliveredTrip(suffix: string, advance: string) {
       shipmentId,
       {
         liquidationId,
-        crewMemberId: driverId,
+        staffId: driverId,
         amount: advance,
         issuedAt: null,
         disbursementMode: DisbursementMode.CASH,
@@ -316,7 +335,7 @@ async function tripWithTwoAccounts(suffix: string) {
       custodianId: helperId,
     });
 
-    for (const [liquidationId, crewMemberId, amount] of [
+    for (const [liquidationId, staffId, amount] of [
       [openedAtBooking, driverId, '10000.00'],
       [helperAccount.id, helperId, '3000.00'],
     ] as const) {
@@ -324,7 +343,7 @@ async function tripWithTwoAccounts(suffix: string) {
         shipmentId,
         {
           liquidationId,
-          crewMemberId,
+          staffId,
           amount,
           issuedAt: null,
           disbursementMode: DisbursementMode.CASH,
@@ -362,14 +381,14 @@ async function validationMessage(fn: () => Promise<unknown>): Promise<string> {
 }
 
 /** A crew session, which is what the narrowed scoping rules are about. */
-function crewActor(crewMemberId: string): RequestUser {
+function crewActor(staffId: string): RequestUser {
   return {
     id: adminId,
     email: 'crew@eztruckr.ph',
     name: 'Crew',
     role: UserRole.CREW,
     isActive: true,
-    crewMemberId,
+    staffId,
   };
 }
 
@@ -417,7 +436,7 @@ describe('a liquidation exists from the moment of delivery', () => {
         shipmentId,
         {
           liquidationId,
-          crewMemberId: driverId,
+          staffId: driverId,
           amount: '1500.00',
           issuedAt: null,
           disbursementMode: DisbursementMode.EWALLET,
@@ -617,7 +636,7 @@ describe('an approved liquidation does not mean the cash came back', () => {
     await act(async () => liquidations.approve(liquidationId, { remarks: null }, actor));
 
     const carried = await act(async () =>
-      settlements.carryToPayout(liquidationId, { crewMemberId: driverId, reason: null }),
+      settlements.carryToPayout(liquidationId, { staffId: driverId, reason: null }),
     );
 
     expect(carried.status).toBe(SettlementStatus.CARRIED_TO_PAYOUT);
@@ -629,7 +648,7 @@ describe('an approved liquidation does not mean the cash came back', () => {
       where: { id: carried.crewDeductionId ?? '' },
     });
     expect(deduction?.amount.toString()).toBe('2000');
-    expect(deduction?.crewMemberId).toBe(driverId);
+    expect(deduction?.staffId).toBe(driverId);
     expect(deduction?.shipmentId).toBe(shipmentId);
   });
 
@@ -648,7 +667,7 @@ describe('an approved liquidation does not mean the cash came back', () => {
 
     await expect(
       act(async () =>
-        settlements.carryToPayout(liquidationId, { crewMemberId: driverId, reason: null }),
+        settlements.carryToPayout(liquidationId, { staffId: driverId, reason: null }),
       ),
     ).rejects.toThrow(/money owed to the crew/i);
   });
@@ -670,7 +689,7 @@ describe('approval is the lock, and reversing it is a reasoned act', () => {
           shipmentId,
           {
             liquidationId,
-            crewMemberId: driverId,
+            staffId: driverId,
             amount: '500.00',
             issuedAt: null,
             disbursementMode: DisbursementMode.CASH,
@@ -893,7 +912,7 @@ describe('two people holding cash on one trip', () => {
         shipmentId,
         {
           liquidationId: helperAccountId,
-          crewMemberId: helperId,
+          staffId: helperId,
           amount: '600.00',
           issuedAt: null,
           disbursementMode: DisbursementMode.CASH,
@@ -996,7 +1015,7 @@ describe('the constraints hold when the service is bypassed', () => {
           data: {
             shipmentId: mine.shipmentId,
             liquidationId: theirs.liquidationId,
-            crewMemberId: driverId,
+            staffId: driverId,
             amount: '500.00',
             issuedAt: new Date(),
             disbursementMode: DisbursementMode.CASH,
@@ -1042,16 +1061,181 @@ describe('the constraints hold when the service is bypassed', () => {
   it('refuses a custodian who never worked the trip', async () => {
     if (!available) return;
 
-    // This trip has a driver and no helper, so the helper is a crew member who
-    // exists and was never on it — being answerable for cash you never held is
-    // either a typo or a problem.
+    // This trip has a driver and no helper, so the helper is a staff member who
+    // exists, is not a dispatch manager, and was never on it — being answerable
+    // for cash you never held is either a typo or a problem.
     const { shipmentId } = await deliveredTrip('outsider-custodian', '1000.00');
 
     const refusal = await validationMessage(() =>
       act(async () => liquidations.createForShipment(shipmentId, { custodianId: helperId })),
     );
 
-    expect(refusal).toMatch(/custodianId: .*not assigned to shipment/i);
+    expect(refusal).toMatch(/custodianId: .*neither worked shipment .* nor is a dispatch manager/i);
+  });
+});
+
+/**
+ * The dispatch manager: somebody the trip's cash is with who never rode on it.
+ *
+ * The case the `crew_member` table could not hold at all. Every assertion here
+ * turns on the SAME person being refused a commission while being trusted with
+ * the money — which is the whole reason `StaffRole` is a superset of `CrewRole`
+ * rather than the same set with a value appended.
+ */
+describe('a dispatch manager holds cash without being on the truck', () => {
+  /**
+   * The regression this exists for was invisible to the type system and to
+   * every test: `toStaff` filtered `eligibleRoles` through `isCrewRole`, which
+   * had stopped meaning "a valid role" the moment the two code sets split. It
+   * typechecks — `CrewRole` is assignable to `StaffRole` — and it silently
+   * served the dispatch manager with an EMPTY role list, so every picker that
+   * looks for DISPATCH_MANAGER quietly offered nobody. Only driving the running
+   * stack found it.
+   */
+  it('survives the round trip through the API with its role intact', async () => {
+    if (!available) return;
+
+    const served = await act(async () => staff.get(dispatcherId));
+
+    expect(served.eligibleRoles).toEqual([StaffRole.DISPATCH_MANAGER]);
+    expect(served.licenseNumber).toBeNull();
+  });
+
+  it('may be made custodian of a trip they are not assigned to', async () => {
+    if (!available) return;
+
+    const { shipmentId } = await deliveredTrip('dispatch-custodian', '2000.00');
+
+    // Not the driver, not the helper, and not in any slot on this shipment.
+    const account = await act(async () =>
+      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId }),
+    );
+
+    expect(account.custodianName).toBe('Test Dispatcher');
+
+    const shipment = await prisma.shipment.findFirst({
+      where: { id: shipmentId },
+      select: { driverId: true, helperId: true },
+    });
+    expect(shipment?.driverId).not.toBe(dispatcherId);
+    expect(shipment?.helperId).not.toBe(dispatcherId);
+  });
+
+  it('may be handed the float, and account for it like anyone else', async () => {
+    if (!available) return;
+
+    const { shipmentId } = await deliveredTrip('dispatch-float', '1000.00');
+
+    const account = await act(async () =>
+      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId }),
+    );
+
+    // Received BY them and booked AGAINST them: they are physically holding it.
+    const release = await act(async () =>
+      allowances.issue(
+        shipmentId,
+        {
+          liquidationId: account.id,
+          staffId: dispatcherId,
+          amount: '5000.00',
+          issuedAt: null,
+          disbursementMode: DisbursementMode.CASH,
+          referenceNumber: null,
+          receiptId: null,
+          releasedBy: null,
+          remarks: 'Trip float',
+        },
+        actor,
+      ),
+    );
+
+    expect(release.staffName).toBe('Test Dispatcher');
+    expect(release.custodianName).toBe('Test Dispatcher');
+
+    await addLine(account.id, '3800.00');
+    await act(async () => liquidations.submit(account.id, { remarks: null }, actor));
+    const approved = await act(async () =>
+      liquidations.approve(account.id, { remarks: null }, actor),
+    );
+
+    expect(approved.variance).toBe('1200');
+
+    // And the alert names them, which is the point of the custodian existing.
+    const report = await settlements.outstanding();
+    const mine = report.items.filter((item) => item.shipmentId === shipmentId);
+    expect(mine.map((item) => item.custodianName)).toEqual(['Test Dispatcher']);
+  });
+
+  it('can have their balance carried to payout, like any other debt', async () => {
+    if (!available) return;
+
+    const { shipmentId } = await deliveredTrip('dispatch-carry', '1000.00');
+
+    const account = await act(async () =>
+      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId }),
+    );
+
+    await act(async () =>
+      allowances.issue(
+        shipmentId,
+        {
+          liquidationId: account.id,
+          staffId: dispatcherId,
+          amount: '4000.00',
+          issuedAt: null,
+          disbursementMode: DisbursementMode.CASH,
+          referenceNumber: null,
+          receiptId: null,
+          releasedBy: null,
+          remarks: null,
+        },
+        actor,
+      ),
+    );
+
+    await addLine(account.id, '2500.00');
+    await act(async () => liquidations.submit(account.id, { remarks: null }, actor));
+    await act(async () => liquidations.approve(account.id, { remarks: null }, actor));
+
+    const carried = await act(async () =>
+      settlements.carryToPayout(account.id, { staffId: dispatcherId, reason: null }),
+    );
+
+    expect(carried.status).toBe(SettlementStatus.CARRIED_TO_PAYOUT);
+
+    const deduction = await prisma.crewDeduction.findFirst({
+      where: { id: carried.crewDeductionId ?? '' },
+    });
+    expect(deduction?.staffId).toBe(dispatcherId);
+    expect(deduction?.amount.toString()).toBe('1500');
+  });
+
+  /**
+   * The exclusion that makes "no commission, for now" a fact rather than a
+   * promise. `commission.role` carries `CHECK (role IN (1, 2))` — the CREW
+   * subset — so there is no code a dispatch manager's commission could even be
+   * written with. Asserted through raw SQL, past every TypeScript guard.
+   */
+  it('cannot be given a commission, because there is no role to give one under', async () => {
+    if (!available) return;
+
+    const { shipmentId } = await deliveredTrip('dispatch-nocommission', '1000.00');
+
+    await expect(
+      act(async () =>
+        prisma.$executeRawUnsafe(`
+          INSERT INTO "commission" (
+            id, "shipmentId", "staffId", role, "appliedMethod",
+            "commissionableBase", amount, "computedAt",
+            "createdAt", "updatedAt", "createdBy"
+          ) VALUES (
+            '${PREFIX}bad-commission', '${shipmentId}', '${dispatcherId}',
+            ${StaffRole.DISPATCH_MANAGER}, ${CommissionMethod.FIXED_PER_TRIP},
+            0, 0, now(), now(), now(), '${adminId}'
+          )
+        `),
+      ),
+    ).rejects.toThrow(/commission_role_is_a_crew_role/i);
   });
 });
 

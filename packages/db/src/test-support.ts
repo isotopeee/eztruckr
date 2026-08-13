@@ -48,7 +48,7 @@ const CLEANUP_ORDER = [
   'route',
   'third_party',
   'client',
-  'crew_member',
+  'staff',
   'truck',
   'user_profile',
   'user',

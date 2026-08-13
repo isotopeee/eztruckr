@@ -79,11 +79,15 @@ export const liquidationSchema = auditFieldsSchema.extend({
   shipmentNumber: z.string().nullable(),
 
   /**
-   * The crew member answerable for accounting for this cash.
+   * The staff member answerable for accounting for this cash.
    *
    * Null on the liquidation created with the shipment, because nobody has been
    * assigned to drive it yet. NOT the same as an allowance's recipient: a
    * helper can be handed ferry money the driver remains answerable for.
+   *
+   * NOT NECESSARILY ON THE TRUCK, either. A dispatch manager holds a trip's
+   * float without driving or helping, which is why this points at `staff`
+   * rather than at one of the shipment's crew slots.
    */
   custodianId: z.string().nullable(),
   custodianName: z.string().nullable(),

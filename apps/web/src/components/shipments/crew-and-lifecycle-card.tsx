@@ -7,7 +7,7 @@ import {
   SHIPMENT_STATUS_LABELS,
   UserRole,
   allowedManualTransitions,
-  type CrewMember,
+  type Staff,
   type Page,
   type Shipment,
   type ShipmentStatus,
@@ -59,8 +59,8 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
   }, [shipment.driverId, shipment.helperId, shipment.truckId]);
 
   const crew = useQuery({
-    queryKey: ['crew-members', 'assignable'],
-    queryFn: () => apiFetch<Page<CrewMember>>('/crew-members?pageSize=200'),
+    queryKey: ['staff', 'assignable'],
+    queryFn: () => apiFetch<Page<Staff>>('/staff?pageSize=200'),
   });
 
   const trucks = useQuery({
@@ -269,7 +269,7 @@ function CrewSlot({
   label: string;
   value: string;
   onChange: (value: string) => void;
-  options: CrewMember[];
+  options: Staff[];
   disabled: boolean;
   note?: string;
 }) {

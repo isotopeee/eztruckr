@@ -40,7 +40,7 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
       // the shipments they actually worked.
       { href: '/shipments', label: 'Shipments', roles: [...OFFICE_ROLES, UserRole.CREW] },
       { href: '/trucks', label: 'Trucks', roles: OFFICE_ROLES },
-      { href: '/crew-members', label: 'Crew members', roles: OFFICE_ROLES },
+      { href: '/staff', label: 'Staff', roles: OFFICE_ROLES },
       { href: '/clients', label: 'Clients', roles: OFFICE_ROLES },
       { href: '/third-parties', label: 'Third parties', roles: OFFICE_ROLES },
       { href: '/routes', label: 'Routes', roles: OFFICE_ROLES },

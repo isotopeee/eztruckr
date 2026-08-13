@@ -2,7 +2,61 @@
 
 Trucking operations system. Turborepo monorepo, Philippine haulage domain (₱, Asia/Manila).
 
-**Last commit: `605aeb1`.** Working tree clean, `pnpm run check` green.
+**Last commit: `HEAD`.** Working tree clean, `pnpm run check` green.
+
+---
+
+## Staff, and dispatch managers — landed
+
+`crew_member` is now **`staff`**: one table for everyone who works here, drivers and office
+alike. It moved because a **dispatch manager** holds a trip's cash float and is answerable
+for accounting for it — a liquidation custodian — while never driving, helping, or
+occupying any slot on the shipment. The alternative was `custodianId` pointing at either a
+crew member or a user: one column doing two jobs, held together by a convention.
+
+- `crew_member` → `staff`, `crewMemberId` → `staffId` on six tables, `employeeCode` →
+  `staffCode`, `/crew-members` → `/staff`. Every change in the migration is a `RENAME` —
+  `user."staffId"` carries the live login links and the seed keys its idempotency on that
+  column, so a drop-and-add would have nulled them.
+- **`CrewDeduction`, `CrewRole` and the driver/helper slots keep their names.** "Crew"
+  still means something narrower and true: the people on the truck.
+- **Two code sets, one numbering.** `StaffRole` (1 DRIVER, 2 HELPER, 3 DISPATCH_MANAGER) is
+  what a person may be engaged as; `CrewRole` is **derived from it** — `{ DRIVER:
+StaffRole.DRIVER, HELPER: StaffRole.HELPER }` — so the two cannot drift. Everything
+  downstream of a commission keys on `CrewRole`, and `commission.role` still carries
+  `CHECK (role IN (1, 2))`, renamed to `commission_role_is_a_crew_role`. **A dispatch
+  manager cannot hold a commission, and that is the database's doing, not a comment's.**
+- **One guard, three callers.** `assertMayHoldTripCash` in
+  `apps/api/src/liquidation/trip-cash-participants.ts` answers "may this person be trusted
+  with this trip's cash?" for the custodian, the release recipient and the carried debt.
+  It admits somebody in a slot, or any dispatch manager. Those three had already drifted to
+  three refusal messages for one rule.
+
+### The bug only the running stack found
+
+`toStaff` filtered `eligibleRoles` through `isCrewRole`, which stopped meaning "a valid
+role" the moment the sets split. It **typechecks** — `CrewRole` is assignable to
+`StaffRole` — and it silently served the dispatch manager with an empty role array, so
+every picker looking for DISPATCH_MANAGER offered nobody. Neither the compiler nor 154
+tests caught it; driving the API did, in one line of output. There is now a test pinning
+the round trip.
+
+### Deliberately not done
+
+- **No login is linked to a dispatch manager.** `hasCrewLinkMatchingRole` still means: a
+  link is required for a CREW login and forbidden for every other role. A dispatch manager
+  is a `staff` row and, if they sign in, does so as OPERATIONS — already in
+  `CAN_SUBMIT_LIQUIDATION` and unrestricted by `assertCrewMayAccount`. Nine
+  `if (user.role !== UserRole.CREW) return;` early-exits rest on that assumption; flipping
+  it is its own piece of work.
+- **Nothing recovers a carried debt yet, for anybody.** Carrying a settlement creates an
+  ordinary `CrewDeduction` and the database is entirely role-agnostic about it — but
+  **there is no payout-run builder in the codebase**: no service creates a `PayoutRun` or a
+  `PayoutLine`. When it is written, its population predicate must be a **union** — unpaid
+  commissions ∪ unpaid adjustments ∪ **outstanding `CrewDeduction`s** — or anyone who owes
+  money while earning no commission never appears on a run and their debt is never
+  recoverable. `PayoutLine.commission` is already nullable and commission-less lines are
+  exercised in `payout-idempotency.test.ts`, so no schema change is needed for it.
 
 ---
 
@@ -63,7 +117,7 @@ New: `POST /shipments/:id/liquidations` (open an account, requires `custodianId`
   the redundancy is what the database checks. Prisma expresses this natively; the
   `@@unique([id, shipmentId], map: "liquidation_id_shipment_key")` uses **`map:`, not
   `name:`** — `name:` only renames the client-side compound key and leaves drift.
-- **An allowance's `crewMemberId` (who received) stays independent of the account's
+- **An allowance's `staffId` (who received) stays independent of the account's
   custodian (who is answerable).** A helper can be handed ferry money the driver answers
   for; flattening them would lose a fact.
 - **`shipmentStatusAfterLiquidationMilestone` takes `allLiquidationsApproved`**, renamed
@@ -141,7 +195,7 @@ Ports are deliberately non-standard: postgres **5433**, minio **9010/9011**, api
 
 27 business tables + 3 Better Auth infra = **30 domain tables** (31 with
 `_prisma_migrations`). 25 `_created_by_required` CHECKs, 27 `_soft_delete_consistent`,
-22 partial unique indexes, 9 payout triggers, **14 migrations**, no drift.
+22 partial unique indexes, 9 payout triggers, **15 migrations**, no drift.
 
 ### The cash trail of a trip
 
@@ -212,7 +266,7 @@ directions so that "making it consistent" fails loudly.
 **Phase 2** Data model, rebuilt once. Enums → smallint + CHECK; the migration chain was
 reset (pre-production, no data) rather than patched.
 
-**Phase 3** Better Auth 1.6.26; `RolesGuard` **fails closed**; role/`crewMemberId` are
+**Phase 3** Better Auth 1.6.26; `RolesGuard` **fails closed**; role/`staffId` are
 `input: false` so no request body can choose its own privileges; master data + declarative
 resource screens; reference-aware removal (probe, then deactivate vs delete).
 
@@ -267,7 +321,7 @@ unreachable from the UI.
 | `driver@eztruckr.ph` | `eztruckr-dev-crew`  | Crew          | adopted |
 | `ops@eztruckr.ph`    | (set by hand)        | Operations    | no      |
 
-The crew seed keys on **`crewMemberId`**, not the email — that column is what the partial
+The crew seed keys on **`staffId`**, not the email — that column is what the partial
 unique index constrains and what every crew-facing query filters on. It adopted the
 hand-made `driver@eztruckr.ph`, which was labelled "Ricardo Dela Cruz" while linked to
 **Joel Bautista**, and corrected the name. On a fresh volume it creates
@@ -287,19 +341,20 @@ child rows **by relationship, not id prefix**, because the services generate cui
 
 ### Where the machinery already is
 
-| Need                                  | Use                                                                              |
-| ------------------------------------- | -------------------------------------------------------------------------------- |
-| Money arithmetic                      | `money()`, `multiplyByRate()`, `sum()`, `toDecimalString()` in `@eztruckr/types` |
-| Exact arithmetic, no 2dp rounding     | `apps/api/src/commission/rational.ts`                                            |
-| Reference-aware removal               | `apps/api/src/master-data/removal.ts`                                            |
-| Role policy                           | `apps/api/src/auth/role-policy.ts` — declared once, never inline                 |
-| Soft-delete escape hatches            | `withDeleted()`, `withHardDelete()`                                              |
-| Single live row from a partial-unique | `liveOne()` / `liveOneOrThrow()`                                                 |
-| Row → response conversion             | `apps/api/src/master-data/serialize.ts`                                          |
-| Declarative master-data screens       | `apps/web/src/lib/resource-spec.ts` + `resources.tsx`                            |
-| Uploads                               | `StorageService` + `ReceiptsService` — one pipeline for every attachment         |
-| Crew scoping off a shipment           | `apps/api/src/liquidation/shipment-access.service.ts`                            |
-| DB-backed service tests               | `apps/api/src/liquidation/liquidation-lifecycle.test.ts` — the pattern           |
+| Need                                  | Use                                                                               |
+| ------------------------------------- | --------------------------------------------------------------------------------- |
+| Money arithmetic                      | `money()`, `multiplyByRate()`, `sum()`, `toDecimalString()` in `@eztruckr/types`  |
+| Exact arithmetic, no 2dp rounding     | `apps/api/src/commission/rational.ts`                                             |
+| Reference-aware removal               | `apps/api/src/master-data/removal.ts`                                             |
+| Role policy                           | `apps/api/src/auth/role-policy.ts` — declared once, never inline                  |
+| Soft-delete escape hatches            | `withDeleted()`, `withHardDelete()`                                               |
+| Single live row from a partial-unique | `liveOne()` / `liveOneOrThrow()`                                                  |
+| Row → response conversion             | `apps/api/src/master-data/serialize.ts`                                           |
+| Declarative master-data screens       | `apps/web/src/lib/resource-spec.ts` + `resources.tsx`                             |
+| Uploads                               | `StorageService` + `ReceiptsService` — one pipeline for every attachment          |
+| Crew scoping off a shipment           | `apps/api/src/liquidation/shipment-access.service.ts`                             |
+| Who may hold a trip's cash            | `apps/api/src/liquidation/trip-cash-participants.ts` — custodian, recipient, debt |
+| DB-backed service tests               | `apps/api/src/liquidation/liquidation-lifecycle.test.ts` — the pattern            |
 
 ### Known flake — `pnpm run check` can go red without anything being wrong
 

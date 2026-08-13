@@ -8,6 +8,7 @@ import {
   PayoutRunStatus,
   SettlementStatus,
   ShipmentStatus,
+  StaffRole,
   UserRole,
 } from '@eztruckr/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -34,8 +35,12 @@ let available = false;
 /** Constraint name -> the code set it is supposed to enforce. */
 const EXPECTED: ReadonlyArray<{ constraint: string; codes: readonly number[] }> = [
   { constraint: 'user_role_code_valid', codes: Object.values(UserRole) },
-  { constraint: 'crew_member_eligible_roles_valid', codes: Object.values(CrewRole) },
-  { constraint: 'commission_rule_role_code_valid', codes: Object.values(CrewRole) },
+  // The superset: everything a person may be engaged as.
+  { constraint: 'staff_eligible_roles_valid', codes: Object.values(StaffRole) },
+  // The crew SUBSET, and named for it. These two are the only code constraints
+  // that deliberately refuse a code the column's own set defines: a dispatch
+  // manager is valid staff and can never hold a commission.
+  { constraint: 'commission_rule_role_is_a_crew_role', codes: Object.values(CrewRole) },
   { constraint: 'commission_rule_method_code_valid', codes: Object.values(CommissionMethod) },
   { constraint: 'shipment_status_code_valid', codes: Object.values(ShipmentStatus) },
   { constraint: 'liquidation_status_code_valid', codes: Object.values(LiquidationStatus) },
@@ -53,7 +58,7 @@ const EXPECTED: ReadonlyArray<{ constraint: string; codes: readonly number[] }> 
     codes: Object.values(DisbursementMode),
   },
   { constraint: 'adjustment_direction_code_valid', codes: Object.values(AdjustmentDirection) },
-  { constraint: 'commission_role_code_valid', codes: Object.values(CrewRole) },
+  { constraint: 'commission_role_is_a_crew_role', codes: Object.values(CrewRole) },
   { constraint: 'commission_applied_method_code_valid', codes: Object.values(CommissionMethod) },
   { constraint: 'payout_run_status_code_valid', codes: Object.values(PayoutRunStatus) },
 ];
@@ -124,7 +129,7 @@ describe('database CHECK constraints match the TypeScript code sets', () => {
     // Someone reading raw SQL must be able to decode every code column.
     for (const column of [
       'user.role',
-      'crew_member.eligibleRoles',
+      'staff.eligibleRoles',
       'commission_rule.role',
       'commission_rule.method',
       'shipment.status',

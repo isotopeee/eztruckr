@@ -180,7 +180,7 @@ export const createCommissionRuleSchema = commissionRuleFields
 export type CreateCommissionRuleInput = z.infer<typeof createCommissionRuleSchema>;
 
 /**
- * Partial update. As with crew members, the cross-field rules cannot run on a
+ * Partial update. As with staff, the cross-field rules cannot run on a
  * fragment — the service re-applies them to the patch merged onto the stored
  * row.
  */

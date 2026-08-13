@@ -332,7 +332,7 @@ export const shipmentListQuerySchema = z.object({
   // against the code set rather than trusting the number.
   status: z.coerce.number().int().refine(isShipmentStatus, 'unknown shipment status').optional(),
   clientId: cuidSchema.optional(),
-  crewMemberId: cuidSchema.optional(),
+  staffId: cuidSchema.optional(),
 });
 
 export type ShipmentListQuery = z.infer<typeof shipmentListQuerySchema>;

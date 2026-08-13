@@ -20,7 +20,7 @@ import { useCurrentUser } from '@/lib/use-current-user';
 /** The counts an office user can actually see, keyed to a screen they can open. */
 const TILES = [
   { key: 'trucks', label: 'Trucks', href: '/trucks' },
-  { key: 'crew-members', label: 'Crew members', href: '/crew-members' },
+  { key: 'staff', label: 'Staff', href: '/staff' },
   { key: 'clients', label: 'Clients', href: '/clients' },
   { key: 'routes', label: 'Routes', href: '/routes' },
 ] as const;

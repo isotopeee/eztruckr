@@ -27,8 +27,8 @@ import { positiveMoneyStringSchema } from './shipment';
  */
 export const adjustmentSchema = auditFieldsSchema.extend({
   id: z.string(),
-  crewMemberId: z.string(),
-  crewMemberName: z.string().nullable(),
+  staffId: z.string(),
+  staffName: z.string().nullable(),
 
   /** Null for a standing adjustment against the person rather than a trip. */
   shipmentId: z.string().nullable(),
@@ -60,7 +60,7 @@ export const adjustmentSchema = auditFieldsSchema.extend({
 export type Adjustment = z.infer<typeof adjustmentSchema>;
 
 export const createAdjustmentSchema = z.object({
-  crewMemberId: cuidSchema,
+  staffId: cuidSchema,
   /**
    * Omit for a standing adjustment. When given, the service checks the crew
    * member actually worked that trip — an adjustment against a trip somebody
@@ -92,7 +92,7 @@ export const updateAdjustmentSchema = createAdjustmentSchema
 export type UpdateAdjustmentInput = z.infer<typeof updateAdjustmentSchema>;
 
 export const adjustmentListQuerySchema = z.object({
-  crewMemberId: cuidSchema.optional(),
+  staffId: cuidSchema.optional(),
   shipmentId: cuidSchema.optional(),
   /** Only those a payout run has not taken yet — the queue for the next one. */
   unpaidOnly: z
@@ -151,8 +151,8 @@ export function sumAdjustments(entries: readonly SignedAdjustment[]): string {
  * here rather than being silently dropped from the total.
  */
 export const crewPayLineSchema = z.object({
-  crewMemberId: z.string(),
-  crewMemberName: z.string(),
+  staffId: z.string(),
+  staffName: z.string(),
   commission: commissionSchema.nullable(),
   commissionAmount: z.string(),
   adjustments: z.array(adjustmentSchema),

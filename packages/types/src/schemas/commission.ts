@@ -15,8 +15,8 @@ export const commissionSchema = auditFieldsSchema.extend({
   id: z.string(),
   shipmentId: z.string(),
   shipmentNumber: z.string().nullable(),
-  crewMemberId: z.string(),
-  crewMemberName: z.string().nullable(),
+  staffId: z.string(),
+  staffName: z.string().nullable(),
 
   /** The role actually filled on this trip, not a property of the person. */
   role: crewRoleSchema,

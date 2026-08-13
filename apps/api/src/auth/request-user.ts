@@ -15,7 +15,7 @@ export interface RequestUser {
   role: UserRole;
   isActive: boolean;
   /** Non-null only for CREW logins. The scope key for every crew-facing read. */
-  crewMemberId: string | null;
+  staffId: string | null;
 }
 
 declare module 'express' {

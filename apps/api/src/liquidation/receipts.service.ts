@@ -138,6 +138,14 @@ export class ReceiptsService {
       return;
     }
 
+    // A BROKEN CREW ACCOUNT IS NOT A PERMISSIVE ONE. Every other crew-scoping
+    // site refuses outright when the link is missing; this one used the null
+    // directly, and `driverId`/`helperId` are both nullable — so the query
+    // below became "any trip with an unassigned slot", and served its receipts.
+    if (!user.staffId) {
+      throw new ForbiddenException('This crew account is not linked to a staff member.');
+    }
+
     const row = await this.prisma.client.receipt.findFirst({
       where: { id },
       include: ATTACHMENT_INCLUDE,
@@ -163,7 +171,7 @@ export class ReceiptsService {
     const worked = await this.prisma.client.shipment.count({
       where: {
         id: { in: shipmentIds },
-        OR: [{ driverId: user.crewMemberId }, { helperId: user.crewMemberId }],
+        OR: [{ driverId: user.staffId }, { helperId: user.staffId }],
       },
     });
 

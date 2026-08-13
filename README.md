@@ -353,7 +353,7 @@ Authentication is Better Auth over the `user` / `session` / `account` /
 
 Roles are a membership test, never a ranking. Who may do what is declared once
 in `auth/role-policy.ts`. Crew logins are confined to their own records, checked
-server-side against the session's `crewMemberId` — changing the id in the URL
+server-side against the session's `staffId` — changing the id in the URL
 gets a 403, whether or not the UI rendered the link.
 
 ### One source of truth for crew pay
@@ -417,7 +417,7 @@ seed.
 ## Phase 3 scope
 
 Built: Better Auth wired to the existing tables with role, `isActive` and
-`crewMemberId` as non-client-settable additional fields; global authentication
+`staffId` as non-client-settable additional fields; global authentication
 and fail-closed role guards; crew scoping; full CRUD for all seven master data
 tables with reference-aware removal; admin-only system settings with a change
 history written to `AuditLog`; and the web app — login, role-aware app shell,

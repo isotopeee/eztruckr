@@ -6,6 +6,7 @@ export * from './liquidation-status';
 export * from './liquidation-history-action';
 export * from './disbursement-mode';
 export * from './settlement-status';
+export * from './staff-role';
 export * from './crew-role';
 export * from './adjustment-direction';
 export * from './user-role';

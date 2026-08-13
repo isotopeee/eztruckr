@@ -52,7 +52,7 @@ async function cleanup(): Promise<void> {
       );
     }
     await prisma.$executeRawUnsafe(
-      `DELETE FROM "adjustment" WHERE "shipmentId" IS NULL AND "crewMemberId" IN ('${driverId ?? ''}', '${helperId ?? ''}')`,
+      `DELETE FROM "adjustment" WHERE "shipmentId" IS NULL AND "staffId" IN ('${driverId ?? ''}', '${helperId ?? ''}')`,
     );
     await prisma.$executeRawUnsafe(
       `DELETE FROM "liquidation" WHERE "shipmentId" = '${SHIPMENT_ID}'`,
@@ -76,9 +76,9 @@ beforeAll(async () => {
   }
 
   const admin = await prisma.user.findFirst({ where: { email: 'admin@eztruckr.ph' } });
-  const driver = await prisma.crewMember.findFirst({ where: { employeeCode: 'CRW-001' } });
-  const helper = await prisma.crewMember.findFirst({ where: { employeeCode: 'CRW-003' } });
-  const stranger = await prisma.crewMember.findFirst({ where: { employeeCode: 'CRW-004' } });
+  const driver = await prisma.staff.findFirst({ where: { staffCode: 'CRW-001' } });
+  const helper = await prisma.staff.findFirst({ where: { staffCode: 'CRW-003' } });
+  const stranger = await prisma.staff.findFirst({ where: { staffCode: 'CRW-004' } });
 
   if (!admin || !driver || !helper || !stranger) {
     throw new Error('Seed the database first: pnpm db:seed');
@@ -179,7 +179,7 @@ async function payoutLine(suffix: string): Promise<string> {
       data: {
         id: id(`line-${suffix}`),
         payoutRunId: run.id,
-        crewMemberId: driverId,
+        staffId: driverId,
         grossAmount: '0.0000',
         netAmount: '0.0000',
       },
@@ -206,7 +206,7 @@ const adjust = (overrides: Record<string, unknown> = {}) =>
   act(async () =>
     adjustments.create(
       {
-        crewMemberId: driverId,
+        staffId: driverId,
         shipmentId: SHIPMENT_ID,
         direction: AdjustmentDirection.INCREASE,
         amount: '500.00',
@@ -244,7 +244,7 @@ describe('the direction carries the sign', () => {
       act(async () =>
         prisma.adjustment.create({
           data: {
-            crewMemberId: driverId,
+            staffId: driverId,
             shipmentId: SHIPMENT_ID,
             direction: AdjustmentDirection.DECREASE,
             amount: '-300.0000',
@@ -263,7 +263,7 @@ describe('the direction carries the sign', () => {
       act(async () =>
         prisma.adjustment.create({
           data: {
-            crewMemberId: driverId,
+            staffId: driverId,
             shipmentId: SHIPMENT_ID,
             direction: AdjustmentDirection.INCREASE,
             amount: '100.0000',
@@ -294,8 +294,8 @@ describe('what an adjustment may be attached to', () => {
     if (!available) return;
 
     await expectFieldError(
-      () => adjust({ crewMemberId: strangerId }),
-      'crewMemberId',
+      () => adjust({ staffId: strangerId }),
+      'staffId',
       /did not work shipment/i,
     );
   });
@@ -305,7 +305,7 @@ describe('what an adjustment may be attached to', () => {
 
     const standing = await adjust({
       shipmentId: null,
-      crewMemberId: strangerId,
+      staffId: strangerId,
       reason: 'Uniform deduction',
       direction: AdjustmentDirection.DECREASE,
       amount: '250.00',
@@ -344,7 +344,7 @@ describe('the roll-up: commission plus adjustments', () => {
     });
 
     const lines = await adjustments.crewPayForShipment(SHIPMENT_ID);
-    const driverLine = lines.find((line) => line.crewMemberId === driverId);
+    const driverLine = lines.find((line) => line.staffId === driverId);
 
     expect(driverLine?.adjustmentsTotal).toBe('300.00');
     // The commission is untouched — that row states its own arithmetic, and an
@@ -360,7 +360,7 @@ describe('the roll-up: commission plus adjustments', () => {
     await adjust({ amount: '500.00' });
 
     const lines = await adjustments.crewPayForShipment(SHIPMENT_ID);
-    const helperLine = lines.find((line) => line.crewMemberId === helperId);
+    const helperLine = lines.find((line) => line.staffId === helperId);
 
     expect(helperLine?.adjustments).toHaveLength(0);
     expect(helperLine?.netAmount).toBe(helperLine?.commissionAmount);
@@ -402,7 +402,7 @@ describe('the roll-up: commission plus adjustments', () => {
     expect(secondDriverCommissionId).not.toBe(firstDriverCommissionId);
 
     const lines = await adjustments.crewPayForShipment(SHIPMENT_ID);
-    const driverLine = lines.find((line) => line.crewMemberId === driverId);
+    const driverLine = lines.find((line) => line.staffId === driverId);
 
     // Still attached, still counted, and now against the new figure.
     expect(driverLine?.adjustments).toHaveLength(1);
@@ -421,7 +421,7 @@ describe('the roll-up: commission plus adjustments', () => {
     await adjust({ amount: '500.00' });
 
     const lines = await adjustments.crewPayForShipment(SHIPMENT_ID);
-    const driverLine = lines.find((line) => line.crewMemberId === driverId);
+    const driverLine = lines.find((line) => line.staffId === driverId);
 
     expect(driverLine?.commission).toBeNull();
     expect(driverLine?.commissionAmount).toBe('0.00');
@@ -483,7 +483,7 @@ describe('the lock is the adjustment’s own payout line', () => {
 
     const lineId = await payoutLine('paid');
     await prisma.commission.updateMany({
-      where: { shipmentId: SHIPMENT_ID, crewMemberId: driverId },
+      where: { shipmentId: SHIPMENT_ID, staffId: driverId },
       data: { payoutLineId: lineId },
     });
 

@@ -92,10 +92,12 @@ model User {
   isActive Boolean @default(true)
 
   /// Set only for role = CREW. The hard link that scopes a portal user to
-  /// exactly one crew member's records; every crew-facing query filters on it.
+  /// exactly one staff member's records; every crew-facing query filters on it.
+  /// An office login has none — a dispatch manager is a `staff` row and signs
+  /// in as OPERATIONS, which is not scoped to one person's records.
   /// Partial-unique WHERE "deletedAt" IS NULL.
-  crewMemberId String?
-  crewMember   CrewMember? @relation("CrewMemberLogin", fields: [crewMemberId], references: [id], onDelete: SetNull)
+  staffId String?
+  staff   Staff? @relation("StaffLogin", fields: [staffId], references: [id], onDelete: SetNull)
 
   /// At most one live profile, enforced by a partial unique index.
   profiles UserProfile[] @relation("UserProfileOwner")
@@ -133,9 +135,9 @@ model User {
   trucksUpdated Truck[] @relation("TruckUpdatedBy")
   trucksDeleted Truck[] @relation("TruckDeletedBy")
 
-  crewMembersCreated CrewMember[] @relation("CrewMemberCreatedBy")
-  crewMembersUpdated CrewMember[] @relation("CrewMemberUpdatedBy")
-  crewMembersDeleted CrewMember[] @relation("CrewMemberDeletedBy")
+  staffCreated Staff[] @relation("StaffCreatedBy")
+  staffUpdated Staff[] @relation("StaffUpdatedBy")
+  staffDeleted Staff[] @relation("StaffDeletedBy")
 
   clientsCreated Client[] @relation("ClientCreatedBy")
   clientsUpdated Client[] @relation("ClientUpdatedBy")
@@ -247,7 +249,7 @@ model User {
 }
 
 /// Presentation and contact detail for a login. Kept separate from User so the
-/// security-critical columns (role, isActive, crewMemberId) stay small.
+/// security-critical columns (role, isActive, staffId) stay small.
 model UserProfile {
   id String @id @default(cuid())
 
@@ -379,14 +381,21 @@ model Truck {
   @@map("truck")
 }
 
-/// One table for drivers and helpers alike. `eligibleRoles` says what this
-/// person MAY be assigned as; the role actually filled comes from the shipment
-/// slot and is recorded on Commission.
-model CrewMember {
+/// Everyone who works here — drivers, helpers, and the office staff who handle
+/// their money. `eligibleRoles` says what this person MAY be engaged as; the
+/// role actually filled on a trip comes from the shipment slot and is recorded
+/// on Commission.
+///
+/// It was `crew_member` until a dispatch manager needed to be the custodian of
+/// a trip's cash. The alternative was a custodian column pointing at either a
+/// crew member or a user — one column doing two jobs, held together by a
+/// convention. Unifying the people leaves every foreign key pointing at
+/// exactly one place.
+model Staff {
   id String @id @default(cuid())
 
   /// Partial-unique WHERE "deletedAt" IS NULL.
-  employeeCode String
+  staffCode String
   firstName    String
   lastName     String
   phone        String?
@@ -396,9 +405,11 @@ model CrewMember {
   /// (e.g. departed). Distinct from deletedAt.
   isActive     Boolean   @default(true)
 
-  /// Code set: CrewRole (1 DRIVER, 2 HELPER), as a SMALLINT array. A CHECK
-  /// constraint requires every element to be a valid code. A person eligible
-  /// for both can drive one trip and help on another.
+  /// Code set: StaffRole (1 DRIVER, 2 HELPER, 3 DISPATCH_MANAGER), as a
+  /// SMALLINT array. A CHECK constraint requires every element to be a valid
+  /// code. A person eligible for both crew roles can drive one trip and help on
+  /// another. DISPATCH_MANAGER is deliberately NOT a CrewRole: commission.role
+  /// still checks IN (1, 2), so a dispatch manager cannot earn one.
   eligibleRoles Int[] @db.SmallInt
 
   /// Nullable: required, and validated, only when this person occupies a
@@ -407,7 +418,7 @@ model CrewMember {
   licenseExpiry DateTime? @db.Timestamptz(6)
 
   /// At most one live login, enforced by a partial unique index on user.
-  logins User[] @relation("CrewMemberLogin")
+  logins User[] @relation("StaffLogin")
 
   drivenShipments Shipment[]      @relation("ShipmentDriver")
   helpedShipments Shipment[]      @relation("ShipmentHelper")
@@ -422,17 +433,17 @@ model CrewMember {
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
   createdBy     String?
-  createdByUser User?     @relation("CrewMemberCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  createdByUser User?     @relation("StaffCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
   updatedBy     String?
-  updatedByUser User?     @relation("CrewMemberUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  updatedByUser User?     @relation("StaffUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
   deletedAt     DateTime? @db.Timestamptz(6)
   deletedBy     String?
-  deletedByUser User?     @relation("CrewMemberDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+  deletedByUser User?     @relation("StaffDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
   @@index([isActive])
   @@index([lastName, firstName])
   @@index([deletedAt])
-  @@map("crew_member")
+  @@map("staff")
 }
 
 model Client {
@@ -744,9 +755,9 @@ model Shipment {
   cargoDescription String?
 
   driverId String?
-  driver   CrewMember? @relation("ShipmentDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  driver   Staff? @relation("ShipmentDriver", fields: [driverId], references: [id], onDelete: Restrict)
   helperId String?
-  helper   CrewMember? @relation("ShipmentHelper", fields: [helperId], references: [id], onDelete: Restrict)
+  helper   Staff? @relation("ShipmentHelper", fields: [helperId], references: [id], onDelete: Restrict)
 
   dispatchedAt DateTime? @db.Timestamptz(6)
   deliveredAt  DateTime? @db.Timestamptz(6)
@@ -865,8 +876,8 @@ model Allowance {
   /// Crew member who physically RECEIVED the cash. Deliberately independent of
   /// the liquidation's custodian: a helper can be handed ferry money that the
   /// driver remains answerable for, and both facts are worth keeping.
-  crewMemberId String
-  crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
+  staffId String
+  staff   Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
 
   amount   Decimal  @db.Decimal(15, 4)
   issuedAt DateTime @default(now()) @db.Timestamptz(6)
@@ -905,7 +916,7 @@ model Allowance {
 
   @@index([shipmentId])
   @@index([liquidationId])
-  @@index([crewMemberId])
+  @@index([staffId])
   @@index([releasedBy])
   @@index([deletedAt])
   @@map("allowance")
@@ -942,7 +953,8 @@ model Liquidation {
   shipmentId String
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
 
-  /// The crew member answerable for this cash.
+  /// The staff member answerable for this cash. Not necessarily on the truck:
+  /// a dispatch manager holds a trip's float without driving or helping.
   ///
   /// Nullable, because a trip's first liquidation is created at BOOKING, before
   /// anybody has been assigned to drive it. Partial-unique on
@@ -950,7 +962,7 @@ model Liquidation {
   /// DISTINCT — one open account per person per trip, and only one that has
   /// nobody's name on it yet, because two unnamed accounts are indistinguishable.
   custodianId String?
-  custodian   CrewMember? @relation("LiquidationCustodian", fields: [custodianId], references: [id], onDelete: Restrict)
+  custodian   Staff? @relation("LiquidationCustodian", fields: [custodianId], references: [id], onDelete: Restrict)
 
   /// Code set: LiquidationStatus (1 PENDING, 2 SUBMITTED, 3 APPROVED). Order
   /// comes from the declared sequence in @eztruckr/types, never from the
@@ -1264,8 +1276,8 @@ model BillableExpense {
 /// cash and is never liquidated.
 ///
 /// The gap this fills: a fleet-card fuel purchase, an office-paid toll account,
-/// a repair invoiced to the company. Real costs of the trip that no crew member
-/// can account for, because no crew member ever held the money. Before this
+/// a repair invoiced to the company. Real costs of the trip that nobody on it
+/// can account for, because none of them ever held the money. Before this
 /// table they had two possible homes and both lied — a LiquidationLine would
 /// put a variance on a crew who were never advanced it, and a BillableExpense
 /// would invent revenue from a client who is not being charged.
@@ -1346,7 +1358,7 @@ model AdditionalCharge {
 // Crew ledger
 // ---------------------------------------------------------------------------
 
-/// A charge against a crew member (cash shortage, damage, violation).
+/// A charge against a staff member (cash shortage, damage, violation).
 /// Recovered at payout. Never a client charge.
 ///
 /// A DEDUCTION IS DIVISIBLE, WHICH IS WHY IT LOOKS DIFFERENT FROM A COMMISSION.
@@ -1364,8 +1376,8 @@ model AdditionalCharge {
 /// number with no record of what made it up.
 model CrewDeduction {
   id           String     @id @default(cuid())
-  crewMemberId String
-  crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
+  staffId String
+  staff   Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
 
   /// Optional link to the trip the deduction arose from.
   shipmentId String?
@@ -1410,7 +1422,7 @@ model CrewDeduction {
   deletedBy     String?
   deletedByUser User?     @relation("CrewDeductionDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
-  @@index([crewMemberId])
+  @@index([staffId])
   @@index([deletedAt])
   @@map("crew_deduction")
 }
@@ -1481,8 +1493,8 @@ model CrewDeductionRecovery {
 /// line the same way, which is why they are one table.
 model Adjustment {
   id           String     @id @default(cuid())
-  crewMemberId String
-  crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
+  staffId String
+  staff   Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
 
   /// The trip this adjusts pay for, or null for a standing adjustment against
   /// the crew member. See the model docblock for why this is not a commission
@@ -1519,7 +1531,7 @@ model Adjustment {
   deletedBy     String?
   deletedByUser User?     @relation("AdjustmentDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
-  @@index([crewMemberId])
+  @@index([staffId])
   @@index([shipmentId])
   @@index([payoutLineId])
   @@index([deletedAt])
@@ -1543,8 +1555,8 @@ model Commission {
   shipmentId String
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
 
-  crewMemberId String
-  crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
+  staffId String
+  staff   Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
 
   /// Code set: CrewRole (1 DRIVER, 2 HELPER) — the role actually filled on
   /// this trip. Partial-unique on (shipmentId, role) WHERE "deletedAt" IS NULL.
@@ -1630,7 +1642,7 @@ model Commission {
   deletedByUser User?     @relation("CommissionDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
   @@index([shipmentId])
-  @@index([crewMemberId])
+  @@index([staffId])
   @@index([appliedRuleId])
   @@index([deletedAt])
   @@map("commission")
@@ -1691,8 +1703,8 @@ model PayoutLine {
   payoutRunId String
   payoutRun   PayoutRun @relation(fields: [payoutRunId], references: [id], onDelete: Restrict)
 
-  crewMemberId String
-  crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
+  staffId String
+  staff   Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
 
   /// Back side of Commission.payoutLineId; at most one, by that full unique.
   commission Commission?
@@ -1718,7 +1730,7 @@ model PayoutLine {
   deletedByUser User?     @relation("PayoutLineDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
   @@index([payoutRunId])
-  @@index([crewMemberId])
+  @@index([staffId])
   @@index([deletedAt])
   @@map("payout_line")
 }

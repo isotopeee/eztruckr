@@ -3,7 +3,7 @@
  * Prisma types as an array.
  *
  * WHY THE ARRAYS EXIST. `shipment.liquidations`, `user.profiles` and
- * `crewMember.logins` are one-to-one in the domain. They are enforced by
+ * `staff.logins` are one-to-one in the domain. They are enforced by
  * PARTIAL unique indexes — `UNIQUE (...) WHERE "deletedAt" IS NULL` — so that
  * soft-deleting a row releases its slot and a shipment can be re-liquidated, a
  * user re-profiled, a crew member given a replacement login. Prisma cannot

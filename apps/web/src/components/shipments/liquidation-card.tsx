@@ -46,7 +46,7 @@ import {
 } from '@/lib/liquidation-api';
 import { shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { crewOnTrip } from './trip-crew';
+import { useTripCashHolders } from './trip-cash-holders';
 import { ReceiptField } from './receipt-field';
 
 /**
@@ -184,8 +184,7 @@ function Account({
   // roles may act on any of them, and the history names whoever did.
   const isCrew = user?.role === UserRole.CREW;
   const isTheirs =
-    account.custodianId === null ||
-    (user?.crewMemberId != null && account.custodianId === user.crewMemberId);
+    account.custodianId === null || (user?.staffId != null && account.custodianId === user.staffId);
   const mayAccount = isCrew
     ? isTheirs
     : user?.role === UserRole.ADMINISTRATOR ||
@@ -292,7 +291,7 @@ function CustodianPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [custodianId, setCustodianId] = useState('');
-  const crew = crewOnTrip(shipment);
+  const crew = useTripCashHolders(shipment);
 
   const assign = useMutation({
     mutationFn: () => setLiquidationCustodian(account.id, { custodianId }),
@@ -329,13 +328,14 @@ function CustodianPicker({
       }}
     >
       <Select value={custodianId} onValueChange={setCustodianId}>
-        <SelectTrigger aria-label="Custodian" className="h-8 w-44">
-          <SelectValue placeholder="Crew member" />
+        <SelectTrigger aria-label="Custodian" className="h-8 w-52">
+          <SelectValue placeholder="Who holds this cash?" />
         </SelectTrigger>
         <SelectContent>
           {crew.map((member) => (
             <SelectItem key={member.id} value={member.id}>
               {member.name}
+              {member.note ? ` · ${member.note}` : ''}
             </SelectItem>
           ))}
         </SelectContent>
@@ -406,7 +406,7 @@ function OpenAccountForm({
   const held = new Set(
     accounts.map((account) => account.custodianId).filter((id): id is string => id !== null),
   );
-  const available = crewOnTrip(shipment).filter((member) => !held.has(member.id));
+  const available = useTripCashHolders(shipment).filter((member) => !held.has(member.id));
 
   const open = useMutation({
     mutationFn: () => createLiquidation(shipment.id, { custodianId }),
@@ -439,12 +439,13 @@ function OpenAccountForm({
       <div className="flex flex-wrap items-center gap-2">
         <Select value={custodianId} onValueChange={setCustodianId}>
           <SelectTrigger id="open-account" className="w-56">
-            <SelectValue placeholder="Crew member" />
+            <SelectValue placeholder="Crew or dispatch manager" />
           </SelectTrigger>
           <SelectContent>
             {available.map((member) => (
               <SelectItem key={member.id} value={member.id}>
                 {member.name}
+                {member.note ? ` · ${member.note}` : ''}
               </SelectItem>
             ))}
           </SelectContent>

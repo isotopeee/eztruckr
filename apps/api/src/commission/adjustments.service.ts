@@ -41,7 +41,7 @@ import { toCommissionResponse } from './commission.service';
  */
 
 const ADJUSTMENT_INCLUDE = {
-  crewMember: { select: { firstName: true, lastName: true } },
+  staff: { select: { firstName: true, lastName: true } },
   shipment: { select: { shipmentNumber: true } },
   approvedByUser: { select: { name: true } },
 } satisfies Prisma.AdjustmentInclude;
@@ -59,14 +59,14 @@ export class AdjustmentsService {
   /**
    * The list, filtered.
    *
-   * `crewMemberId` is OVERWRITTEN rather than validated for a crew session —
+   * `staffId` is OVERWRITTEN rather than validated for a crew session —
    * the controller passes the session's own id, and there is no query string
    * that widens it. Same rule as the shipment and liquidation lists.
    */
   async list(query: AdjustmentListQuery): Promise<Adjustment[]> {
     const rows = await this.adjustments.findMany({
       where: {
-        ...(query.crewMemberId ? { crewMemberId: query.crewMemberId } : {}),
+        ...(query.staffId ? { staffId: query.staffId } : {}),
         ...(query.shipmentId ? { shipmentId: query.shipmentId } : {}),
         ...(query.unpaidOnly ? { payoutLineId: null } : {}),
       },
@@ -78,12 +78,12 @@ export class AdjustmentsService {
   }
 
   async create(input: CreateAdjustmentInput, approvedBy: string): Promise<Adjustment> {
-    await this.assertCrewMemberExists(input.crewMemberId);
-    await this.assertWorkedTheTrip(input.shipmentId, input.crewMemberId);
+    await this.assertStaffExists(input.staffId);
+    await this.assertWorkedTheTrip(input.shipmentId, input.staffId);
 
     const row = await this.adjustments.create({
       data: {
-        crewMemberId: input.crewMemberId,
+        staffId: input.staffId,
         shipmentId: input.shipmentId,
         direction: input.direction,
         amount: input.amount,
@@ -138,7 +138,7 @@ export class AdjustmentsService {
         where: { shipmentId },
         orderBy: { role: 'asc' },
         include: {
-          crewMember: { select: { firstName: true, lastName: true } },
+          staff: { select: { firstName: true, lastName: true } },
           shipment: { select: { shipmentNumber: true } },
         },
       }),
@@ -152,36 +152,36 @@ export class AdjustmentsService {
     const names = new Map<string, string>();
     const order: string[] = [];
 
-    const remember = (crewMemberId: string, name: string) => {
-      if (!names.has(crewMemberId)) {
-        names.set(crewMemberId, name);
-        order.push(crewMemberId);
+    const remember = (staffId: string, name: string) => {
+      if (!names.has(staffId)) {
+        names.set(staffId, name);
+        order.push(staffId);
       }
     };
 
     // Commissions first, so the people who were paid for the trip lead the
     // list and an adjustment-only crew member follows rather than displacing.
     for (const row of commissions) {
-      remember(row.crewMemberId, `${row.crewMember.firstName} ${row.crewMember.lastName}`);
+      remember(row.staffId, `${row.staff.firstName} ${row.staff.lastName}`);
     }
     for (const row of adjustments) {
-      remember(row.crewMemberId, `${row.crewMember.firstName} ${row.crewMember.lastName}`);
+      remember(row.staffId, `${row.staff.firstName} ${row.staff.lastName}`);
     }
 
-    return order.map((crewMemberId) => {
-      const commission = commissions.find((row) => row.crewMemberId === crewMemberId) ?? null;
+    return order.map((staffId) => {
+      const commission = commissions.find((row) => row.staffId === staffId) ?? null;
 
       // Serialised BEFORE summing, not after. `toAdjustment` is what validates
       // the direction code against the set, so summing the raw rows would be
       // adding up a `number` that nothing had checked was a direction at all.
-      const own = adjustments.filter((row) => row.crewMemberId === crewMemberId).map(toAdjustment);
+      const own = adjustments.filter((row) => row.staffId === staffId).map(toAdjustment);
 
       const commissionAmount = commission ? money(commission.amount) : zero();
       const adjustmentsTotal = sumAdjustments(own);
 
       return {
-        crewMemberId,
-        crewMemberName: names.get(crewMemberId) ?? '',
+        staffId,
+        staffName: names.get(staffId) ?? '',
         commission: commission
           ? toCommissionResponse(commission, commission.shipment.shipmentNumber)
           : null,
@@ -194,17 +194,17 @@ export class AdjustmentsService {
   }
 
   /** The crew member an adjustment belongs to, for the controller's scoping. */
-  async crewMemberOf(id: string): Promise<string> {
+  async staffOf(id: string): Promise<string> {
     const row = await this.adjustments.findFirst({
       where: { id },
-      select: { crewMemberId: true },
+      select: { staffId: true },
     });
 
     if (!row) {
       throw new NotFoundException(`No adjustment with id ${id}`);
     }
 
-    return row.crewMemberId;
+    return row.staffId;
   }
 
   // -------------------------------------------------------------------------
@@ -226,14 +226,14 @@ export class AdjustmentsService {
     }
   }
 
-  private async assertCrewMemberExists(crewMemberId: string): Promise<void> {
-    const crew = await this.prisma.client.crewMember.findFirst({
-      where: { id: crewMemberId },
+  private async assertStaffExists(staffId: string): Promise<void> {
+    const crew = await this.prisma.client.staff.findFirst({
+      where: { id: staffId },
       select: { id: true },
     });
 
     if (!crew) {
-      throw badRequest('crewMemberId', `No crew member with id ${crewMemberId}`);
+      throw badRequest('staffId', `No crew member with id ${staffId}`);
     }
   }
 
@@ -245,10 +245,7 @@ export class AdjustmentsService {
    * adjustment against a trip a person never worked is a typo with a peso
    * value on it, and it would sail through every other guard in this file.
    */
-  private async assertWorkedTheTrip(
-    shipmentId: string | null,
-    crewMemberId: string,
-  ): Promise<void> {
+  private async assertWorkedTheTrip(shipmentId: string | null, staffId: string): Promise<void> {
     if (shipmentId === null) return;
 
     const shipment = await this.prisma.client.shipment.findFirst({
@@ -260,9 +257,9 @@ export class AdjustmentsService {
       throw badRequest('shipmentId', `No shipment with id ${shipmentId}`);
     }
 
-    if (shipment.driverId !== crewMemberId && shipment.helperId !== crewMemberId) {
+    if (shipment.driverId !== staffId && shipment.helperId !== staffId) {
       throw badRequest(
-        'crewMemberId',
+        'staffId',
         `That crew member did not work shipment ${shipment.shipmentNumber}, so their pay for it cannot be adjusted. Leave the trip off for a standing adjustment.`,
       );
     }
@@ -284,10 +281,8 @@ export function toAdjustment(row: AdjustmentRow): Adjustment {
 
   return {
     id: row.id,
-    crewMemberId: row.crewMemberId,
-    crewMemberName: row.crewMember
-      ? `${row.crewMember.firstName} ${row.crewMember.lastName}`
-      : null,
+    staffId: row.staffId,
+    staffName: row.staff ? `${row.staff.firstName} ${row.staff.lastName}` : null,
 
     shipmentId: row.shipmentId,
     shipmentNumber: row.shipment?.shipmentNumber ?? null,

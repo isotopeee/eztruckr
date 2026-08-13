@@ -25,7 +25,7 @@ let prisma: ExtendedPrismaClient;
 let available = false;
 let adminId: string;
 let clientId: string;
-let crewMemberId: string;
+let staffId: string;
 
 beforeAll(async () => {
   prisma = createTestClient();
@@ -48,16 +48,16 @@ beforeAll(async () => {
     });
     clientId = client.id;
 
-    const crew = await prisma.crewMember.create({
+    const crew = await prisma.staff.create({
       data: {
         id: testId('crew'),
-        employeeCode: testId('CRW'),
+        staffCode: testId('CRW'),
         firstName: 'Test',
         lastName: 'Driver',
         eligibleRoles: [CrewRole.DRIVER],
       },
     });
-    crewMemberId = crew.id;
+    staffId = crew.id;
   });
 });
 
@@ -98,7 +98,7 @@ async function createPaidCommission(suffix: string) {
       data: {
         id: testId(`line-${suffix}`),
         payoutRunId: run.id,
-        crewMemberId,
+        staffId,
         grossAmount: '1822.5000',
         netAmount: '1822.5000',
       },
@@ -108,7 +108,7 @@ async function createPaidCommission(suffix: string) {
       data: {
         id: testId(`commission-${suffix}`),
         shipmentId: shipment.id,
-        crewMemberId,
+        staffId,
         role: CrewRole.DRIVER,
         appliedMethod: CommissionMethod.PERCENT_OF_BASE,
         commissionableBase: '12150.0000',
@@ -166,7 +166,7 @@ describe.runIf(process.env.SKIP_DB_TESTS !== '1')('payout idempotency survives s
         data: {
           id: testId('line-c2'),
           payoutRunId: run.id,
-          crewMemberId,
+          staffId,
           grossAmount: '1822.5000',
           netAmount: '1822.5000',
         },
@@ -208,7 +208,7 @@ describe.runIf(process.env.SKIP_DB_TESTS !== '1')('payout idempotency survives s
           data: {
             id: testId('commission-d2'),
             shipmentId: shipment.id,
-            crewMemberId,
+            staffId,
             role: CrewRole.DRIVER,
             appliedMethod: CommissionMethod.PERCENT_OF_BASE,
             commissionableBase: '12150.0000',
@@ -294,7 +294,7 @@ describe.runIf(process.env.SKIP_DB_TESTS !== '1')('crew deduction recovery', () 
       const deduction = await prisma.crewDeduction.create({
         data: {
           id: testId(`ded-${suffix}`),
-          crewMemberId,
+          staffId,
           reason: 'Damaged tyre',
           amount,
         },
@@ -314,7 +314,7 @@ describe.runIf(process.env.SKIP_DB_TESTS !== '1')('crew deduction recovery', () 
         data: {
           id: testId(`dline-${suffix}`),
           payoutRunId: run.id,
-          crewMemberId,
+          staffId,
           grossAmount: '1800.0000',
           netAmount: '0.0000',
         },
@@ -330,7 +330,7 @@ describe.runIf(process.env.SKIP_DB_TESTS !== '1')('crew deduction recovery', () 
         data: {
           id: testId(`dline-${suffix}-${index}`),
           payoutRunId: runId,
-          crewMemberId,
+          staffId,
           grossAmount: '1800.0000',
           netAmount: '0.0000',
         },
@@ -554,7 +554,7 @@ describe.runIf(process.env.SKIP_DB_TESTS !== '1')('a commission records its rule
         data: {
           id: testId(`rcommission-${suffix}`),
           shipmentId: shipment.id,
-          crewMemberId,
+          staffId,
           role: CrewRole.DRIVER,
           appliedMethod: CommissionMethod.PERCENT_OF_BASE,
           appliedRuleId: rule?.id ?? null,

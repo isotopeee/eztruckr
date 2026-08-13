@@ -38,7 +38,7 @@ import {
 } from '@/lib/liquidation-api';
 import { shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
-import { crewOnTrip } from './trip-crew';
+import { useTripCashHolders } from './trip-cash-holders';
 import { ReceiptField } from './receipt-field';
 
 /**
@@ -119,7 +119,7 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
               <li key={release.id} className="flex items-start justify-between gap-3 py-2">
                 <div className="min-w-0 space-y-1">
                   <p className="truncate">
-                    {release.crewMemberName ?? 'Crew'} · {formatDate(release.issuedAt)}
+                    {release.staffName ?? 'Crew'} · {formatDate(release.issuedAt)}
                   </p>
                   <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
                     <Badge variant="outline">
@@ -200,7 +200,7 @@ function IssueForm({
   accounts: Liquidation[];
   onIssued: () => void;
 }) {
-  const crew = crewOnTrip(shipment);
+  const crew = useTripCashHolders(shipment);
 
   // Only the accounts that would accept it. An approved account has its total
   // advanced frozen, and offering it here would put the refusal after the
@@ -213,7 +213,7 @@ function IssueForm({
   const [draft, setDraft] = useState({
     /** Empty until chosen; the default is resolved below, not frozen here. */
     liquidationId: '',
-    crewMemberId: crew[0]?.id ?? '',
+    staffId: crew[0]?.id ?? '',
     amount: summary.releaseCount === 0 ? (summary.routeStandardAllowance ?? '') : '',
     disbursementMode: String(DisbursementMode.CASH),
     referenceNumber: '',
@@ -233,7 +233,7 @@ function IssueForm({
     mutationFn: () =>
       issueAllowance(shipment.id, {
         liquidationId,
-        crewMemberId: draft.crewMemberId,
+        staffId: draft.staffId,
         amount: draft.amount,
         issuedAt: null,
         disbursementMode: Number(draft.disbursementMode) as DisbursementMode,
@@ -309,8 +309,8 @@ function IssueForm({
             Released to
           </Label>
           <Select
-            value={draft.crewMemberId}
-            onValueChange={(value) => setDraft((current) => ({ ...current, crewMemberId: value }))}
+            value={draft.staffId}
+            onValueChange={(value) => setDraft((current) => ({ ...current, staffId: value }))}
           >
             <SelectTrigger id="allowance-crew">
               <SelectValue placeholder="Crew member" />
@@ -319,6 +319,7 @@ function IssueForm({
               {crew.map((member) => (
                 <SelectItem key={member.id} value={member.id}>
                   {member.name}
+                  {member.note ? ` · ${member.note}` : ''}
                 </SelectItem>
               ))}
             </SelectContent>
