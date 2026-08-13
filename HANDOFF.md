@@ -471,6 +471,62 @@ but are **not** created by the seed — a fresh volume has the administrator onl
 
 ---
 
+## Decision record — all open questions resolved
+
+Nothing here is awaiting an answer. Kept as a record so a later session can see what was
+decided and why, rather than reopening it.
+
+### Confirmed by the user at the end of Phase 4
+
+| #   | Question                                                                  | Decision                                                  |
+| --- | ------------------------------------------------------------------------- | --------------------------------------------------------- |
+| 1   | Trucks were added by me, not in the brief's domain-concepts list          | **Correct as built.** Keep.                               |
+| 2   | `Shipment.appliedTpcRate` semantics                                       | **Correct as built.** Rate _or_ flat amount, never both.  |
+| 8   | `Commission.appliedRate` nullable and unbounded for fixed/formula methods | **Correct as built.**                                     |
+| 9   | Dropping `isSettled` leaves a write-off nowhere to live                   | **No write-offs.** See below — this one has consequences. |
+| 10  | Charges editable after computing, until something is paid                 | **Correct as built.**                                     |
+
+#### 9 in full: crew debts are never written off
+
+Confirmed by the business. A crew debt is either recovered in full or carried
+indefinitely; there is no state where a deduction is closed while still partly
+unrecovered.
+
+That makes the current model complete rather than merely adequate: settlement is derived
+(`recoveries` sum to `amount`) and needs no flag, and a partly-recovered debt simply
+stays open, which is the real behaviour.
+
+**Do not add an `isSettled` column or a write-off amount.** The temptation will come up
+in Phase 6, when payout screens want to show "closed" deductions — they should compute
+it. Recorded in the `CrewDeduction` docblock in `schema.prisma` as well as here, because
+that is where somebody would be about to add it.
+
+If the business ever does start forgiving debts, a write-off is its own record with a
+reason and an approver (like `Adjustment`) — not a boolean that can disagree with the sum
+underneath it.
+
+### Resolved earlier, with the reasoning that mattered
+
+| #   | Question                                           | Resolution                                                                                                                     |
+| --- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 3   | `CommissionRule` vs `SystemSetting` fallback       | Phase 3. `CommissionRule` is the only source of truth for crew pay; a shipment matching no rule raises rather than defaulting. |
+| 4   | Deduction recovery across payout runs              | Phase 4. Join table `crew_deduction_recovery` — a deduction is divisible, unlike a commission.                                 |
+| 5   | 1:1 relations modelled as 1:many                   | Phase 3. `liveOne()` / `liveOneOrThrow()` assert-and-unwrap the single live row.                                               |
+| 6   | `user.email` only partially unique                 | Phase 3. Better Auth's adapter uses `findFirst`, so it never assumed total uniqueness.                                         |
+| 7   | Gas override sharing a column with the frozen rate | Phase 4. Split into input (`gasRateOverride`) and output (`appliedGasDeductionRate`).                                          |
+
+### The pattern worth carrying into Phase 5
+
+Three of these — 4, 7, and the `isSettled` question that fell out of 4 — were the same
+defect: **one column doing two jobs, with a convention rather than a constraint keeping
+the two apart.** In every case the giveaway was that no CHECK could express the rule,
+because the database held the same missing information the reader did.
+
+`Allowance` and `Liquidation` are the next tables to be built on, and are worth reading
+with that lens before Phase 5 adds behaviour to them.
+
+---
+
 ## Phase 5 — what a new session needs to know
 
 Phase 5 is allowance, liquidation and receipts. Everything it depends on exists.
@@ -493,102 +549,23 @@ Phase 5 is allowance, liquidation and receipts. Everything it depends on exists.
 
 ### Still worth doing
 
-- **An API e2e harness (supertest).** Still absent. Phase 4's verification was thorough
-  but manual: a Python script driving the containerised stack, not something CI re-runs.
-  The commission engine's _arithmetic_ is well covered by unit tests; its _wiring_ —
-  status guards, role policy per transition, crew scoping — is only proved by hand.
-  This is now the biggest gap in the suite.
+- **An API e2e harness (supertest).** Still absent, and now the biggest gap in the suite.
+  Phase 4's verification was thorough but manual: a Python script driving the
+  containerised stack, not something CI re-runs. The commission engine's _arithmetic_ is
+  well covered by unit tests; its _wiring_ — status guards, role policy per transition,
+  crew scoping — is proved only by hand.
 - **`CommissionService.computeForShipment` has no unit test**, only live verification,
   because it needs Prisma. The pure pieces around it are covered; the orchestration is
   not. A test client against the real Postgres (as `packages/db` does) would close it.
-- The commission row does **not** record which rule produced it. That was deliberate —
-  the brief specifies what Commission stores, and adding an FK would also change
-  `removeRecord` semantics for rules — but "which rule paid this?" is answered today only
-  by inference from the frozen rate and method. Worth revisiting if audit asks.
+- The commission row does **not** record which rule produced it. Deliberate — the brief
+  specifies what `Commission` stores, and adding an FK would also change `removeRecord`
+  semantics for rules — but "which rule paid this?" is answered today only by inference
+  from the frozen rate and method. Worth revisiting if audit asks.
 
----
+### Housekeeping on the development machine
 
-## Open questions / decisions flagged to user
-
-1. **Vehicles/trucks** were added by me (not in the original brief's domain concepts
-   list) — never explicitly confirmed as correct.
-2. ~~**`Shipment.appliedTpcRate` semantics**~~ — **RESOLVED by implementation in Phase 4,
-   still worth a nod from you.** A broker cut is entered as _either_ a percentage of
-   gross _or_ a flat amount, never both; `appliedTpcRate` is set for the former and null
-   for the latter. This is the design that was flagged in Phase 3; Phase 4 built it,
-   enforced the exclusivity in the schema (`hasUnambiguousTpc`) and refused a TPC on a
-   shipment with no broker at all. A cut larger than the gross rate is also refused,
-   since a negative net rate would poison every figure downstream.
-3. ~~**`CommissionRule` vs `SystemSetting` fallback overlap**~~ — **RESOLVED (Phase 3).**
-   `CommissionRule` is the only source of truth for crew pay. Phase 4 honoured it: a
-   shipment matching no rule raises, and the two gaps this opened are now closed.
-4. ~~**`CrewDeduction` partial recovery across multiple payout runs**~~ — **RESOLVED
-   (user decision): added the join table.** Migration
-   `20260812192500_crew_deduction_recovery_join_table`.
-
-   A commission is indivisible, so one link with a full unique models it. A deduction is
-   **divisible** — a ₱9,000 damage claim against someone earning ₱1,800 a fortnight comes
-   back a slice at a time — and it was being modelled with a single `payoutLineId` PLUS a
-   `recovered` running total, which is two incompatible designs at once. The link was
-   repointed every run, so all but the last recovery vanished and an earlier voucher
-   could no longer be itemised; the running total had no record of what made it up; and
-   nothing stopped it being incremented twice, recovering a debt twice and
-   short-changing the crew member.
-
-   Now `crew_deduction_recovery` holds one row per slice (which debt, which line, how
-   much). `payoutLineId`, `recovered` and `isSettled` are **dropped** rather than kept as
-   a cache — same reasoning as the SystemSetting rate fallback, two places holding one
-   number where the weaker wins silently. The outstanding balance is the debt less the
-   sum of live recoveries.
-
-   Guarantees, all asserted: a partial-unique on (deduction, line) so one line cannot
-   take two slices of one debt; `amount > 0`; a constraint trigger refusing
-   over-recovery (a CHECK cannot span rows); and the **same idempotency family as
-   commissions** — once the run is PAID the recovery cannot be altered, soft-deleted or
-   hard-deleted. That last one was previously absent on this side of the ledger
-   entirely. `eztruckr_commission_is_paid` is reused rather than duplicated, so PAID has
-   one definition in SQL.
-
-5. ~~**1:1 relations modeled as 1:many**~~ — **RESOLVED (Phase 3).** `liveOne()` /
-   `liveOneOrThrow()` unwrap the single live row.
-6. ~~**`user.email` only partially unique**~~ — **RESOLVED (Phase 3).**
-
-### New in Phase 4, worth your confirmation
-
-7. ~~**The gas override reuses `appliedGasDeductionRate`.**~~ — **RESOLVED (user
-   decision): split into an input and an output.** Migration
-   `20260812181020_split_gas_rate_override_from_applied`.
-
-   The single column held both the rate a person asked for and the rate the engine
-   froze, with `gasRateOverrideReason` left to tell them apart. That decoded correctly
-   but only by convention — **no CHECK could enforce it, because Postgres had the same
-   missing information** — and it made recomputation depend on a reason _string_ being
-   present. Any future write path setting a rate without a reason would have turned an
-   override into a "frozen default" and had it overwritten on the next recompute, paying
-   the crew a different figure with nothing raising.
-
-   Now: `gasRateOverride` (input, what somebody asked for) · `gasRateOverrideReason`
-   (why) · `appliedGasDeductionRate` (output, what the engine froze — like every other
-   `applied*` column, written only by the engine). Resolution collapses to
-   `gasRateOverride ?? systemDefault` with no branching on the reason, and
-   `shipment_gas_rate_override_needs_reason` enforces the pairing **in both directions**
-   against raw SQL, not just at the endpoint that validates it. Backfilled from the
-   reason column; the one existing shipment came through correctly.
-
-   `GET /shipments/:id/gas-rate` now returns `systemDefault`, `override`, `effective`
-   (what the next computation will use) and `frozen` (what the last one did) as separate
-   fields, because the last two diverge whenever the override or the system default
-   changes after computing. The card shows both and prompts a recompute when they differ.
-
-8. **`Commission.appliedRate` is nullable and no longer bounded to `[0,1]` for the fixed
-   and formula methods.** See the schema section above. The alternative was refusing to
-   record a legitimate flat fee on a zero-rated backhaul because the _reporting_ rate is
-   undefined, which seemed worse.
-9. **Dropping `isSettled` means a write-off has nowhere to live.** Settlement is now
-   derived (recovered = amount), so "we forgave the rest of the tyre debt" cannot be
-   expressed. That is a different concept from a recovery and wants its own
-   representation — a write-off amount or a status — rather than a boolean that can
-   disagree with the arithmetic. Flagging it for Phase 6 rather than guessing now.
-10. **Charges stay editable after commissions are computed, until something is paid.**
-    The shipment then reports `commissionsStale` and the UI prompts a recompute. The
-    stricter reading — lock at computation — was tried first and is a dead end.
+The Docker VM ran out of disk during Phase 4 (Postgres could not extend a file, which
+failed a migration mid-run; it rolled back cleanly and was re-applied). Pruning dangling
+images reclaimed 9GB, leaving ~9GB free. Roughly 19GB of build cache and 14GB of unused
+images remain reclaimable via `docker builder prune` / `docker image prune -a` if it
+becomes tight again. The host volume is separately at 97% (35GB free of 926GB).

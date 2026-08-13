@@ -1047,6 +1047,17 @@ model CrewDeduction {
   /// weaker one wins silently when they disagree. The sum of live recoveries
   /// is the only answer, and `crew_deduction_recovery_not_over_recovered`
   /// stops it exceeding the debt.
+  ///
+  /// SETTLEMENT IS DERIVED TOO — a debt is settled when the recoveries reach
+  /// its amount — and there is no `isSettled` column, deliberately.
+  ///
+  /// DEBTS ARE NEVER WRITTEN OFF. Confirmed by the business: a crew debt is
+  /// either recovered in full or carried indefinitely, so there is no state
+  /// where a deduction is closed while still partly unrecovered. Do not add
+  /// an `isSettled` flag or a write-off amount to express one. If that ever
+  /// changes, a write-off is its own record with a reason and an approver
+  /// (like `Adjustment`), not a boolean that can disagree with the sum
+  /// underneath it.
   recoveries CrewDeductionRecovery[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
