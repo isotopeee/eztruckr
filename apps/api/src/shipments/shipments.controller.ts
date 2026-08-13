@@ -28,6 +28,7 @@ import {
 import { CommissionService } from '../commission/commission.service';
 import {
   AssignCrewDto,
+  AssignTruckDto,
   CreateShipmentDto,
   SetGasRateOverrideDto,
   ShipmentListQueryDto,
@@ -87,6 +88,17 @@ export class ShipmentsController {
   @Roles(...CAN_WRITE_SHIPMENTS)
   assignCrew(@Param('id') id: string, @Body() dto: AssignCrewDto): Promise<Shipment> {
     return this.shipments.assignCrew(id, dto);
+  }
+
+  /**
+   * Separate from `/crew` because it is a separate decision with a different
+   * rule about when it may change — see `assignTruckSchema`. Dispatch's job
+   * either way, so the same role list.
+   */
+  @Patch(':id/truck')
+  @Roles(...CAN_WRITE_SHIPMENTS)
+  assignTruck(@Param('id') id: string, @Body() dto: AssignTruckDto): Promise<Shipment> {
+    return this.shipments.assignTruck(id, dto);
   }
 
   /**

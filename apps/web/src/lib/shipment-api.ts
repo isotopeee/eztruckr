@@ -69,6 +69,17 @@ export function assignCrew(
   });
 }
 
+/**
+ * Its own call, not part of `assignCrew` — the truck is a separate decision and
+ * stays changeable later than the crew do. See `assignTruckSchema`.
+ */
+export function assignTruck(id: string, truckId: string | null): Promise<Shipment> {
+  return apiFetch<Shipment>(`/shipments/${id}/truck`, {
+    method: 'PATCH',
+    body: JSON.stringify({ truckId }),
+  });
+}
+
 export function transitionShipment(id: string, to: ShipmentStatus): Promise<Shipment> {
   return apiFetch<Shipment>(`/shipments/${id}/status`, {
     method: 'PATCH',

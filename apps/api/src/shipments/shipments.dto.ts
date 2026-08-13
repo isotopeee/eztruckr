@@ -1,5 +1,6 @@
 import {
   assignCrewSchema,
+  assignTruckSchema,
   createAdditionalChargeSchema,
   createBillableExpenseSchema,
   createShipmentSchema,
@@ -25,6 +26,7 @@ export class ShipmentListQueryDto extends createZodDto(shipmentListQuerySchema) 
 export class CreateShipmentDto extends createZodDto(createShipmentSchema) {}
 export class UpdateShipmentDto extends createZodDto(updateShipmentSchema) {}
 export class AssignCrewDto extends createZodDto(assignCrewSchema) {}
+export class AssignTruckDto extends createZodDto(assignTruckSchema) {}
 export class TransitionShipmentDto extends createZodDto(transitionShipmentSchema) {}
 export class SetGasRateOverrideDto extends createZodDto(setGasRateOverrideSchema) {}
 

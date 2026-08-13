@@ -25,6 +25,7 @@ import {
   TPC_EXCLUSIVE_MESSAGE,
   TPC_WITHOUT_BROKER_MESSAGE,
   type AssignCrewInput,
+  type AssignTruckInput,
   type CreateShipmentInput,
   type GasRateContext,
   type Page,
@@ -257,6 +258,52 @@ export class ShipmentsService {
       await this.shipments.update({
         where: { id },
         data: { driverId: input.driverId, helperId: input.helperId },
+        include: SHIPMENT_INCLUDE,
+      }),
+    );
+  }
+
+  /**
+   * Assigns the truck, or clears it.
+   *
+   * THE RULE IS DELIBERATELY LOOSER THAN THE CREW'S, and the difference is the
+   * money. A crew member cannot be swapped once a commission has been paid,
+   * because the voucher names them. A truck is paid nothing and appears nowhere
+   * in the commission chain, so the only thing that should stop the record
+   * being corrected is the trip being closed for good — and a truck that broke
+   * down and was swapped at a roadside is exactly the correction this has to
+   * allow. Reaching for `assertNothingPaid` here would be copying a guard
+   * without its reason.
+   *
+   * Clearing is refused once the trip has been dispatched: a shipment on the
+   * road with no truck against it is not a state anybody can act on, and
+   * dispatch already asserted there was one.
+   */
+  async assignTruck(id: string, input: AssignTruckInput): Promise<Shipment> {
+    const current = await this.load(id);
+    const status = this.statusOf(current);
+
+    if (status === ShipmentStatus.CLOSED) {
+      throw new ConflictException(
+        `Shipment ${current.shipmentNumber} is closed; the truck on it is now part of the record.`,
+      );
+    }
+
+    if (input.truckId === null && shipmentStatusAtLeast(status, ShipmentStatus.DISPATCHED)) {
+      throw badRequest(
+        'truckId',
+        `Shipment ${current.shipmentNumber} has already been dispatched, so it cannot be left without a truck. Assign a different one instead.`,
+      );
+    }
+
+    if (input.truckId !== null) {
+      await this.assertTruckAssignable(input.truckId, current.truckId);
+    }
+
+    return toShipment(
+      await this.shipments.update({
+        where: { id },
+        data: { truckId: input.truckId },
         include: SHIPMENT_INCLUDE,
       }),
     );
@@ -594,6 +641,35 @@ export class ShipmentsService {
       throw badRequest(
         field,
         `${name}'s licence expired on ${crew.licenseExpiry.toISOString().slice(0, 10)} and cannot drive.`,
+      );
+    }
+  }
+
+  /**
+   * The truck exists, and is not one that has been retired from service.
+   *
+   * `isActive` is checked only when the truck is CHANGING. A shipment already
+   * carrying a truck that was sold last month must stay saveable — the same
+   * separation of `isActive` from `deletedAt` the schema insists on everywhere
+   * else: not offered for new work, still valid on history.
+   */
+  private async assertTruckAssignable(
+    truckId: string,
+    currentTruckId: string | null,
+  ): Promise<void> {
+    const truck = await this.prisma.client.truck.findFirst({
+      where: { id: truckId },
+      select: { plateNumber: true, isActive: true },
+    });
+
+    if (!truck) {
+      throw badRequest('truckId', `No truck with id ${truckId}`);
+    }
+
+    if (!truck.isActive && truckId !== currentTruckId) {
+      throw badRequest(
+        'truckId',
+        `${truck.plateNumber} is deactivated and cannot be assigned to new work.`,
       );
     }
   }

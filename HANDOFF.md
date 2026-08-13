@@ -377,6 +377,7 @@ check cannot see; the engine's refusal remains the thing that guarantees correct
 | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | `GET/POST /shipments`, `PATCH /shipments/:id`                                      | read: office + crew (scoped) · write: ADMIN/OPS            |
 | `PATCH /shipments/:id/crew`                                                        | ADMIN/OPS                                                  |
+| `PATCH /shipments/:id/truck` (added later — see below)                             | ADMIN/OPS                                                  |
 | `PATCH /shipments/:id/status`                                                      | union, then per-target from `ROLES_BY_TRANSITION`          |
 | `GET/PATCH /shipments/:id/gas-rate`                                                | read: office · write: ADMIN/ACCOUNTING                     |
 | `GET/POST/PATCH/DELETE /shipments/:id/billable-expenses` and `/additional-charges` | read: office · write: ADMIN/ACCOUNTING                     |
@@ -603,13 +604,13 @@ new: no allowance releases, no settlement, no charges, no levers.
 ## Current verified state (end of Phase 5)
 
 - **`pnpm run check`**: 14/14 tasks passing, uncached.
-- **226 tests**, all passing (was 199):
+- **231 tests**, all passing (was 199):
 
   | Workspace        | Count | Added in Phase 5                                                                           |
   | ---------------- | ----- | ------------------------------------------------------------------------------------------ |
   | `packages/types` | 72    | the renumbered codes pinned, rank taken from the sequence, the four legal moves            |
   | `packages/db`    | 58    | four new code-column drift guards; an unallocated code refused by raw SQL as well as by TS |
-  | `apps/api`       | 96    | `liquidation-lifecycle` [17] — the first DB-backed tests in this workspace                 |
+  | `apps/api`       | 101   | `liquidation-lifecycle` [17] and `truck-assignment` [8], the first DB-backed tests here    |
 
 - **The brief's three required assertions, each asserted twice** — in
   `apps/api/src/liquidation/liquidation-lifecycle.test.ts` against a real database, and
@@ -626,8 +627,8 @@ new: no allowance releases, no settlement, no charges, no levers.
 - **Phase 4's assertions still pass unchanged** (`netRate 16200` → base 12,150, driver
   1,822.50, helper 911.25; with a 1,500 commissionable charge → 995.63 half-up).
 
-- **53 live checks against the containerised stack**, re-run after the renumber, in order:
-  created a route with a
+- **59 live checks against the containerised stack**, re-run after the renumber and again
+  after truck assignment, in order: created a route with a
   standard allowance; booked a trip; confirmed **no liquidation exists before delivery**;
   dispatched → in transit → delivered, and found a liquidation at PENDING with
   `submittedAt` null; saw the route standard offered as a default for the first release
@@ -695,6 +696,51 @@ workspaces at once, and that suite's teardown deletes everything matching `itest
 Its cleanup matches child rows by their SHIPMENT rather than by id, because the services
 under test generate cuids — matching on id alone leaves allowances behind, and the next
 run's deterministic shipment ids pick them straight back up.
+
+---
+
+## Truck assignment — a Phase 4 gap, found and closed after Phase 5
+
+**The web app could not dispatch a single shipment.** The create dialog hard-coded
+`routeId: null, truckId: null`, and no screen anywhere offered a truck picker — while
+`assertReadyToDispatch` requires a truck. Every trip verified in Phases 4 and 5 got its
+truck through the API, so nothing caught it: the scripts passed `truckId` at creation and
+the UI was never the thing being tested.
+
+The route was missing for the same reason, which meant a route's `standardAllowance` —
+built in Phase 5 to prefill the first cash release — was unreachable from the UI too, as
+were route-scoped commission rules and `standardRate`.
+
+### `PATCH /shipments/:id/truck`, and why it is not part of `/crew`
+
+The two are assigned by the same person at the same moment, which is all they have in
+common:
+
+- **Crew assignment is one decision about two slots.** Driver and helper move together so
+  nobody can briefly hold both, and it freezes once a commission is **paid** — the voucher
+  names them.
+- **A truck is paid nothing** and appears nowhere in the commission chain, so the only
+  thing that should stop the record being corrected is the trip being **closed**. A truck
+  that broke down and was swapped at a roadside is exactly the correction the system has to
+  accept, long after the crew have stopped being editable.
+
+Reaching for `assertNothingPaid` here would have been copying a guard without its reason.
+`truck-assignment.test.ts` pins the difference in both directions, because the "consistency"
+fix — mirror the crew's cutoff — looks like tidying up and silently makes that correction
+impossible.
+
+Two smaller rules: a truck may be cleared from a draft but **not** from a dispatched trip
+(dispatch asserted there was one, and a shipment on the road with no truck is not a state
+anybody can act on); and `isActive` is checked only when the truck is **changing**, so a
+trip that went out on a since-sold truck stays saveable.
+
+### Web
+
+Truck and route pickers in the create dialog, a truck selector with its own Save on the
+detail card, and a Truck column on the list. Picking a route fills in origin, destination
+and the standard rate — all still editable, because origin and destination are snapshotted
+onto the shipment rather than read through the route, so they have to be copied at some
+point and this is it.
 
 ---
 

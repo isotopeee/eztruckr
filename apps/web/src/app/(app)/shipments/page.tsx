@@ -10,7 +10,9 @@ import {
   UserRole,
   type Client,
   type Page as PageResult,
+  type Route as RouteRecord,
   type ThirdParty,
+  type Truck,
 } from '@eztruckr/types';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -131,6 +133,7 @@ export default function Page() {
                   <TableHead>Client</TableHead>
                   <TableHead>Route</TableHead>
                   <TableHead>Crew</TableHead>
+                  <TableHead>Truck</TableHead>
                   <TableHead className="text-right">Net rate</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
@@ -153,6 +156,9 @@ export default function Page() {
                     <TableCell className="text-muted-foreground text-xs">
                       {shipment.driverName ?? 'no driver'}
                       {shipment.helperName ? ` · ${shipment.helperName}` : ''}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      {shipment.truckPlateNumber ?? 'no truck'}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatMoney(shipment.netRate)}
@@ -194,6 +200,8 @@ function CreateShipmentDialog() {
     shipmentNumber: '',
     clientId: '',
     thirdPartyId: NONE,
+    routeId: NONE,
+    truckId: NONE,
     origin: '',
     destination: '',
     grossRate: '',
@@ -213,7 +221,45 @@ function CreateShipmentDialog() {
     enabled: open,
   });
 
+  const routes = useQuery({
+    queryKey: ['routes', 'picker'],
+    queryFn: () => apiFetch<PageResult<RouteRecord>>('/routes?pageSize=200'),
+    enabled: open,
+  });
+
+  const trucks = useQuery({
+    queryKey: ['trucks', 'picker'],
+    queryFn: () => apiFetch<PageResult<Truck>>('/trucks?pageSize=200'),
+    enabled: open,
+  });
+
   const hasBroker = form.thirdPartyId !== NONE;
+
+  /**
+   * Picking a route fills in what the route already knows.
+   *
+   * Origin and destination are SNAPSHOTTED onto the shipment rather than read
+   * through the route, so that renaming a route later cannot rewrite where old
+   * trips went — which means they have to be copied at some point, and this is
+   * it. The standard rate is prefilled for the same reason the column exists;
+   * every one of the three stays editable, because what was agreed on the day
+   * beats what the route usually is.
+   */
+  const chooseRoute = (routeId: string) => {
+    const route = (routes.data?.items ?? []).find((entry) => entry.id === routeId);
+
+    setForm((current) => ({
+      ...current,
+      routeId,
+      ...(route
+        ? {
+            origin: route.origin,
+            destination: route.destination,
+            grossRate: route.standardRate ?? current.grossRate,
+          }
+        : {}),
+    }));
+  };
 
   const create = useMutation({
     mutationFn: () =>
@@ -221,8 +267,8 @@ function CreateShipmentDialog() {
         shipmentNumber: form.shipmentNumber,
         clientId: form.clientId,
         thirdPartyId: hasBroker ? form.thirdPartyId : null,
-        routeId: null,
-        truckId: null,
+        routeId: form.routeId === NONE ? null : form.routeId,
+        truckId: form.truckId === NONE ? null : form.truckId,
         origin: form.origin,
         destination: form.destination,
         cargoDescription: null,
@@ -293,6 +339,26 @@ function CreateShipmentDialog() {
             </Select>
           </Field>
 
+          <Field id="routeId" label="Route" error={errors.routeId}>
+            <Select value={form.routeId} onValueChange={chooseRoute}>
+              <SelectTrigger id="routeId">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>One-off — no standard route</SelectItem>
+                {(routes.data?.items ?? []).map((route) => (
+                  <SelectItem key={route.id} value={route.id}>
+                    {route.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-muted-foreground text-xs">
+              Fills in the lane and the standard rate, and carries this route&apos;s standard
+              allowance through to the trip&apos;s first cash release. All still editable.
+            </p>
+          </Field>
+
           <div className="grid grid-cols-2 gap-3">
             <Field id="origin" label="Origin" error={errors.origin}>
               <Input
@@ -321,6 +387,26 @@ function CreateShipmentDialog() {
               value={form.grossRate}
               onChange={(event) => set('grossRate')(event.target.value)}
             />
+          </Field>
+
+          <Field id="truckId" label="Truck" error={errors.truckId}>
+            <Select value={form.truckId} onValueChange={set('truckId')}>
+              <SelectTrigger id="truckId">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>Assign later</SelectItem>
+                {(trucks.data?.items ?? []).map((truck) => (
+                  <SelectItem key={truck.id} value={truck.id}>
+                    {truck.plateNumber}
+                    {truck.bodyType ? ` · ${truck.bodyType}` : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-muted-foreground text-xs">
+              Optional now, required to dispatch — assign it here or on the trip itself.
+            </p>
           </Field>
 
           <Field id="thirdPartyId" label="Third party (broker)" error={errors.thirdPartyId}>

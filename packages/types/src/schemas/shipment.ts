@@ -226,6 +226,27 @@ export type AssignCrewInput = z.infer<typeof assignCrewSchema>;
 export const SAME_PERSON_BOTH_SLOTS_MESSAGE =
   'one person cannot be both the driver and the helper on the same trip';
 
+/**
+ * The truck doing the trip. Its own call, separate from the crew.
+ *
+ * WHY NOT PART OF `assignCrew`. The two are assigned by the same person at
+ * roughly the same moment, which is the only thing they have in common. Crew
+ * assignment is one decision about two slots — that is why driver and helper
+ * move together, so nobody can briefly be both. A truck has no such pairing,
+ * and it obeys a different rule about when it may change: a driver cannot be
+ * swapped once a commission has been paid to them, while a truck is paid
+ * nothing and feeds no figure in the money chain, so a breakdown mid-trip can
+ * still be recorded honestly afterwards.
+ *
+ * Explicit null clears the slot, which a draft may want and a dispatched trip
+ * may not — the service refuses to leave a dispatched shipment without one.
+ */
+export const assignTruckSchema = z.object({
+  truckId: cuidSchema.nullish().transform((value) => value ?? null),
+});
+
+export type AssignTruckInput = z.infer<typeof assignTruckSchema>;
+
 // ---------------------------------------------------------------------------
 // Status transitions and the gas rate override
 // ---------------------------------------------------------------------------

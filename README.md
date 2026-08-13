@@ -426,7 +426,9 @@ management screens and a crew portal.
 ## Phase 4 scope
 
 Built: shipment CRUD with the gross → TPC → net rate chain; the status
-lifecycle; crew assignment with driver-licence validation; billable expenses
+lifecycle; crew assignment with driver-licence validation; truck assignment
+(added after Phase 5 — it had no endpoint or picker, so nothing could be
+dispatched from the UI at all); billable expenses
 and additional charges with commissionable flags; the per-shipment gas
 deduction override; and the commission engine — five methods behind one
 dispatch table, rule resolution with no fallback, and every applied rate frozen

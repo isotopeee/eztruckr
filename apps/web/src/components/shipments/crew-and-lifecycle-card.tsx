@@ -11,6 +11,7 @@ import {
   type Page,
   type Shipment,
   type ShipmentStatus,
+  type Truck,
 } from '@eztruckr/types';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -27,7 +28,7 @@ import {
 } from '@/components/ui/select';
 import { ApiError, apiFetch } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
-import { assignCrew, shipmentKeys, transitionShipment } from '@/lib/shipment-api';
+import { assignCrew, assignTruck, shipmentKeys, transitionShipment } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 
 const UNASSIGNED = '__none__';
@@ -46,6 +47,7 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
   const queryClient = useQueryClient();
   const [driverId, setDriverId] = useState(shipment.driverId ?? UNASSIGNED);
   const [helperId, setHelperId] = useState(shipment.helperId ?? UNASSIGNED);
+  const [truckId, setTruckId] = useState(shipment.truckId ?? UNASSIGNED);
 
   const canDispatch = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.OPERATIONS;
   const canClose = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
@@ -53,11 +55,17 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
   useEffect(() => {
     setDriverId(shipment.driverId ?? UNASSIGNED);
     setHelperId(shipment.helperId ?? UNASSIGNED);
-  }, [shipment.driverId, shipment.helperId]);
+    setTruckId(shipment.truckId ?? UNASSIGNED);
+  }, [shipment.driverId, shipment.helperId, shipment.truckId]);
 
   const crew = useQuery({
     queryKey: ['crew-members', 'assignable'],
     queryFn: () => apiFetch<Page<CrewMember>>('/crew-members?pageSize=200'),
+  });
+
+  const trucks = useQuery({
+    queryKey: ['trucks', 'assignable'],
+    queryFn: () => apiFetch<Page<Truck>>('/trucks?pageSize=200'),
   });
 
   const onError = (error: unknown) => {
@@ -76,6 +84,23 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
       }),
     onSuccess: () => {
       toast.success('Crew updated');
+      void invalidate();
+    },
+    onError,
+  });
+
+  /**
+   * Saved on its own, not with the crew.
+   *
+   * They are two decisions with two rules — the crew freeze when a commission
+   * is paid, the truck only when the trip closes — so one Save button covering
+   * both would have to disable itself on the stricter of the two and take a
+   * legitimate truck correction down with it.
+   */
+  const saveTruck = useMutation({
+    mutationFn: () => assignTruck(shipment.id, truckId === UNASSIGNED ? null : truckId),
+    onSuccess: () => {
+      toast.success('Truck updated');
       void invalidate();
     },
     onError,
@@ -100,10 +125,10 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Crew and progress</CardTitle>
+        <CardTitle className="text-base">Crew, truck and progress</CardTitle>
         <CardDescription>
           A role belongs to the trip, not the person — the same crew member can drive one and help
-          on another.
+          on another. Dispatch needs a driver and a truck.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5 text-sm">
@@ -129,6 +154,43 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
             <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
               {save.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Save crew
+            </Button>
+          ) : null}
+        </div>
+
+        <div className="space-y-3 border-t pt-4">
+          <div className="space-y-1">
+            <Label htmlFor="truck" className="text-muted-foreground text-xs">
+              Truck
+            </Label>
+            <Select value={truckId} onValueChange={setTruckId} disabled={!canDispatch}>
+              <SelectTrigger id="truck">
+                <SelectValue placeholder="No truck assigned" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNASSIGNED}>No truck</SelectItem>
+                {(trucks.data?.items ?? []).map((truck) => (
+                  <SelectItem key={truck.id} value={truck.id}>
+                    {truck.plateNumber}
+                    {truck.bodyType ? ` · ${truck.bodyType}` : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-muted-foreground text-xs">
+              A truck feeds no commission, so unlike the crew it stays correctable until the trip
+              closes — a roadside swap can be recorded after the fact.
+            </p>
+          </div>
+          {canDispatch ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => saveTruck.mutate()}
+              disabled={saveTruck.isPending}
+            >
+              {saveTruck.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save truck
             </Button>
           ) : null}
         </div>
