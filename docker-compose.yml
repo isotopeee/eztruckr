@@ -2,7 +2,11 @@ name: eztruckr
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # 18, for its built-in uuidv7(). Every primary key in this schema defaults
+    # to it, so the version is a hard requirement rather than a preference —
+    # the function does not exist before 18 and the init migration will fail
+    # outright on an older server, which is the failure we want.
+    image: postgres:18-alpine
     container_name: eztruckr-postgres
     restart: unless-stopped
     environment:
@@ -17,7 +21,13 @@ services:
       # instances. Container-internal port is always 5432.
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # /var/lib/postgresql, NOT /var/lib/postgresql/data — the mount point
+      # changed in the 18 images. They store data in a major-version-specific
+      # subdirectory (18/docker) so `pg_upgrade --link` can run without crossing
+      # a mount boundary, and a volume pinned at the old path makes the
+      # container refuse to start with "there appears to be PostgreSQL data in
+      # /var/lib/postgresql/data (unused mount/volume)".
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U eztruckr -d eztruckr"]
       interval: 5s

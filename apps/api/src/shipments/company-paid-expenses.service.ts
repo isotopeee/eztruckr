@@ -11,6 +11,7 @@ import {
   type CreateCompanyPaidExpenseInput,
   type UpdateCompanyPaidExpenseInput,
 } from '@eztruckr/types';
+import { resolvePayeeRequirement } from '../master-data/payee-requirement';
 import { auditFields } from '../master-data/serialize';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShipmentsService } from './shipments.service';
@@ -58,8 +59,15 @@ export class CompanyPaidExpensesService {
 
   async add(shipmentId: string, input: CreateCompanyPaidExpenseInput): Promise<CompanyPaidExpense> {
     await this.assertEditable(shipmentId);
-    await this.assertCategoryExists(input.expenseCategoryId);
+    await this.assertPayeeExists(input.payeeId);
     await this.assertReceiptExists(input.receiptId);
+
+    // Also the category's existence check — see `resolvePayeeRequirement`.
+    const payeeRequired = await resolvePayeeRequirement(
+      this.prisma.client.expenseCategory,
+      input.expenseCategoryId,
+      input.payeeId,
+    );
 
     const row = await this.expenses.create({
       data: {
@@ -68,6 +76,8 @@ export class CompanyPaidExpensesService {
         description: input.description,
         amount: input.amount,
         spentAt: new Date(input.spentAt),
+        payeeId: input.payeeId,
+        payeeRequired,
         receiptId: input.receiptId,
       },
       include: EXPENSE_INCLUDE,
@@ -83,8 +93,15 @@ export class CompanyPaidExpensesService {
   ): Promise<CompanyPaidExpense> {
     await this.assertEditable(shipmentId);
     await this.assertBelongs(shipmentId, id);
-    await this.assertCategoryExists(input.expenseCategoryId);
+    await this.assertPayeeExists(input.payeeId);
     await this.assertReceiptExists(input.receiptId);
+
+    // Both halves of the rule are re-resolved against what the row will look
+    // like AFTER the patch, not what was sent. A PATCH that changes only the
+    // category can make a previously legal row illegal, and one that only
+    // clears the payee is the same failure from the other side; validating the
+    // request alone would miss both.
+    const payeeRequired = await this.resolveRequirementAfterPatch(id, input);
 
     const row = await this.expenses.update({
       where: { id },
@@ -95,7 +112,10 @@ export class CompanyPaidExpensesService {
         ...(input.description === undefined ? {} : { description: input.description }),
         ...(input.amount === undefined ? {} : { amount: input.amount }),
         ...(input.spentAt === undefined ? {} : { spentAt: new Date(input.spentAt) }),
+        ...(input.payeeId === undefined ? {} : { payeeId: input.payeeId }),
         ...(input.receiptId === undefined ? {} : { receiptId: input.receiptId }),
+        // Re-stamped: the row's frozen rule follows its category.
+        payeeRequired,
       },
       include: EXPENSE_INCLUDE,
     });
@@ -144,16 +164,55 @@ export class CompanyPaidExpensesService {
     }
   }
 
-  private async assertCategoryExists(categoryId: string | undefined): Promise<void> {
-    if (categoryId === undefined) return;
+  /**
+   * The category rule applied to the row as the patch will leave it.
+   *
+   * `undefined` means "this PATCH did not mention the field", so the current
+   * value stands; an explicit `null` payee means "clear it", which the rule may
+   * refuse.
+   */
+  private async resolveRequirementAfterPatch(
+    id: string,
+    input: UpdateCompanyPaidExpenseInput,
+  ): Promise<boolean> {
+    const current = await this.expenses.findFirst({
+      where: { id },
+      select: { expenseCategoryId: true, payeeId: true },
+    });
 
-    const found = await this.prisma.client.expenseCategory.findFirst({
-      where: { id: categoryId },
+    if (!current) {
+      throw new NotFoundException(`No company-paid expense with id ${id}`);
+    }
+
+    return resolvePayeeRequirement(
+      this.prisma.client.expenseCategory,
+      input.expenseCategoryId ?? current.expenseCategoryId,
+      input.payeeId === undefined ? current.payeeId : input.payeeId,
+    );
+  }
+
+  /**
+   * Existence only, deliberately — not `isActive`, matching every other
+   * reference check in the system. A deactivated payee is one no longer
+   * OFFERED for new work, and refusing it here would block correcting an
+   * expense whose vendor has since been retired.
+   *
+   * Absence is not this function's business either way: `null` is an expense
+   * with no payee and `undefined` is a PATCH that did not mention one. Whether
+   * absence is ALLOWED is `resolvePayeeRequirement`'s question, asked against
+   * the expense category — checking it here as well would put half the rule in
+   * two places.
+   */
+  private async assertPayeeExists(payeeId: string | null | undefined): Promise<void> {
+    if (!payeeId) return;
+
+    const found = await this.prisma.client.payee.findFirst({
+      where: { id: payeeId },
       select: { id: true },
     });
 
     if (!found) {
-      throw badRequest('expenseCategoryId', `No expense category with id ${categoryId}`);
+      throw badRequest('payeeId', `No payee with id ${payeeId}`);
     }
   }
 
@@ -173,6 +232,7 @@ export class CompanyPaidExpensesService {
 
 const EXPENSE_INCLUDE = {
   expenseCategory: { select: { name: true } },
+  payee: { select: { name: true } },
   receipt: { select: { fileName: true } },
 } satisfies Prisma.CompanyPaidExpenseInclude;
 
@@ -191,6 +251,9 @@ function toCompanyPaidExpense(row: ExpenseRow): CompanyPaidExpense {
     description: row.description,
     amount: row.amount.toString(),
     spentAt: row.spentAt.toISOString(),
+    payeeId: row.payeeId,
+    payeeName: row.payee?.name ?? null,
+    payeeRequired: row.payeeRequired,
     receiptId: row.receiptId,
     receiptFileName: row.receipt?.fileName ?? null,
     ...auditFields(row),

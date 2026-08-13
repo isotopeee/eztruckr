@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { disbursementModeSchema } from '../codes/disbursement-mode';
 import {
   auditFieldsSchema,
-  cuidSchema,
+  idSchema,
   isoDateTimeSchema,
   moneyStringSchema,
   optionalText,
@@ -72,8 +72,8 @@ export const issueAllowanceSchema = z.object({
    * least one to choose — a trip's first liquidation is created with the
    * shipment — so this never leaves the caller with nothing to name.
    */
-  liquidationId: cuidSchema,
-  staffId: cuidSchema,
+  liquidationId: idSchema,
+  staffId: idSchema,
   amount: releasedMoneySchema,
 
   /** Defaults to now, so a release can be recorded after the fact. */
@@ -87,10 +87,10 @@ export const issueAllowanceSchema = z.object({
    * reads like evidence.
    */
   referenceNumber: optionalText(80),
-  receiptId: cuidSchema.nullish().transform((value) => value ?? null),
+  receiptId: idSchema.nullish().transform((value) => value ?? null),
 
   /** Defaults to the acting user when the releaser is not named. */
-  releasedBy: cuidSchema.nullish().transform((value) => value ?? null),
+  releasedBy: idSchema.nullish().transform((value) => value ?? null),
 
   remarks: optionalText(400),
 });

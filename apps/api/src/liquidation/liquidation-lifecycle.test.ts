@@ -4,6 +4,7 @@ import {
   withActor,
   withDeleted,
   type ExtendedPrismaClient,
+  testUuid,
 } from '@eztruckr/db';
 import {
   CommissionMethod,
@@ -12,6 +13,7 @@ import {
   DisbursementMode,
   LiquidationHistoryAction,
   LiquidationStatus,
+  PayeeType,
   SettlementStatus,
   ShipmentStatus,
   UserRole,
@@ -60,6 +62,7 @@ let driverId: string;
 let helperId: string;
 let dispatcherId: string;
 let fuelCategoryId: string;
+let payeeId: string;
 
 /**
  * Deliberately NOT the `itest-` prefix used by the integration tests in
@@ -70,8 +73,8 @@ let fuelCategoryId: string;
  * Sharing the prefix means one suite wipes the other's fixtures mid-run, which
  * fails as a confusing foreign-key error several assertions later.
  */
-const PREFIX = 'p5test-';
-const id = (name: string) => `${PREFIX}${name}`;
+const PREFIX = '00000002-';
+const id = (name: string) => testUuid('00000002', name);
 
 /**
  * Storage stubbed to a recorder.
@@ -126,24 +129,28 @@ function serviceStubs(client: ExtendedPrismaClient, storage: StorageService) {
  * total comes out doubled.
  */
 const CLEANUP_STATEMENTS = [
-  `DELETE FROM "commission" WHERE "shipmentId" LIKE '${PREFIX}%'`,
+  `DELETE FROM "commission" WHERE "shipmentId"::text LIKE '${PREFIX}%'`,
   `DELETE FROM "liquidation_history" WHERE "liquidationId" IN
-     (SELECT id FROM "liquidation" WHERE "shipmentId" LIKE '${PREFIX}%')`,
+     (SELECT id FROM "liquidation" WHERE "shipmentId"::text LIKE '${PREFIX}%')`,
   `DELETE FROM "liquidation_line" WHERE "liquidationId" IN
-     (SELECT id FROM "liquidation" WHERE "shipmentId" LIKE '${PREFIX}%')`,
+     (SELECT id FROM "liquidation" WHERE "shipmentId"::text LIKE '${PREFIX}%')`,
   // Before crew_deduction, which a carried settlement points at.
-  `DELETE FROM "settlement" WHERE "shipmentId" LIKE '${PREFIX}%'`,
-  `DELETE FROM "liquidation" WHERE "shipmentId" LIKE '${PREFIX}%'`,
-  `DELETE FROM "allowance" WHERE "shipmentId" LIKE '${PREFIX}%'`,
+  `DELETE FROM "settlement" WHERE "shipmentId"::text LIKE '${PREFIX}%'`,
+  `DELETE FROM "liquidation" WHERE "shipmentId"::text LIKE '${PREFIX}%'`,
+  `DELETE FROM "allowance" WHERE "shipmentId"::text LIKE '${PREFIX}%'`,
   // After everything that could reference one.
-  `DELETE FROM "receipt" WHERE id LIKE '${PREFIX}%'`,
-  `DELETE FROM "crew_deduction" WHERE "shipmentId" LIKE '${PREFIX}%'`,
+  `DELETE FROM "receipt" WHERE id::text LIKE '${PREFIX}%'`,
+  `DELETE FROM "crew_deduction" WHERE "shipmentId"::text LIKE '${PREFIX}%'`,
+  // `entityId` is deliberately TEXT — audit_log is polymorphic and points at
+  // any table — so it needs an explicit cast now that liquidation ids are uuid.
   `DELETE FROM "audit_log" WHERE "entityType" = 'Liquidation' AND "entityId" NOT IN
-     (SELECT id FROM "liquidation")`,
-  `DELETE FROM "shipment" WHERE id LIKE '${PREFIX}%'`,
-  `DELETE FROM "expense_category" WHERE id LIKE '${PREFIX}%'`,
-  `DELETE FROM "staff" WHERE id LIKE '${PREFIX}%'`,
-  `DELETE FROM "client" WHERE id LIKE '${PREFIX}%'`,
+     (SELECT id::text FROM "liquidation")`,
+  `DELETE FROM "shipment" WHERE id::text LIKE '${PREFIX}%'`,
+  `DELETE FROM "expense_category" WHERE id::text LIKE '${PREFIX}%'`,
+  // After liquidation_line, which is the only thing here that names one.
+  `DELETE FROM "payee" WHERE id::text LIKE '${PREFIX}%'`,
+  `DELETE FROM "staff" WHERE id::text LIKE '${PREFIX}%'`,
+  `DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`,
 ];
 
 async function cleanup(): Promise<void> {
@@ -243,6 +250,17 @@ beforeAll(async () => {
       },
     });
     fuelCategoryId = category.id;
+
+    // Every line needs one now that `liquidation_line.payeeId` is NOT NULL.
+    const payee = await prisma.payee.create({
+      data: {
+        id: id('payee'),
+        code: id('PAY').toUpperCase(),
+        payeeType: PayeeType.COMPANY,
+        name: 'Test Filling Station',
+      },
+    });
+    payeeId = payee.id;
   });
 });
 
@@ -401,6 +419,7 @@ async function addLine(liquidationId: string, amount: string) {
         description: 'Diesel',
         amount,
         spentAt: new Date().toISOString(),
+        payeeId,
         receiptId: null,
       },
       actor,
@@ -712,6 +731,7 @@ describe('approval is the lock, and reversing it is a reasoned act', () => {
             description: 'Late toll',
             amount: '120.00',
             spentAt: new Date().toISOString(),
+            payeeId,
             receiptId: null,
           },
           actor,
@@ -1251,7 +1271,7 @@ describe('a dispatch manager holds cash without being on the truck', () => {
             "commissionableBase", amount, "computedAt",
             "createdAt", "updatedAt", "createdBy"
           ) VALUES (
-            '${PREFIX}bad-commission', '${shipmentId}', '${dispatcherId}',
+            '${id('bad-commission')}', '${shipmentId}', '${dispatcherId}',
             ${StaffRole.DISPATCH_MANAGER}, ${CommissionMethod.FIXED_PER_TRIP},
             0, 0, now(), now(), now(), '${adminId}'
           )
@@ -1284,6 +1304,7 @@ describe('a crew session reaches only the cash it answers for', () => {
             description: 'Not mine to claim',
             amount: '100.00',
             spentAt: new Date().toISOString(),
+            payeeId,
             receiptId: null,
           },
           crewActor(helperId),
@@ -1308,6 +1329,7 @@ describe('a crew session reaches only the cash it answers for', () => {
           description: 'Diesel',
           amount: '900.00',
           spentAt: new Date().toISOString(),
+          payeeId,
           receiptId: null,
         },
         crewActor(driverId),
@@ -1400,6 +1422,7 @@ describe('orphaned receipts are swept, and only the genuinely orphaned ones', ()
           description: 'Diesel',
           amount: '1000.00',
           spentAt: new Date().toISOString(),
+          payeeId,
           receiptId,
         },
         actor,
@@ -1435,6 +1458,7 @@ describe('orphaned receipts are swept, and only the genuinely orphaned ones', ()
           description: 'Diesel, later corrected',
           amount: '1000.00',
           spentAt: new Date().toISOString(),
+          payeeId,
           receiptId,
         },
         actor,

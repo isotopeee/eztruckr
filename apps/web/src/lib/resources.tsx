@@ -3,12 +3,15 @@ import {
   CREW_ROLE_CODES,
   CREW_ROLE_LABELS,
   IMPLEMENTED_COMMISSION_METHODS,
+  PAYEE_TYPE_CODES,
+  PAYEE_TYPE_LABELS,
   STAFF_ROLE_CODES,
   STAFF_ROLE_LABELS,
   UserRole,
   type Client,
   type CommissionRule,
   type ExpenseCategory,
+  type Payee,
   type Route,
   type Staff,
   type ThirdParty,
@@ -18,7 +21,7 @@ import type { ResourceSpec } from '@/lib/resource-spec';
 import { formatDate } from '@/lib/format';
 
 /**
- * The seven master data screens, as data.
+ * The eight master data screens, as data.
  *
  * Every label for an enumerated value is imported from `@eztruckr/types`, not
  * written here — the code sets own their labels, and a second copy in the UI
@@ -27,6 +30,14 @@ import { formatDate } from '@/lib/format';
 
 const WRITE_OPERATIONAL = [UserRole.ADMINISTRATOR, UserRole.OPERATIONS] as const;
 const WRITE_FINANCIAL = [UserRole.ADMINISTRATOR, UserRole.ACCOUNTING] as const;
+
+/**
+ * Payees are neither, so they get both. Mirrors `CAN_WRITE_PAYEES` in the API,
+ * which is the constant that actually enforces it — this list only decides
+ * whether the button is drawn. Operations add a vendor mid-task while typing a
+ * liquidation; accounting own the address and TIN a voucher is built from.
+ */
+const WRITE_PAYEES = [UserRole.ADMINISTRATOR, UserRole.OPERATIONS, UserRole.ACCOUNTING] as const;
 
 /** Renders a nullable cell without printing "null" at anyone. */
 const text = (value: string | null | undefined) => value ?? '—';
@@ -255,6 +266,76 @@ export const thirdPartyResource: ResourceSpec<ThirdParty> = {
   }),
 };
 
+/**
+ * Sits next to `thirdPartyResource` because the two are constantly confused.
+ * A third party BRINGS freight and its cut is netted off the gross rate; a
+ * payee RECEIVES money the company disburses. The descriptions say so on
+ * screen, since that is where somebody about to pick the wrong one is looking.
+ */
+export const payeeResource: ResourceSpec<Payee> = {
+  key: 'payees',
+  apiPath: '/payees',
+  title: 'Payees',
+  singular: 'Payee',
+  description:
+    'Outside suppliers money is disbursed to — fuel stations, ferry operators, repair shops. Not brokers, whose cut comes off the gross rate instead.',
+  writeRoles: WRITE_PAYEES,
+  columns: [
+    {
+      key: 'code',
+      label: 'Code',
+      render: (row) => <span className="font-medium">{row.code}</span>,
+    },
+    { key: 'name', label: 'Name', render: (row) => row.name },
+    {
+      key: 'payeeType',
+      label: 'Type',
+      render: (row) => PAYEE_TYPE_LABELS[row.payeeType],
+    },
+    { key: 'contactName', label: 'Contact', render: (row) => text(row.contactName) },
+    { key: 'tin', label: 'TIN', render: (row) => text(row.tin) },
+  ],
+  fields: [
+    { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'PAY-001' },
+    {
+      name: 'payeeType',
+      label: 'Type',
+      type: 'select',
+      required: true,
+      options: PAYEE_TYPE_CODES.map((code) => ({
+        value: code,
+        label: PAYEE_TYPE_LABELS[code],
+      })),
+      help: 'A company and an individual produce different vouchers, and the name alone does not tell them apart.',
+    },
+    { name: 'name', label: 'Name', type: 'text', required: true },
+    {
+      name: 'contactName',
+      label: 'Contact person',
+      type: 'text',
+      help: 'For a company. An individual payee is their own contact.',
+    },
+    { name: 'phone', label: 'Phone', type: 'text' },
+    { name: 'email', label: 'Email', type: 'email' },
+    { name: 'address', label: 'Address', type: 'text' },
+    { name: 'tin', label: 'TIN', type: 'text', help: 'As it should print on a voucher.' },
+    { name: 'isActive', label: 'Offered on new expenses', type: 'boolean' },
+  ],
+  toFormValues: (row) => ({
+    code: row.code,
+    payeeType: row.payeeType,
+    name: row.name,
+    contactName: row.contactName,
+    phone: row.phone,
+    email: row.email,
+    address: row.address,
+    tin: row.tin,
+    isActive: row.isActive,
+  }),
+  removalNote:
+    'A payee named on any liquidation line or company-paid expense is deactivated rather than deleted, so past vouchers keep reading correctly.',
+};
+
 export const routeResource: ResourceSpec<Route> = {
   key: 'routes',
   apiPath: '/routes',
@@ -343,6 +424,11 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
       render: (row) => (row.requiresReceipt ? 'Yes' : 'No'),
     },
     {
+      key: 'requiresPayee',
+      label: 'Payee required',
+      render: (row) => (row.requiresPayee ? 'Yes' : 'No'),
+    },
+    {
       key: 'defaultCommissionable',
       label: 'Commissionable by default',
       render: (row) => (row.defaultCommissionable ? 'Yes' : 'No'),
@@ -352,7 +438,18 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
   fields: [
     { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'FUEL' },
     { name: 'name', label: 'Name', type: 'text', required: true },
-    { name: 'requiresReceipt', label: 'Requires a receipt', type: 'boolean' },
+    {
+      name: 'requiresReceipt',
+      label: 'Requires a receipt',
+      type: 'boolean',
+      help: 'Stated, not enforced — the approver judges a lost ferry ticket.',
+    },
+    {
+      name: 'requiresPayee',
+      label: 'Requires a payee',
+      type: 'boolean',
+      help: 'Enforced, unlike the receipt rule: an expense in this category cannot be saved without naming who was paid. Turn it off for tolls and roadside meals. Applies to new expenses only — those already recorded keep the rule they were saved under.',
+    },
     {
       name: 'defaultCommissionable',
       label: 'Commissionable by default',
@@ -371,6 +468,7 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
     code: row.code,
     name: row.name,
     requiresReceipt: row.requiresReceipt,
+    requiresPayee: row.requiresPayee,
     defaultCommissionable: row.defaultCommissionable,
     sortOrder: row.sortOrder,
     isActive: row.isActive,

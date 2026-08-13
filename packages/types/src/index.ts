@@ -12,6 +12,7 @@ export * from './schemas/truck';
 export * from './schemas/staff';
 export * from './schemas/client';
 export * from './schemas/third-party';
+export * from './schemas/payee';
 export * from './schemas/route';
 export * from './schemas/expense-category';
 export * from './schemas/commission-rule';

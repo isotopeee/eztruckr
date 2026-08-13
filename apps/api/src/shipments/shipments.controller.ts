@@ -61,11 +61,15 @@ export class ShipmentsController {
    */
   @Get()
   @Roles(...CAN_READ_SHIPMENTS, UserRole.CREW)
-  list(
+  async list(
     @Query() query: ShipmentListQueryDto,
     @CurrentUser() user: RequestUser,
   ): Promise<Page<Shipment>> {
-    return this.shipments.list(this.scopeToCaller(query, user));
+    const page = await this.shipments.list(this.scopeToCaller(query, user));
+
+    // The list carries the rate chain too, so redacting only the detail would
+    // leave the same figures one screen earlier.
+    return { ...page, items: page.items.map((row) => this.redactRevenueForCrew(row, user)) };
   }
 
   @Get(':id')
@@ -75,7 +79,7 @@ export class ShipmentsController {
 
     this.assertCrewMayRead(shipment, user);
 
-    return shipment;
+    return this.redactRevenueForCrew(shipment, user);
   }
 
   @Post()
@@ -157,23 +161,22 @@ export class ShipmentsController {
     return this.shipments.setGasRateOverride(id, dto);
   }
 
+  /**
+   * OFFICE ONLY. `CAN_READ_SHIPMENTS` does not include CREW, and that omission
+   * is the control — the portal no longer shows a crew member their commission
+   * at all, and a card that is merely hidden is one `curl` away from being
+   * visible.
+   *
+   * IF CREW IS EVER ADDED BACK HERE, this must filter to `user.staffId` before
+   * returning: the list is every crew member on the trip, so an unfiltered
+   * response hands somebody their colleague's pay. That filter used to live
+   * here and was removed with the role, rather than left as unreachable code
+   * that nothing exercises.
+   */
   @Get(':id/commissions')
-  @Roles(...CAN_READ_SHIPMENTS, UserRole.CREW)
-  async listCommissions(
-    @Param('id') id: string,
-    @CurrentUser() user: RequestUser,
-  ): Promise<Commission[]> {
-    const shipment = await this.shipments.get(id);
-
-    this.assertCrewMayRead(shipment, user);
-
-    const commissions = await this.commissions.listForShipment(id);
-
-    // A crew member sees their own pay on a shared trip, never their
-    // colleague's.
-    return user.role === UserRole.CREW
-      ? commissions.filter((row) => row.staffId === user.staffId)
-      : commissions;
+  @Roles(...CAN_READ_SHIPMENTS)
+  listCommissions(@Param('id') id: string): Promise<Commission[]> {
+    return this.commissions.listForShipment(id);
   }
 
   @Post(':id/commissions')
@@ -188,22 +191,20 @@ export class ShipmentsController {
    *
    * A roll-up rather than a stored figure — the commission stays frozen and
    * self-verifying, the adjustments stay separately explainable, and only this
-   * adds them up. Crew-visible, filtered to the caller's own line for the same
-   * reason the commissions list is: a crew member should see a deduction here
-   * rather than discover it from a short payout.
+   * adds them up.
+   *
+   * OFFICE ONLY, like the commissions list it embeds. It was crew-visible, on
+   * the reasoning that somebody should see a deduction here rather than
+   * discover it from a short payout; that was overruled by explicit decision
+   * and the cost is recorded in HANDOFF.md rather than left to be rediscovered.
+   *
+   * IF CREW IS EVER ADDED BACK HERE, filter to `user.staffId` — the roll-up
+   * covers every crew member on the trip.
    */
   @Get(':id/crew-pay')
-  @Roles(...CAN_READ_SHIPMENTS, UserRole.CREW)
-  async crewPay(@Param('id') id: string, @CurrentUser() user: RequestUser): Promise<CrewPayLine[]> {
-    const shipment = await this.shipments.get(id);
-
-    this.assertCrewMayRead(shipment, user);
-
-    const lines = await this.adjustments.crewPayForShipment(id);
-
-    return user.role === UserRole.CREW
-      ? lines.filter((line) => line.staffId === user.staffId)
-      : lines;
+  @Roles(...CAN_READ_SHIPMENTS)
+  crewPay(@Param('id') id: string): Promise<CrewPayLine[]> {
+    return this.adjustments.crewPayForShipment(id);
   }
 
   // -------------------------------------------------------------------------
@@ -220,6 +221,45 @@ export class ShipmentsController {
     }
 
     return { ...query, staffId: user.staffId };
+  }
+
+  /**
+   * What a CREW session is allowed to know about a trip's money: the
+   * commission base, and nothing it was derived from.
+   *
+   * WHY THE INTERMEDIATES GO TOO, and not just gross and TPC. The chain is
+   * `net + commissionable charges = gross for commission`, then
+   * `gross for commission − gas deduction = base`. Leaving the deduction or the
+   * gross-for-commission on the response would let anyone reading it solve
+   * backwards for the net rate — so redacting only the top three would be a
+   * screen that looks private over a payload that is not. The base is the one
+   * figure that concerns their pay and reveals nothing about what the client
+   * was charged.
+   *
+   * Done HERE rather than in the card, because hiding a row in the browser is a
+   * courtesy and this is a control: the JSON is one devtools tab away, and the
+   * same rule already governs the commissions and crew-pay lists on this
+   * controller.
+   */
+  private redactRevenueForCrew(shipment: Shipment, user: RequestUser): Shipment {
+    if (user.role !== UserRole.CREW) {
+      return shipment;
+    }
+
+    return {
+      ...shipment,
+      grossRate: null,
+      tpcAmount: null,
+      netRate: null,
+      appliedTpcRate: null,
+      commissionableCharges: null,
+      grossForCommission: null,
+      gasDeductionAmount: null,
+      appliedGasDeductionRate: null,
+      gasRateOverride: null,
+      gasRateOverrideReason: null,
+      commissionableBase: null,
+    };
   }
 
   private assertCrewMayRead(shipment: Shipment, user: RequestUser): void {

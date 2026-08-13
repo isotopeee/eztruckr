@@ -121,6 +121,7 @@ function toExpenseCategory(row: ExpenseCategoryRow): ExpenseCategory {
     code: row.code,
     name: row.name,
     requiresReceipt: row.requiresReceipt,
+    requiresPayee: row.requiresPayee,
     defaultCommissionable: row.defaultCommissionable,
     sortOrder: row.sortOrder,
     isActive: row.isActive,

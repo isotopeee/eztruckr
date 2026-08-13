@@ -1,4 +1,4 @@
-import { createPrismaClient, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
+import { createPrismaClient, withActor, type ExtendedPrismaClient, testUuid } from '@eztruckr/db';
 import {
   LiquidationStatus,
   shipmentNumberDatePart,
@@ -26,8 +26,8 @@ let adminId: string;
 let clientId: string;
 
 /** Not `itest-`: see the note in liquidation-lifecycle.test.ts. */
-const PREFIX = 'booktest-';
-const id = (name: string) => `${PREFIX}${name}`;
+const PREFIX = '00000003-';
+const id = (name: string) => testUuid('00000003', name);
 
 async function cleanup(): Promise<void> {
   await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
@@ -35,10 +35,12 @@ async function cleanup(): Promise<void> {
     // Child rows are matched through the shipment rather than by id prefix:
     // the services generate cuids, so nothing below the shipment carries one.
     await prisma.$executeRawUnsafe(
-      `DELETE FROM "liquidation" WHERE "shipmentId" IN (SELECT id FROM "shipment" WHERE "clientId" LIKE '${PREFIX}%')`,
+      `DELETE FROM "liquidation" WHERE "shipmentId" IN (SELECT id FROM "shipment" WHERE "clientId"::text LIKE '${PREFIX}%')`,
     );
-    await prisma.$executeRawUnsafe(`DELETE FROM "shipment" WHERE "clientId" LIKE '${PREFIX}%'`);
-    await prisma.$executeRawUnsafe(`DELETE FROM "client" WHERE id LIKE '${PREFIX}%'`);
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM "shipment" WHERE "clientId"::text LIKE '${PREFIX}%'`,
+    );
+    await prisma.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
   } finally {
     await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
   }

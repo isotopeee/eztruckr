@@ -1,5 +1,5 @@
 import { UserRole } from '@eztruckr/types';
-import type { ExtendedPrismaClient } from '@eztruckr/db';
+import { uuidv7, type ExtendedPrismaClient } from '@eztruckr/db';
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
@@ -52,6 +52,23 @@ export function createAuth(prisma: ExtendedPrismaClient, options: AuthOptions) {
     trustedOrigins: options.trustedOrigins,
 
     database: prismaAdapter(prisma, { provider: 'postgresql' }),
+
+    advanced: {
+      database: {
+        /**
+         * Better Auth mints ids in JavaScript before its adapter ever reaches
+         * Prisma, and its default is a base-32 random string. `user`, `session`,
+         * `account` and `verification` are `uuid` columns like every other
+         * table, so that default would be rejected by Postgres on the first
+         * sign-up with a type error nobody would connect to auth configuration.
+         *
+         * Pointing it at the same generator the rest of the system uses keeps
+         * one id format across all 31 tables — and keeps `session.userId` a
+         * real foreign key rather than a string that happens to match.
+         */
+        generateId: () => uuidv7(),
+      },
+    },
 
     emailAndPassword: {
       enabled: true,
@@ -106,8 +123,13 @@ export function createAuth(prisma: ExtendedPrismaClient, options: AuthOptions) {
            * edit to the record, and the audit columns should not claim it is.
            */
           after: async (session) => {
+            // `::uuid` is required, not decorative. `user.id` is a uuid column
+            // and Better Auth hands us a JavaScript string, which Prisma binds
+            // as text — Postgres then refuses `uuid = text` outright rather
+            // than coercing, and every sign-in fails with a 500. Prisma's
+            // typed queries cast for us; a raw one has to say so.
             await prisma.$executeRaw`
-              UPDATE "user" SET "lastLoginAt" = NOW() WHERE "id" = ${session.userId}
+              UPDATE "user" SET "lastLoginAt" = NOW() WHERE "id" = ${session.userId}::uuid
             `;
           },
         },

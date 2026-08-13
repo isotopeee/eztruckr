@@ -1,4 +1,4 @@
-import { CommissionMethod, CrewRole, StaffRole, UserRole } from '@eztruckr/types';
+import { CommissionMethod, CrewRole, PayeeType, StaffRole, UserRole } from '@eztruckr/types';
 import { hashPassword } from 'better-auth/crypto';
 import { withActor } from '../src/actor-context';
 import { createPrismaClient } from '../src/prisma-client';
@@ -114,14 +114,47 @@ async function seedAdministrator() {
 }
 
 /** fuel, toll, food, parking, ferry, gate pass, miscellaneous */
+/**
+ * `requiresPayee` is a STARTING POSITION, not a rule the code depends on — the
+ * office moves it per category on the Expense categories screen.
+ *
+ * Split the way the argument for the toggle ran: a filling station, a ferry
+ * operator and a port each issue something with a name on it, while a toll
+ * booth, a roadside carinderia and a parking attendant do not, and demanding a
+ * master record for those gets answered with an invented one. Miscellaneous is
+ * off because a category that means "something else" cannot promise a vendor.
+ *
+ * The column defaults to true, so an omission here would be the strict setting
+ * rather than the lax one. They are stated anyway: which side a category falls
+ * on is the point of the feature, and inferring it from silence is how it ends
+ * up wrong.
+ */
 const EXPENSE_CATEGORIES = [
-  { code: 'FUEL', name: 'Fuel', requiresReceipt: true, sortOrder: 10 },
-  { code: 'TOLL', name: 'Toll', requiresReceipt: true, sortOrder: 20 },
-  { code: 'FOOD', name: 'Food', requiresReceipt: false, sortOrder: 30 },
-  { code: 'PARKING', name: 'Parking', requiresReceipt: true, sortOrder: 40 },
-  { code: 'FERRY', name: 'Ferry', requiresReceipt: true, sortOrder: 50 },
-  { code: 'GATE_PASS', name: 'Gate pass', requiresReceipt: true, sortOrder: 60 },
-  { code: 'MISC', name: 'Miscellaneous', requiresReceipt: false, sortOrder: 70 },
+  { code: 'FUEL', name: 'Fuel', requiresReceipt: true, requiresPayee: true, sortOrder: 10 },
+  { code: 'TOLL', name: 'Toll', requiresReceipt: true, requiresPayee: false, sortOrder: 20 },
+  { code: 'FOOD', name: 'Food', requiresReceipt: false, requiresPayee: false, sortOrder: 30 },
+  {
+    code: 'PARKING',
+    name: 'Parking',
+    requiresReceipt: true,
+    requiresPayee: false,
+    sortOrder: 40,
+  },
+  { code: 'FERRY', name: 'Ferry', requiresReceipt: true, requiresPayee: true, sortOrder: 50 },
+  {
+    code: 'GATE_PASS',
+    name: 'Gate pass',
+    requiresReceipt: true,
+    requiresPayee: true,
+    sortOrder: 60,
+  },
+  {
+    code: 'MISC',
+    name: 'Miscellaneous',
+    requiresReceipt: false,
+    requiresPayee: false,
+    sortOrder: 70,
+  },
 ];
 
 const TRUCKS = [
@@ -237,6 +270,38 @@ const THIRD_PARTIES = [
   },
 ];
 
+/**
+ * A company and an individual, so both `PayeeType` codes are exercised the
+ * first time anybody opens the screen — and so the distinction that justifies
+ * the column is visible rather than asserted.
+ */
+const PAYEES = [
+  {
+    code: 'PAY-PETRON-CAL',
+    payeeType: PayeeType.COMPANY,
+    name: 'Petron Calamba',
+    contactName: 'Station manager',
+    phone: '+63 49 545 1180',
+    address: 'National Highway, Calamba, Laguna',
+    tin: '000-123-456-000',
+  },
+  {
+    code: 'PAY-STARLITE',
+    payeeType: PayeeType.COMPANY,
+    name: 'Starlite Ferries',
+    contactName: 'Terminal booking office',
+    address: 'Batangas Port, Batangas City',
+    tin: '004-567-890-000',
+  },
+  {
+    code: 'PAY-R-SANTOS',
+    payeeType: PayeeType.INDIVIDUAL,
+    name: 'Rodel Santos',
+    phone: '+63 918 555 0142',
+    address: 'Brgy. Halang, Calamba, Laguna',
+  },
+];
+
 const ROUTES = [
   {
     code: 'RTE-MNL-BTG',
@@ -324,6 +389,11 @@ async function seedMasterData() {
   for (const thirdParty of THIRD_PARTIES) {
     const existing = await prisma.thirdParty.findFirst({ where: { code: thirdParty.code } });
     if (!existing) await prisma.thirdParty.create({ data: thirdParty });
+  }
+
+  for (const payee of PAYEES) {
+    const existing = await prisma.payee.findFirst({ where: { code: payee.code } });
+    if (!existing) await prisma.payee.create({ data: payee });
   }
 
   for (const route of ROUTES) {
@@ -453,6 +523,7 @@ async function main() {
       staff: await prisma.staff.count(),
       clients: await prisma.client.count(),
       thirdParties: await prisma.thirdParty.count(),
+      payees: await prisma.payee.count(),
       routes: await prisma.route.count(),
       expenseCategories: await prisma.expenseCategory.count(),
       commissionRules: await prisma.commissionRule.count(),

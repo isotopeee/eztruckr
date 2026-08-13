@@ -1,4 +1,5 @@
 import { createPrismaClient, type ExtendedPrismaClient } from './prisma-client';
+import { testUuid } from './uuid';
 
 /**
  * Helpers shared by the integration tests. Not exported from the package
@@ -6,10 +7,10 @@ import { createPrismaClient, type ExtendedPrismaClient } from './prisma-client';
  */
 
 /** Every row created by a test carries this prefix so cleanup can find it. */
-export const TEST_PREFIX = 'itest-';
+export const TEST_PREFIX = '00000001-';
 
 export function testId(name: string): string {
-  return `${TEST_PREFIX}${name}`;
+  return testUuid('00000001', name);
 }
 
 export async function databaseIsReachable(client: ExtendedPrismaClient): Promise<boolean> {
@@ -32,6 +33,10 @@ const CLEANUP_ORDER = [
   'payout_run',
   'additional_charge',
   'billable_expense',
+  // Was missing entirely, so `itest-` rows accumulated from the phase that
+  // introduced it. Noticed because it now references payee, which cannot be
+  // cleared while a row still names it.
+  'company_paid_expense',
   'liquidation_line',
   // Before liquidation, which it references; and before crew_deduction, which
   // a carried settlement points at.
@@ -47,6 +52,8 @@ const CLEANUP_ORDER = [
   'expense_category',
   'route',
   'third_party',
+  // After liquidation_line and company_paid_expense, the two that name it.
+  'payee',
   'client',
   'staff',
   'truck',
@@ -66,7 +73,9 @@ export async function cleanupTestRows(client: ExtendedPrismaClient): Promise<voi
   await client.$executeRawUnsafe(`SET session_replication_role = replica`);
   try {
     for (const table of CLEANUP_ORDER) {
-      await client.$executeRawUnsafe(`DELETE FROM "${table}" WHERE id LIKE '${TEST_PREFIX}%'`);
+      await client.$executeRawUnsafe(
+        `DELETE FROM "${table}" WHERE id::text LIKE '${TEST_PREFIX}%'`,
+      );
     }
   } finally {
     await client.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);

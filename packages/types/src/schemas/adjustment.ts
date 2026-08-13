@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { AdjustmentDirection, adjustmentDirectionSchema } from '../codes/adjustment-direction';
 import { money, sum, toDecimalString, zero } from '../money';
 import { commissionSchema } from './commission';
-import { auditFieldsSchema, cuidSchema, requiredText } from './common';
+import { auditFieldsSchema, idSchema, requiredText } from './common';
 import { positiveMoneyStringSchema } from './shipment';
 
 /**
@@ -60,13 +60,13 @@ export const adjustmentSchema = auditFieldsSchema.extend({
 export type Adjustment = z.infer<typeof adjustmentSchema>;
 
 export const createAdjustmentSchema = z.object({
-  staffId: cuidSchema,
+  staffId: idSchema,
   /**
    * Omit for a standing adjustment. When given, the service checks the crew
    * member actually worked that trip — an adjustment against a trip somebody
    * was not on is a typo with a peso value.
    */
-  shipmentId: cuidSchema.nullish().transform((value) => value ?? null),
+  shipmentId: idSchema.nullish().transform((value) => value ?? null),
   direction: adjustmentDirectionSchema,
   amount: positiveMoneyStringSchema,
   /**
@@ -92,8 +92,8 @@ export const updateAdjustmentSchema = createAdjustmentSchema
 export type UpdateAdjustmentInput = z.infer<typeof updateAdjustmentSchema>;
 
 export const adjustmentListQuerySchema = z.object({
-  staffId: cuidSchema.optional(),
-  shipmentId: cuidSchema.optional(),
+  staffId: idSchema.optional(),
+  shipmentId: idSchema.optional(),
   /** Only those a payout run has not taken yet — the queue for the next one. */
   unpaidOnly: z
     .union([z.boolean(), z.enum(['true', 'false'])])

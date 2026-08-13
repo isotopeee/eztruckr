@@ -19,3 +19,5 @@ export { withDeleted, withHardDelete, getSoftDeleteScope } from './soft-delete-c
 export type { SoftDeleteScope } from './soft-delete-context';
 
 export { liveOne, liveOneOrThrow, MissingLiveRowError, MultipleLiveRowsError } from './relations';
+
+export { uuidv7, testUuid } from './uuid';

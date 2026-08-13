@@ -1,4 +1,4 @@
-import { createPrismaClient, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
+import { createPrismaClient, withActor, type ExtendedPrismaClient, testUuid } from '@eztruckr/db';
 import { ShipmentStatus } from '@eztruckr/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { PrismaService } from '../prisma/prisma.service';
@@ -25,16 +25,26 @@ let activeTruckId: string;
 let retiredTruckId: string;
 
 /** Not `itest-`: see the note in liquidation-lifecycle.test.ts. */
-const PREFIX = 'trucktest-';
-const id = (name: string) => `${PREFIX}${name}`;
+const PREFIX = '00000004-';
+const id = (name: string) => testUuid('00000004', name);
+
+/**
+ * Well-formed, and belonging to no row.
+ *
+ * Ids are `uuid` columns now, so a placeholder like 'no-such-truck' no longer
+ * means "matches nothing" — it fails the cast before any row is compared, and
+ * the service's own not-found message never runs. A reserved block keeps this
+ * distinguishable from every suite's fixtures.
+ */
+const ABSENT_ID = 'ffffffff-0000-7000-8000-000000000000';
 
 /** Named rather than indexed out of the list: each case makes its own shipments. */
-const DELETE_SHIPMENTS = `DELETE FROM "shipment" WHERE id LIKE '${PREFIX}%'`;
+const DELETE_SHIPMENTS = `DELETE FROM "shipment" WHERE id::text LIKE '${PREFIX}%'`;
 
 const CLEANUP_STATEMENTS = [
   DELETE_SHIPMENTS,
-  `DELETE FROM "truck" WHERE id LIKE '${PREFIX}%'`,
-  `DELETE FROM "client" WHERE id LIKE '${PREFIX}%'`,
+  `DELETE FROM "truck" WHERE id::text LIKE '${PREFIX}%'`,
+  `DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`,
 ];
 
 async function cleanup(): Promise<void> {
@@ -198,7 +208,7 @@ describe('assigning a truck', () => {
     const draft = await shipmentAt(ShipmentStatus.DRAFT);
 
     await expectFieldError(
-      () => act(async () => shipments.assignTruck(draft, { truckId: 'no-such-truck' })),
+      () => act(async () => shipments.assignTruck(draft, { truckId: ABSENT_ID })),
       'truckId',
       /No truck with id/i,
     );

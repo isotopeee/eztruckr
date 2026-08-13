@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { UserRole, type ExpenseCategory, type Page, type Shipment } from '@eztruckr/types';
 import { Loader2, Paperclip, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { PayeeField } from '@/components/shipments/payee-field';
 import { ReceiptField } from '@/components/shipments/receipt-field';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -51,6 +52,7 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
     description: '',
     amount: '',
     spentAt: new Date().toISOString().slice(0, 10),
+    payeeId: '',
     receiptId: null as string | null,
     receiptFileName: null as string | null,
   });
@@ -65,6 +67,13 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
     queryFn: () => apiFetch<Page<ExpenseCategory>>('/expense-categories?pageSize=200'),
     enabled: canEdit,
   });
+
+  // The chosen category decides whether a payee is required. Unknown until one
+  // is picked, and false rather than true then: the field should not demand
+  // something before the rule that demands it has been chosen.
+  const payeeRequired =
+    categories.data?.items.find((category) => category.id === draft.expenseCategoryId)
+      ?.requiresPayee ?? false;
 
   // Gross profit reads these rows, so it has to be refetched with them.
   const invalidate = () => {
@@ -85,9 +94,14 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
         // A date-only input means midnight local; sent as an instant because
         // storage is UTC and the display layer renders Asia/Manila.
         spentAt: new Date(draft.spentAt).toISOString(),
+        // '' is "nothing chosen"; the wire wants null.
+        payeeId: draft.payeeId || null,
         receiptId: draft.receiptId,
       }),
     onSuccess: () => {
+      // The payee is deliberately kept, unlike the amount and description:
+      // recording several lines against one supplier invoice is the common
+      // case, and re-picking the same vendor each time invites a wrong one.
       setDraft((current) => ({
         ...current,
         description: '',
@@ -129,6 +143,7 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
                   <p className="truncate font-medium">{expense.expenseCategoryName ?? 'Expense'}</p>
                   <p className="text-muted-foreground text-xs">
                     {formatDate(expense.spentAt)}
+                    {expense.payeeName ? ` · ${expense.payeeName}` : ''}
                     {expense.description ? ` · ${expense.description}` : ''}
                   </p>
                   {expense.receiptFileName ? (
@@ -235,6 +250,13 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
               </div>
             </div>
 
+            <PayeeField
+              id="company-expense-payee"
+              value={draft.payeeId}
+              required={payeeRequired}
+              onChange={(payeeId) => setDraft((current) => ({ ...current, payeeId }))}
+            />
+
             <ReceiptField
               value={draft.receiptId}
               fileName={draft.receiptFileName}
@@ -244,7 +266,13 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
               }
             />
 
-            <Button type="submit" size="sm" disabled={add.isPending || !draft.expenseCategoryId}>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={
+                add.isPending || !draft.expenseCategoryId || (payeeRequired && !draft.payeeId)
+              }
+            >
               {add.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Record expense
             </Button>

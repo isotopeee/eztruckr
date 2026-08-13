@@ -47,6 +47,7 @@ import {
 import { shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { useTripCashHolders } from './trip-cash-holders';
+import { PayeeField } from './payee-field';
 import { ReceiptField } from './receipt-field';
 
 /**
@@ -472,11 +473,13 @@ function Lines({
   canEdit: boolean;
   onChanged: () => void;
 }) {
+  const { user } = useCurrentUser();
   const [draft, setDraft] = useState({
     expenseCategoryId: '',
     description: '',
     amount: '',
     spentAt: new Date().toISOString().slice(0, 10),
+    payeeId: '',
     receiptId: null as string | null,
     receiptFileName: null as string | null,
   });
@@ -486,6 +489,26 @@ function Lines({
     queryFn: () => apiFetch<Page<ExpenseCategory>>('/expense-categories?pageSize=200'),
     enabled: canEdit,
   });
+
+  // The chosen category decides whether a payee is required. Unknown until one
+  // is picked, and false rather than true then.
+  const payeeRequired =
+    categories.data?.items.find((category) => category.id === draft.expenseCategoryId)
+      ?.requiresPayee ?? false;
+
+  /**
+   * Crew are asked for a payee only when the category actually demands one.
+   *
+   * A driver filing a toll or a meal has no vendor to name, and a picker
+   * offering "Not recorded" above a list of fuel stations is a question with no
+   * right answer — the sort of field that gets an arbitrary pick just to make it
+   * go away, which is worse than an empty column because it looks like evidence.
+   *
+   * The office keeps the optional field: accounting reconciling a supplier
+   * statement may well want to attach a payee to a line that did not require
+   * one, and they are the people the vendor directory exists for.
+   */
+  const showPayee = payeeRequired || user?.role !== UserRole.CREW;
 
   const reportFailure = (error: unknown) =>
     toast.error('Could not save that line', {
@@ -501,9 +524,18 @@ function Lines({
         // A date-only input means midnight local; sent as an instant because
         // storage is UTC and the display layer renders Asia/Manila.
         spentAt: new Date(draft.spentAt).toISOString(),
+        // '' is "nothing chosen"; the wire wants null. Gated on `showPayee`
+        // rather than read straight off the draft, because the draft keeps the
+        // last payee on purpose — so a crew member who files a fuel line and
+        // then switches to a toll would otherwise submit the filling station
+        // against the toll, from a field they can no longer see. What is not
+        // shown is not sent.
+        payeeId: showPayee ? draft.payeeId || null : null,
         receiptId: draft.receiptId,
       }),
     onSuccess: () => {
+      // The payee is deliberately kept: several lines against one station on
+      // the same stop is the common case, and re-picking invites a wrong one.
       setDraft((current) => ({
         ...current,
         description: '',
@@ -537,6 +569,7 @@ function Lines({
                 </p>
                 <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
                   <span>{formatDate(line.spentAt)}</span>
+                  {line.payeeName ? <span>· {line.payeeName}</span> : null}
                   {line.receiptId ? (
                     <a
                       className="underline underline-offset-4"
@@ -652,6 +685,15 @@ function Lines({
             </div>
           </div>
 
+          {showPayee ? (
+            <PayeeField
+              id={`line-payee-${liquidation.id}`}
+              value={draft.payeeId}
+              required={payeeRequired}
+              onChange={(payeeId) => setDraft((current) => ({ ...current, payeeId }))}
+            />
+          ) : null}
+
           <ReceiptField
             value={draft.receiptId}
             fileName={draft.receiptFileName}
@@ -661,7 +703,13 @@ function Lines({
             }
           />
 
-          <Button type="submit" size="sm" disabled={add.isPending || !draft.expenseCategoryId}>
+          <Button
+            type="submit"
+            size="sm"
+            disabled={
+              add.isPending || !draft.expenseCategoryId || (payeeRequired && !draft.payeeId)
+            }
+          >
             {add.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             Add expense
           </Button>

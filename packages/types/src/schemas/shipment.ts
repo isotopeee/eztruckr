@@ -3,7 +3,7 @@ import { crewRoleSchema } from '../codes/crew-role';
 import { isShipmentStatus, shipmentStatusSchema, ShipmentStatus } from '../codes/shipment-status';
 import {
   auditFieldsSchema,
-  cuidSchema,
+  idSchema,
   isoDateTimeSchema,
   moneyStringSchema,
   optionalText,
@@ -50,7 +50,7 @@ export type BillableExpense = z.infer<typeof billableExpenseSchema>;
 
 export const createBillableExpenseSchema = z.object({
   ...chargeLineFields,
-  expenseCategoryId: cuidSchema.nullish().transform((value) => value ?? null),
+  expenseCategoryId: idSchema.nullish().transform((value) => value ?? null),
 });
 
 export type CreateBillableExpenseInput = z.infer<typeof createBillableExpenseSchema>;
@@ -103,10 +103,19 @@ export const shipmentSchema = auditFieldsSchema.extend({
   deliveredAt: z.string().nullable(),
   closedAt: z.string().nullable(),
 
-  // The rate chain, all computed by the API.
-  grossRate: z.string(),
-  tpcAmount: z.string(),
-  netRate: z.string(),
+  /**
+   * The rate chain, all computed by the API.
+   *
+   * NULLABLE ONLY BECAUSE OF REDACTION, never because the shipment lacks them:
+   * every stored row has a gross, a TPC and a net. A CREW session is served
+   * nulls here — see `redactRevenueForCrew` in the shipments controller — so
+   * what the company charges the client and what the broker takes stay out of
+   * the crew portal. The web renders a null figure as "—" already, which is why
+   * this is expressible as nulls rather than as a second response shape.
+   */
+  grossRate: z.string().nullable(),
+  tpcAmount: z.string().nullable(),
+  netRate: z.string().nullable(),
   appliedTpcRate: z.string().nullable(),
 
   /** Input: the rate somebody asked this trip to use. Null means the default. */
@@ -187,10 +196,10 @@ export function hasBrokerForTpc(value: {
  * overwrite carries none of the guarantees that made generating it worthwhile.
  */
 const shipmentFields = z.object({
-  clientId: cuidSchema,
-  thirdPartyId: cuidSchema.nullish().transform((value) => value ?? null),
-  routeId: cuidSchema.nullish().transform((value) => value ?? null),
-  truckId: cuidSchema.nullish().transform((value) => value ?? null),
+  clientId: idSchema,
+  thirdPartyId: idSchema.nullish().transform((value) => value ?? null),
+  routeId: idSchema.nullish().transform((value) => value ?? null),
+  truckId: idSchema.nullish().transform((value) => value ?? null),
 
   /**
    * Snapshotted onto the shipment rather than read through the route, so
@@ -226,8 +235,8 @@ export type UpdateShipmentInput = z.infer<typeof updateShipmentSchema>;
  * Explicit null clears a slot.
  */
 export const assignCrewSchema = z.object({
-  driverId: cuidSchema.nullish().transform((value) => value ?? null),
-  helperId: cuidSchema.nullish().transform((value) => value ?? null),
+  driverId: idSchema.nullish().transform((value) => value ?? null),
+  helperId: idSchema.nullish().transform((value) => value ?? null),
 });
 
 export type AssignCrewInput = z.infer<typeof assignCrewSchema>;
@@ -251,7 +260,7 @@ export const SAME_PERSON_BOTH_SLOTS_MESSAGE =
  * may not — the service refuses to leave a dispatched shipment without one.
  */
 export const assignTruckSchema = z.object({
-  truckId: cuidSchema.nullish().transform((value) => value ?? null),
+  truckId: idSchema.nullish().transform((value) => value ?? null),
 });
 
 export type AssignTruckInput = z.infer<typeof assignTruckSchema>;
@@ -331,8 +340,8 @@ export const shipmentListQuerySchema = z.object({
   // Query strings arrive as text, so coerce first, then check membership
   // against the code set rather than trusting the number.
   status: z.coerce.number().int().refine(isShipmentStatus, 'unknown shipment status').optional(),
-  clientId: cuidSchema.optional(),
-  staffId: cuidSchema.optional(),
+  clientId: idSchema.optional(),
+  staffId: idSchema.optional(),
 });
 
 export type ShipmentListQuery = z.infer<typeof shipmentListQuerySchema>;

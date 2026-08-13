@@ -5,6 +5,7 @@ import {
   DisbursementMode,
   LiquidationHistoryAction,
   LiquidationStatus,
+  PayeeType,
   PayoutRunStatus,
   SettlementStatus,
   ShipmentStatus,
@@ -13,7 +14,7 @@ import {
 } from '@eztruckr/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ExtendedPrismaClient } from './prisma-client';
-import { createTestClient, databaseIsReachable } from './test-support';
+import { createTestClient, databaseIsReachable, testId } from './test-support';
 
 /**
  * Drift guard for the one unavoidable duplication in the system.
@@ -61,6 +62,7 @@ const EXPECTED: ReadonlyArray<{ constraint: string; codes: readonly number[] }> 
   { constraint: 'commission_role_is_a_crew_role', codes: Object.values(CrewRole) },
   { constraint: 'commission_applied_method_code_valid', codes: Object.values(CommissionMethod) },
   { constraint: 'payout_run_status_code_valid', codes: Object.values(PayoutRunStatus) },
+  { constraint: 'payee_type_code_valid', codes: Object.values(PayeeType) },
 ];
 
 interface ConstraintRow {
@@ -142,6 +144,7 @@ describe('database CHECK constraints match the TypeScript code sets', () => {
       'commission.role',
       'commission.appliedMethod',
       'payout_run.status',
+      'payee.payeeType',
     ]) {
       expect(documented.has(column), `${column} has no code-set comment`).toBe(true);
     }
@@ -158,7 +161,7 @@ describe('createdBy stays mandatory in the database', () => {
     await expect(
       prisma.$executeRawUnsafe(`
         INSERT INTO "truck" (id, "plateNumber", "isActive", "createdAt", "updatedAt", "createdBy")
-        VALUES ('itest-nullcreator', 'itest-NULLPLT', true, now(), now(), NULL)
+        VALUES ('${testId('nullcreator')}', 'itest-NULLPLT', true, now(), now(), NULL)
       `),
     ).rejects.toThrow(/created_by_required/i);
   });
@@ -173,9 +176,9 @@ describe('createdBy stays mandatory in the database', () => {
          AND conname LIKE '%_created_by_required'
     `;
 
-    // 27 business tables, minus user and user_profile. The most recent is
-    // company_paid_expense; before it, liquidation_history and settlement.
-    expect(rows).toHaveLength(25);
+    // 28 business tables, minus user and user_profile. The most recent is
+    // payee; before it, company_paid_expense.
+    expect(rows).toHaveLength(26);
     expect(rows.some((row) => row.conname.startsWith('user_'))).toBe(false);
   });
 });
@@ -193,7 +196,7 @@ describe('an unallocated code stays out of the database as well as the type', ()
     await expect(
       prisma.$executeRawUnsafe(`
         INSERT INTO "liquidation" (id, "shipmentId", status, "createdAt", "updatedAt", "createdBy")
-        SELECT 'itest-bad-status', id, 4, now(), now(), 'itest'
+        SELECT '${testId('bad-status')}', id, 4, now(), now(), '${testId('actor')}'
           FROM "shipment" LIMIT 1
       `),
     ).rejects.toThrow(/liquidation_status_code_valid/i);

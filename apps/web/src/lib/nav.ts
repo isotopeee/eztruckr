@@ -60,6 +60,11 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
       { href: '/staff', label: 'Staff', roles: OPERATIONAL_ROLES },
       { href: '/clients', label: 'Clients', roles: OPERATIONAL_ROLES },
       { href: '/third-parties', label: 'Third parties', roles: OPERATIONAL_ROLES },
+      // Directly under Third parties, because the two get mixed up and seeing
+      // both named at once is the cheapest correction. Here rather than in
+      // Finance because operations add a payee while typing a liquidation, and
+      // every role that may read master data may read this.
+      { href: '/payees', label: 'Payees', roles: OPERATIONAL_ROLES },
       { href: '/routes', label: 'Routes', roles: OPERATIONAL_ROLES },
     ],
   },
