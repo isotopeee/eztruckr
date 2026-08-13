@@ -20,6 +20,8 @@ import {
   ShipmentStatus,
   shipmentStatusAtLeast,
   statusAfterManualTransition,
+  sum,
+  toDecimalString,
   TPC_EXCLUSIVE_MESSAGE,
   TPC_WITHOUT_BROKER_MESSAGE,
   type AssignCrewInput,
@@ -33,6 +35,7 @@ import {
   type UpdateShipmentInput,
 } from '@eztruckr/types';
 import { computeRateChain } from '../commission/commission-chain';
+import { ensurePendingLiquidation } from '../liquidation/pending-liquidation';
 import { PrismaService } from '../prisma/prisma.service';
 import { auditFields, dateToIso, decimalToString } from '../master-data/serialize';
 
@@ -99,9 +102,22 @@ export class ShipmentsService {
   }
 
   async get(id: string): Promise<Shipment> {
-    const [row, commissionsStale] = await Promise.all([this.load(id), this.isComputationStale(id)]);
+    const [row, commissionsStale, advances] = await Promise.all([
+      this.load(id),
+      this.isComputationStale(id),
+      this.prisma.client.allowance.findMany({
+        where: { shipmentId: id },
+        select: { amount: true },
+      }),
+    ]);
 
-    return { ...toShipment(row), commissionsStale };
+    return {
+      ...toShipment(row),
+      commissionsStale,
+      // Summed here rather than stored: the shipment has no allowance column
+      // for a second release to overwrite, and that is the point.
+      totalAdvanced: toDecimalString(sum(advances.map((row) => row.amount))),
+    };
   }
 
   async create(input: CreateShipmentInput): Promise<Shipment> {
@@ -287,9 +303,22 @@ export class ShipmentsService {
       data.closedAt = occurredAt;
     }
 
-    return toShipment(
-      await this.shipments.update({ where: { id }, data, include: SHIPMENT_INCLUDE }),
-    );
+    const row = await this.prisma.client.$transaction(async (tx) => {
+      const updated = await tx.shipment.update({ where: { id }, data, include: SHIPMENT_INCLUDE });
+
+      // Delivery brings the liquidation into existence, in the same statement.
+      // Before this, "the crew still owe us paperwork" was the ABSENCE of a
+      // row, which no query can filter on and no crew portal can show. The
+      // shipment lands in PENDING_LIQUIDATION here; its liquidation lands in
+      // PENDING, and the two mean the same thing on purpose.
+      if (input.to === ShipmentStatus.DELIVERED) {
+        await ensurePendingLiquidation(tx, id);
+      }
+
+      return updated;
+    });
+
+    return toShipment(row);
   }
 
   /**
@@ -498,11 +527,11 @@ export class ShipmentsService {
     // An allowance is a receivable from the crew, not a cost, and it is
     // cleared by the liquidation. Cash handed over and never accounted for is
     // exactly what closing a trip must not be able to hide.
+    //
+    // APPROVED is the only status that counts, and it is the last one: approval
+    // is the lock, so there is nothing beyond it to also accept here.
     const settled = await this.prisma.client.liquidation.count({
-      where: {
-        shipmentId: shipment.id,
-        status: { in: [LiquidationStatus.APPROVED, LiquidationStatus.FINALIZED] },
-      },
+      where: { shipmentId: shipment.id, status: LiquidationStatus.APPROVED },
     });
 
     if (settled === 0) {
@@ -672,6 +701,9 @@ export function toShipment(row: ShipmentRow): Shipment {
     // detail endpoint overrides it. False here means "not checked", which is
     // the safe way round: it never claims freshness the server has verified.
     commissionsStale: false,
+    // Likewise: one query per shipment, so the list leaves it at zero and the
+    // detail endpoint answers it properly.
+    totalAdvanced: '0.00',
 
     ...auditFields(row),
   };

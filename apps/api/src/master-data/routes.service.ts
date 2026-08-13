@@ -98,6 +98,7 @@ function toRoute(row: RouteRow): Route {
     destination: row.destination,
     distanceKm: decimalToString(row.distanceKm),
     standardRate: decimalToString(row.standardRate),
+    standardAllowance: decimalToString(row.standardAllowance),
     isActive: row.isActive,
     ...auditFields(row),
   };

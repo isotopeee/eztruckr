@@ -6,6 +6,7 @@ import { RolesGuard } from './auth/roles.guard';
 import { SessionContextMiddleware } from './common/session-context.middleware';
 import { AppConfigModule } from './config/app-config.module';
 import { HealthModule } from './health/health.module';
+import { LiquidationModule } from './liquidation/liquidation.module';
 import { MasterDataModule } from './master-data/master-data.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { SettingsModule } from './settings/settings.module';
@@ -24,6 +25,7 @@ import { UsersModule } from './users/users.module';
     MasterDataModule,
     SettingsModule,
     ShipmentsModule,
+    LiquidationModule,
   ],
   providers: [
     // Order matters: authentication decides who you are, then roles decide

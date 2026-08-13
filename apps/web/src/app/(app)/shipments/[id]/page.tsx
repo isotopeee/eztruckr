@@ -5,11 +5,14 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { SHIPMENT_STATUS_LABELS, UserRole } from '@eztruckr/types';
 import { ArrowLeft } from 'lucide-react';
+import { AllowancesCard } from '@/components/shipments/allowances-card';
 import { ChargesCard } from '@/components/shipments/charges-card';
 import { CommissionsCard } from '@/components/shipments/commissions-card';
 import { CrewAndLifecycleCard } from '@/components/shipments/crew-and-lifecycle-card';
 import { GasRateOverrideCard } from '@/components/shipments/gas-rate-override-card';
+import { LiquidationCard } from '@/components/shipments/liquidation-card';
 import { RateChainCard } from '@/components/shipments/rate-chain-card';
+import { SettlementCard } from '@/components/shipments/settlement-card';
 import { Badge } from '@/components/ui/badge';
 import { ApiError } from '@/lib/api-client';
 import { getShipment, shipmentKeys } from '@/lib/shipment-api';
@@ -64,6 +67,10 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
       <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
         <div className="space-y-6">
           <RateChainCard shipment={data} />
+          {/* The crew's half of the trip's cash: what they were given, and what
+              they spent it on. Both are theirs to see and one is theirs to
+              fill in, so neither is hidden from a crew session. */}
+          <LiquidationCard shipment={data} />
           <CommissionsCard shipment={data} />
         </div>
         <div className="space-y-6">
@@ -72,6 +79,8 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
           {isCrew ? null : (
             <>
               <CrewAndLifecycleCard shipment={data} />
+              <AllowancesCard shipment={data} />
+              <SettlementCard shipment={data} />
               <GasRateOverrideCard shipment={data} />
             </>
           )}

@@ -86,6 +86,41 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   return body as T;
 }
 
+/**
+ * Uploads a file.
+ *
+ * Separate from `apiFetch` for one reason: the Content-Type header must NOT be
+ * set. `fetch` generates `multipart/form-data; boundary=…` itself, and a header
+ * we set by hand has no boundary, so the server sees a body it cannot parse and
+ * reports no file at all.
+ */
+export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    credentials: 'include',
+    body: form,
+  });
+
+  const body: unknown = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new ApiError(`Upload to ${path} failed with ${response.status}`, response.status, body);
+  }
+
+  return body as T;
+}
+
+/**
+ * Where a receipt's bytes live.
+ *
+ * A plain API URL, opened in a new tab rather than fetched — the session cookie
+ * rides along on a top-level navigation, and the API re-checks who is asking.
+ * There is deliberately no presigned bucket link to hand around.
+ */
+export function receiptContentUrl(receiptId: string): string {
+  return `${API_BASE_URL}/receipts/${receiptId}/content`;
+}
+
 /** Builds a query string, omitting empty and default-ish values. */
 export function queryString(params: Record<string, string | number | boolean | undefined>): string {
   const search = new URLSearchParams();

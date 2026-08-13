@@ -33,6 +33,10 @@ const CLEANUP_ORDER = [
   'additional_charge',
   'billable_expense',
   'liquidation_line',
+  // Before liquidation, which it references; and before crew_deduction, which
+  // a carried settlement points at.
+  'liquidation_history',
+  'settlement',
   'liquidation',
   'allowance',
   'crew_deduction',

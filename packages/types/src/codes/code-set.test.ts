@@ -3,11 +3,17 @@ import {
   AdjustmentDirection,
   CommissionMethod,
   CrewRole,
+  DisbursementMode,
+  LiquidationHistoryAction,
   LiquidationStatus,
   PayoutRunStatus,
+  RETIRED_LIQUIDATION_STATUS_CODES,
+  SettlementStatus,
   ShipmentStatus,
   UserRole,
+  isAllowedLiquidationTransition,
   isCommissionMethod,
+  liquidationStatusAtLeast,
   isImplementedCommissionMethod,
   IMPLEMENTED_COMMISSION_METHODS,
   isShipmentStatus,
@@ -47,8 +53,43 @@ describe('code sets are permanent', () => {
     });
   });
 
+  /**
+   * PENDING was APPENDED at 4 in Phase 5, not slotted in at 1.
+   *
+   * The set shipped in Phase 2 as SUBMITTED 1 / APPROVED 2 / FINALIZED 3,
+   * before the PENDING -> SUBMITTED -> APPROVED lifecycle was specified. The
+   * `liquidation` table was empty, so renumbering would have been safe — and it
+   * was still not done, because nothing in this codebase reads order from the
+   * number, so a renumber buys a tidier constant and spends the rule that keeps
+   * stored rows honest. If this assertion ever fails, the fix is to restore 4.
+   */
   it('pins every LiquidationStatus code', () => {
-    expect(LiquidationStatus).toEqual({ SUBMITTED: 1, APPROVED: 2, FINALIZED: 3 });
+    expect(LiquidationStatus).toEqual({ PENDING: 4, SUBMITTED: 1, APPROVED: 2 });
+  });
+
+  /**
+   * 3 held FINALIZED, a state the specification does not have and no row ever
+   * carried. Withdrawn rather than repurposed: the next code appended to this
+   * set is 5.
+   */
+  it('never re-allocates a retired liquidation status code', () => {
+    expect(RETIRED_LIQUIDATION_STATUS_CODES).toEqual([3]);
+
+    for (const retired of RETIRED_LIQUIDATION_STATUS_CODES) {
+      expect(Object.values(LiquidationStatus)).not.toContain(retired);
+    }
+  });
+
+  it('pins every LiquidationHistoryAction code', () => {
+    expect(LiquidationHistoryAction).toEqual({ SUBMITTED: 1, RETURNED: 2 });
+  });
+
+  it('pins every DisbursementMode code', () => {
+    expect(DisbursementMode).toEqual({ CASH: 1, BANK_TRANSFER: 2, EWALLET: 3 });
+  });
+
+  it('pins every SettlementStatus code', () => {
+    expect(SettlementStatus).toEqual({ OUTSTANDING: 1, SETTLED: 2, CARRIED_TO_PAYOUT: 3 });
   });
 
   it('pins every CrewRole code', () => {
@@ -92,6 +133,9 @@ describe('code sets are permanent', () => {
     for (const set of [
       ShipmentStatus,
       LiquidationStatus,
+      LiquidationHistoryAction,
+      DisbursementMode,
+      SettlementStatus,
       CrewRole,
       AdjustmentDirection,
       UserRole,
@@ -157,6 +201,42 @@ describe('order-dependent logic', () => {
         expect(shipmentStatusAtLeast(status, other.status)).toBe(index >= other.index);
       }
     }
+  });
+});
+
+describe('LiquidationStatus', () => {
+  /**
+   * The sharpest test of "order never comes from the number": PENDING is the
+   * first stage and carries the highest code. A `>=` comparison anywhere in the
+   * liquidation path would get every one of these backwards.
+   */
+  it('orders by workflow position even though the codes run backwards', () => {
+    expect(LiquidationStatus.PENDING).toBeGreaterThan(LiquidationStatus.APPROVED);
+
+    expect(liquidationStatusAtLeast(LiquidationStatus.APPROVED, LiquidationStatus.PENDING)).toBe(
+      true,
+    );
+    expect(liquidationStatusAtLeast(LiquidationStatus.PENDING, LiquidationStatus.APPROVED)).toBe(
+      false,
+    );
+    expect(liquidationStatusAtLeast(LiquidationStatus.SUBMITTED, LiquidationStatus.PENDING)).toBe(
+      true,
+    );
+  });
+
+  it('allows exactly the four specified moves', () => {
+    const { PENDING, SUBMITTED, APPROVED } = LiquidationStatus;
+
+    expect(isAllowedLiquidationTransition(PENDING, SUBMITTED)).toBe(true);
+    expect(isAllowedLiquidationTransition(SUBMITTED, APPROVED)).toBe(true);
+    // Returning and reversing are the two backward moves the brief specifies.
+    expect(isAllowedLiquidationTransition(SUBMITTED, PENDING)).toBe(true);
+    expect(isAllowedLiquidationTransition(APPROVED, SUBMITTED)).toBe(true);
+
+    // Approving work the crew never submitted skips the only step at which
+    // they assert the figures are theirs.
+    expect(isAllowedLiquidationTransition(PENDING, APPROVED)).toBe(false);
+    expect(isAllowedLiquidationTransition(APPROVED, PENDING)).toBe(false);
   });
 });
 

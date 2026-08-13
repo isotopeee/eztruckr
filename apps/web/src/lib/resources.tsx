@@ -278,6 +278,12 @@ export const routeResource: ResourceSpec<Route> = {
       numeric: true,
       render: (row) => text(row.standardRate),
     },
+    {
+      key: 'standardAllowance',
+      label: 'Standard allowance',
+      numeric: true,
+      render: (row) => text(row.standardAllowance),
+    },
   ],
   fields: [
     { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'RTE-MNL-BTG' },
@@ -291,6 +297,12 @@ export const routeResource: ResourceSpec<Route> = {
       type: 'money',
       help: 'Pesos. Indicative only — the shipment freezes what was actually agreed.',
     },
+    {
+      name: 'standardAllowance',
+      label: 'Standard allowance',
+      type: 'money',
+      help: "Pesos. Prefills the trip's first allowance and stays editable there; variance is measured against what was actually released.",
+    },
     { name: 'isActive', label: 'Offered for new shipments', type: 'boolean' },
   ],
   toFormValues: (row) => ({
@@ -300,6 +312,7 @@ export const routeResource: ResourceSpec<Route> = {
     destination: row.destination,
     distanceKm: row.distanceKm,
     standardRate: row.standardRate,
+    standardAllowance: row.standardAllowance,
     isActive: row.isActive,
   }),
 };

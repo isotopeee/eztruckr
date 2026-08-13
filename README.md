@@ -432,7 +432,23 @@ deduction override; and the commission engine — five methods behind one
 dispatch table, rule resolution with no fallback, and every applied rate frozen
 onto the rows it produced.
 
-Not yet built: allowance and liquidation (Phase 5), payout runs, and P&L.
+## Phase 5 scope
+
+Built: allowance issuance as one row per release (many per shipment, each with
+its own disbursement mode, optional reference, optional attachment and
+releaser); the liquidation lifecycle `PENDING → SUBMITTED → APPROVED` with a
+liquidation created the moment a trip is marked delivered; an append-only
+`LiquidationHistory` recording every submission and every return with its
+reason; receipt upload to S3-compatible storage with the bytes served back
+through the API rather than by presigned link; and a per-shipment `Settlement`
+recording whether the leftover cash came back — in cash, or carried to payout
+as an ordinary crew deduction.
+
+Costs reach the P&L on approval and are **derived** from the liquidation status
+rather than posted anywhere, so a return-and-resubmit cycle cannot recognise the
+same expenses twice.
+
+Not yet built: payout runs and P&L reporting.
 
 ### The commission formula language
 

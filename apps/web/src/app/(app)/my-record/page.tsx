@@ -1,12 +1,19 @@
 'use client';
 
+import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import { CREW_ROLE_LABELS, type CrewMember } from '@eztruckr/types';
-import { Loader2 } from 'lucide-react';
+import {
+  CREW_ROLE_LABELS,
+  LIQUIDATION_STATUS_LABELS,
+  LiquidationStatus,
+  type CrewMember,
+} from '@eztruckr/types';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ApiError, apiFetch } from '@/lib/api-client';
-import { formatDate } from '@/lib/format';
+import { formatDate, formatMoney } from '@/lib/format';
+import { liquidationKeys, listLiquidations } from '@/lib/liquidation-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 
 /**
@@ -50,6 +57,8 @@ export default function MyRecordPage() {
         </p>
       </header>
 
+      <LiquidationsWaitingCard />
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -90,6 +99,71 @@ export default function MyRecordPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * The trips still waiting on this crew member.
+ *
+ * The list is scoped by the session server-side — there is no query parameter
+ * that widens it — so this component asks for "pending liquidations" and gets
+ * only its own.
+ *
+ * The return reason comes from `LiquidationHistory`, which is the whole reason
+ * that table exists: a returned liquidation is PENDING, exactly like one never
+ * submitted, and without the history the crew would be told to try again with
+ * no idea what was wrong.
+ */
+function LiquidationsWaitingCard() {
+  const waiting = useQuery({
+    queryKey: liquidationKeys.list('mine-pending'),
+    queryFn: () => listLiquidations({ status: LiquidationStatus.PENDING }),
+  });
+
+  const rows = waiting.data ?? [];
+
+  if (waiting.isPending || rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Liquidations waiting on you</CardTitle>
+        <CardDescription>
+          Cash you were advanced that still has to be accounted for. Open the trip to add your
+          expenses and receipts, then submit.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="divide-y text-sm">
+          {rows.map((liquidation) => (
+            <li key={liquidation.id} className="space-y-1 py-3 first:pt-0 last:pb-0">
+              <div className="flex items-center justify-between gap-3">
+                <Link
+                  href={`/shipments/${liquidation.shipmentId}`}
+                  className="font-medium underline-offset-4 hover:underline"
+                >
+                  {liquidation.shipmentNumber ?? 'Trip'}
+                </Link>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground tabular-nums">
+                    {formatMoney(liquidation.totalAllowance)} advanced
+                  </span>
+                  <Badge variant="secondary">{LIQUIDATION_STATUS_LABELS[liquidation.status]}</Badge>
+                </div>
+              </div>
+              {liquidation.wasReturned && liquidation.latestReturnReason ? (
+                <p className="text-destructive flex items-start gap-2 text-xs">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>Returned: {liquidation.latestReturnReason}</span>
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
   );
 }
 

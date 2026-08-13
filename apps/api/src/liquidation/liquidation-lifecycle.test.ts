@@ -1,0 +1,626 @@
+import { createPrismaClient, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
+import {
+  CrewRole,
+  DisbursementMode,
+  LiquidationHistoryAction,
+  LiquidationStatus,
+  SettlementStatus,
+  ShipmentStatus,
+  UserRole,
+} from '@eztruckr/types';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { RequestUser } from '../auth/request-user';
+import type { PrismaService } from '../prisma/prisma.service';
+import type { StorageService } from '../storage/storage.service';
+import { AllowancesService } from './allowances.service';
+import { LiquidationService } from './liquidation.service';
+import { ReceiptsService } from './receipts.service';
+import { SettlementService } from './settlement.service';
+import { ensurePendingLiquidation } from './pending-liquidation';
+
+/**
+ * The three assertions the Phase 5 brief asks for, against a real database.
+ *
+ * They are integration tests rather than unit tests because every one of them
+ * is about what the ROWS say after a sequence of moves — whether a second
+ * approval cycle posts a second set of costs, whether a returned claim is
+ * visible in the P&L, whether an approved liquidation can still leave cash
+ * outstanding. Mocking Prisma here would test the mock's idea of those, which
+ * is exactly the idea under suspicion.
+ *
+ * Skips itself, loudly, when no database is reachable — the same behaviour as
+ * the integration tests in `packages/db`.
+ */
+
+let prisma: ExtendedPrismaClient;
+let available = false;
+
+let liquidations: LiquidationService;
+let allowances: AllowancesService;
+let settlements: SettlementService;
+
+let adminId: string;
+let actor: RequestUser;
+let clientId: string;
+let driverId: string;
+let fuelCategoryId: string;
+
+/**
+ * Deliberately NOT the `itest-` prefix used by the integration tests in
+ * `packages/db`.
+ *
+ * Turbo runs the two workspaces' suites at the same time against the same
+ * database, and that suite's teardown deletes everything matching `itest-%`.
+ * Sharing the prefix means one suite wipes the other's fixtures mid-run, which
+ * fails as a confusing foreign-key error several assertions later.
+ */
+const PREFIX = 'p5test-';
+const id = (name: string) => `${PREFIX}${name}`;
+
+/**
+ * The services take `PrismaService` for its `client`, and `ReceiptsService`
+ * takes `StorageService` for uploads that none of these tests perform. Building
+ * them by hand keeps the test to the lifecycle rules rather than to Nest's
+ * container; anything that actually reached storage would fail loudly rather
+ * than silently pass.
+ */
+function serviceStubs(client: ExtendedPrismaClient) {
+  const prismaService = { client } as unknown as PrismaService;
+  const storage = null as unknown as StorageService;
+  const receipts = new ReceiptsService(prismaService, storage);
+  const liquidationService = new LiquidationService(prismaService, receipts);
+
+  return {
+    receipts,
+    liquidations: liquidationService,
+    allowances: new AllowancesService(prismaService, receipts, liquidationService),
+    settlements: new SettlementService(prismaService, receipts),
+  };
+}
+
+/**
+ * Removes everything these tests created, children first.
+ *
+ * Most of these rows are matched by their SHIPMENT rather than by their own id,
+ * because the services under test generate cuids — only the fixtures created
+ * directly carry the prefix. Matching on id alone leaves the allowances and
+ * liquidations behind, and since the shipment ids are deterministic, the next
+ * run recreates a shipment that the survivors are still pointing at and every
+ * total comes out doubled.
+ */
+const CLEANUP_STATEMENTS = [
+  `DELETE FROM "commission" WHERE "shipmentId" LIKE '${PREFIX}%'`,
+  `DELETE FROM "liquidation_history" WHERE "liquidationId" IN
+     (SELECT id FROM "liquidation" WHERE "shipmentId" LIKE '${PREFIX}%')`,
+  `DELETE FROM "liquidation_line" WHERE "liquidationId" IN
+     (SELECT id FROM "liquidation" WHERE "shipmentId" LIKE '${PREFIX}%')`,
+  // Before crew_deduction, which a carried settlement points at.
+  `DELETE FROM "settlement" WHERE "shipmentId" LIKE '${PREFIX}%'`,
+  `DELETE FROM "liquidation" WHERE "shipmentId" LIKE '${PREFIX}%'`,
+  `DELETE FROM "allowance" WHERE "shipmentId" LIKE '${PREFIX}%'`,
+  `DELETE FROM "crew_deduction" WHERE "shipmentId" LIKE '${PREFIX}%'`,
+  `DELETE FROM "audit_log" WHERE "entityType" = 'Liquidation' AND "entityId" NOT IN
+     (SELECT id FROM "liquidation")`,
+  `DELETE FROM "shipment" WHERE id LIKE '${PREFIX}%'`,
+  `DELETE FROM "expense_category" WHERE id LIKE '${PREFIX}%'`,
+  `DELETE FROM "crew_member" WHERE id LIKE '${PREFIX}%'`,
+  `DELETE FROM "client" WHERE id LIKE '${PREFIX}%'`,
+];
+
+async function cleanup(): Promise<void> {
+  // Triggers off for teardown only. Application code cannot reach a hard
+  // delete at all — the soft-delete extension refuses it.
+  await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
+  try {
+    for (const statement of CLEANUP_STATEMENTS) {
+      await prisma.$executeRawUnsafe(statement);
+    }
+  } finally {
+    await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
+  }
+}
+
+beforeAll(async () => {
+  prisma = createPrismaClient();
+
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    available = true;
+  } catch {
+    console.warn('[liquidation-lifecycle] database unreachable — skipping integration tests');
+    return;
+  }
+
+  const admin = await prisma.user.findFirst({ where: { email: 'admin@eztruckr.ph' } });
+  if (!admin) throw new Error('Seed the database first: pnpm db:seed');
+
+  adminId = admin.id;
+  actor = {
+    id: adminId,
+    email: admin.email,
+    name: admin.name,
+    role: UserRole.ADMINISTRATOR,
+    isActive: true,
+    crewMemberId: null,
+  };
+
+  ({ liquidations, allowances, settlements } = serviceStubs(prisma));
+
+  await cleanup();
+
+  await withActor({ userId: adminId }, async () => {
+    const client = await prisma.client.create({
+      data: { id: id('client'), code: id('CLT').toUpperCase(), name: 'Phase 5 Test Client' },
+    });
+    clientId = client.id;
+
+    const driver = await prisma.crewMember.create({
+      data: {
+        id: id('driver'),
+        employeeCode: id('CREW').toUpperCase(),
+        firstName: 'Test',
+        lastName: 'Driver',
+        eligibleRoles: [CrewRole.DRIVER],
+      },
+    });
+    driverId = driver.id;
+
+    const category = await prisma.expenseCategory.create({
+      data: {
+        id: id('fuel'),
+        code: id('FUEL').toUpperCase(),
+        name: 'Fuel',
+        requiresReceipt: false,
+      },
+    });
+    fuelCategoryId = category.id;
+  });
+});
+
+afterAll(async () => {
+  if (available) await cleanup();
+  await prisma.$disconnect();
+});
+
+/**
+ * A delivered trip with cash advanced against it, exactly as the application
+ * would have produced it: the liquidation is created BY delivery, not by the
+ * test, so what is under test includes that wiring.
+ */
+async function deliveredTrip(suffix: string, advance: string) {
+  const shipmentId = id(`shipment-${suffix}`);
+
+  await withActor({ userId: adminId }, async () => {
+    await prisma.shipment.create({
+      data: {
+        id: shipmentId,
+        shipmentNumber: id(`SHP-${suffix}`).toUpperCase(),
+        status: ShipmentStatus.PENDING_LIQUIDATION,
+        clientId,
+        driverId,
+        origin: 'Manila',
+        destination: 'Batangas',
+        grossRate: '20000.0000',
+        netRate: '20000.0000',
+      },
+    });
+
+    await ensurePendingLiquidation(prisma, shipmentId);
+
+    await allowances.issue(
+      shipmentId,
+      {
+        crewMemberId: driverId,
+        amount: advance,
+        issuedAt: null,
+        disbursementMode: DisbursementMode.CASH,
+        referenceNumber: null,
+        receiptId: null,
+        releasedBy: null,
+        remarks: null,
+      },
+      actor,
+    );
+  });
+
+  return shipmentId;
+}
+
+async function addLine(shipmentId: string, amount: string) {
+  await withActor({ userId: adminId }, async () =>
+    liquidations.addLine(
+      shipmentId,
+      {
+        expenseCategoryId: fuelCategoryId,
+        description: 'Diesel',
+        amount,
+        spentAt: new Date().toISOString(),
+        receiptId: null,
+      },
+      actor,
+    ),
+  );
+}
+
+const act = <T>(fn: () => Promise<T>): Promise<T> => withActor({ userId: adminId }, fn);
+
+describe('a liquidation exists from the moment of delivery', () => {
+  it('is created at PENDING, unsubmitted, with the trip total advanced against it', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('created', '5000.00');
+    const liquidation = await liquidations.getForShipment(shipmentId);
+
+    expect(liquidation.status).toBe(LiquidationStatus.PENDING);
+    // Not a creation timestamp: nobody has submitted anything yet.
+    expect(liquidation.submittedAt).toBeNull();
+    expect(liquidation.totalAllowance).toBe('5000');
+    expect(liquidation.history).toHaveLength(0);
+    expect(liquidation.wasReturned).toBe(false);
+  });
+
+  it('sums EVERY release, not the largest or the first', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('topups', '4000.00');
+
+    // The top-up a driver phones in for from a ferry queue.
+    await act(async () =>
+      allowances.issue(
+        shipmentId,
+        {
+          crewMemberId: driverId,
+          amount: '1500.00',
+          issuedAt: null,
+          disbursementMode: DisbursementMode.EWALLET,
+          referenceNumber: 'GC-99213',
+          receiptId: null,
+          releasedBy: null,
+          remarks: 'Ferry queue',
+        },
+        actor,
+      ),
+    );
+
+    const summary = await allowances.summary(shipmentId);
+
+    expect(summary.releaseCount).toBe(2);
+    expect(summary.totalAdvanced).toBe('5500.00');
+
+    const liquidation = await liquidations.getForShipment(shipmentId);
+    expect(liquidation.totalAllowance).toBe('5500');
+  });
+});
+
+describe('return, resubmit, approve', () => {
+  let shipmentId: string;
+
+  beforeEach(async () => {
+    if (!available) return;
+
+    // A fresh trip per case: these are sequences, and a shared one would let an
+    // earlier cycle's rows decide a later assertion.
+    shipmentId = await deliveredTrip(`cycle-${Math.trunc(performance.now() * 1000)}`, '5000.00');
+    await addLine(shipmentId, '3500.00');
+  });
+
+  it('a returned liquidation contributes nothing to the P&L', async () => {
+    if (!available) return;
+
+    await act(async () => liquidations.submit(shipmentId, { remarks: null }, actor));
+
+    const returned = await act(async () =>
+      liquidations.returnToCrew(
+        shipmentId,
+        { reason: 'The 3,500 fuel line has no receipt' },
+        actor,
+      ),
+    );
+
+    expect(returned.status).toBe(LiquidationStatus.PENDING);
+    // The costs are real enough to see and contribute nothing until approved.
+    expect(returned.totalLiquidated).toBe('3500');
+    expect(returned.recognisedCost).toBe('0.00');
+
+    // "Returned" is PENDING plus history, never a status of its own.
+    expect(returned.wasReturned).toBe(true);
+    expect(returned.latestReturnReason).toBe('The 3,500 fuel line has no receipt');
+    expect(returned.history.map((entry) => entry.action)).toEqual([
+      LiquidationHistoryAction.SUBMITTED,
+      LiquidationHistoryAction.RETURNED,
+    ]);
+  });
+
+  it('posts exactly one set of costs across a full return-and-resubmit cycle', async () => {
+    if (!available) return;
+
+    await act(async () => liquidations.submit(shipmentId, { remarks: null }, actor));
+    await act(async () =>
+      liquidations.returnToCrew(shipmentId, { reason: 'Missing receipt' }, actor),
+    );
+    await act(async () => liquidations.submit(shipmentId, { remarks: null }, actor));
+
+    const approved = await act(async () =>
+      liquidations.approve(shipmentId, { remarks: null }, actor),
+    );
+
+    expect(approved.status).toBe(LiquidationStatus.APPROVED);
+
+    // The heart of it: one trip, one set of costs, however many times it went
+    // round. Recognition is derived from the status rather than posted, so
+    // there is nothing a second cycle could post twice.
+    expect(approved.recognisedCost).toBe('3500');
+    expect(approved.totalLiquidated).toBe('3500');
+    expect(approved.lines).toHaveLength(1);
+
+    // And the history kept every step, appended, never overwritten.
+    expect(approved.history.map((entry) => entry.action)).toEqual([
+      LiquidationHistoryAction.SUBMITTED,
+      LiquidationHistoryAction.RETURNED,
+      LiquidationHistoryAction.SUBMITTED,
+    ]);
+
+    // One live liquidation and one settlement — a second cycle created neither.
+    const live = await prisma.liquidation.count({ where: { shipmentId } });
+    const settlementRows = await prisma.settlement.count({ where: { shipmentId } });
+    expect(live).toBe(1);
+    expect(settlementRows).toBe(1);
+  });
+
+  it('refuses to approve work the crew never submitted', async () => {
+    if (!available) return;
+
+    await expect(
+      act(async () => liquidations.approve(shipmentId, { remarks: null }, actor)),
+    ).rejects.toThrow(/pending liquidation cannot move to approved/i);
+  });
+});
+
+describe('an approved liquidation does not mean the cash came back', () => {
+  it('still reports the allowance as outstanding, read from the settlement', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('outstanding', '5000.00');
+    await addLine(shipmentId, '3500.00');
+
+    await act(async () => liquidations.submit(shipmentId, { remarks: null }, actor));
+    const approved = await act(async () =>
+      liquidations.approve(shipmentId, { remarks: null }, actor),
+    );
+
+    expect(approved.status).toBe(LiquidationStatus.APPROVED);
+    expect(approved.variance).toBe('1500');
+
+    // The whole point: the liquidation says the spending is accounted for, and
+    // the settlement says the change has not come back. Reading the first to
+    // answer the second is the bug this record exists to prevent.
+    const settlement = await settlements.getForShipment(shipmentId);
+    expect(settlement.status).toBe(SettlementStatus.OUTSTANDING);
+    expect(settlement.amount).toBe('1500');
+    expect(settlement.isOutstanding).toBe(true);
+
+    const report = await settlements.outstanding();
+    expect(report.items.map((item) => item.shipmentId)).toContain(shipmentId);
+  });
+
+  it('settles a zero variance on the spot, so nothing sits on the alert forever', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('exact', '3000.00');
+    await addLine(shipmentId, '3000.00');
+
+    await act(async () => liquidations.submit(shipmentId, { remarks: null }, actor));
+    await act(async () => liquidations.approve(shipmentId, { remarks: null }, actor));
+
+    const settlement = await settlements.getForShipment(shipmentId);
+
+    expect(settlement.amount).toBe('0');
+    expect(settlement.status).toBe(SettlementStatus.SETTLED);
+    // Nothing moved, so no mode names how it moved.
+    expect(settlement.disbursementMode).toBeNull();
+
+    const report = await settlements.outstanding();
+    expect(report.items.map((item) => item.shipmentId)).not.toContain(shipmentId);
+  });
+
+  it('clears once the movement is recorded', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('settled', '5000.00');
+    await addLine(shipmentId, '4200.00');
+
+    await act(async () => liquidations.submit(shipmentId, { remarks: null }, actor));
+    await act(async () => liquidations.approve(shipmentId, { remarks: null }, actor));
+
+    const settled = await act(async () =>
+      settlements.record(
+        shipmentId,
+        {
+          disbursementMode: DisbursementMode.CASH,
+          referenceNumber: null,
+          receiptId: null,
+          remarks: null,
+        },
+        actor,
+      ),
+    );
+
+    expect(settled.status).toBe(SettlementStatus.SETTLED);
+    expect(settled.isOutstanding).toBe(false);
+    expect(settled.settledBy).toBe(adminId);
+  });
+
+  it('carries a debt to payout as an ordinary crew deduction, and stays outstanding', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('carried', '6000.00');
+    await addLine(shipmentId, '4000.00');
+
+    await act(async () => liquidations.submit(shipmentId, { remarks: null }, actor));
+    await act(async () => liquidations.approve(shipmentId, { remarks: null }, actor));
+
+    const carried = await act(async () =>
+      settlements.carryToPayout(shipmentId, { crewMemberId: driverId, reason: null }),
+    );
+
+    expect(carried.status).toBe(SettlementStatus.CARRIED_TO_PAYOUT);
+    expect(carried.crewDeductionId).not.toBeNull();
+    // The decision is made; the money has not moved. It stays on the alert.
+    expect(carried.isOutstanding).toBe(true);
+
+    const deduction = await prisma.crewDeduction.findFirst({
+      where: { id: carried.crewDeductionId ?? '' },
+    });
+    expect(deduction?.amount.toString()).toBe('2000');
+    expect(deduction?.crewMemberId).toBe(driverId);
+    expect(deduction?.shipmentId).toBe(shipmentId);
+  });
+
+  it('refuses to carry a balance the company owes the crew', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('overspent', '1000.00');
+    await addLine(shipmentId, '2500.00');
+
+    await act(async () => liquidations.submit(shipmentId, { remarks: null }, actor));
+    const approved = await act(async () =>
+      liquidations.approve(shipmentId, { remarks: null }, actor),
+    );
+
+    expect(approved.variance).toBe('-1500');
+
+    await expect(
+      act(async () =>
+        settlements.carryToPayout(shipmentId, { crewMemberId: driverId, reason: null }),
+      ),
+    ).rejects.toThrow(/money owed to the crew/i);
+  });
+});
+
+describe('approval is the lock, and reversing it is a reasoned act', () => {
+  it('freezes the total advanced: no further release until it is reversed', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('frozen', '3000.00');
+    await addLine(shipmentId, '2000.00');
+
+    await act(async () => liquidations.submit(shipmentId, { remarks: null }, actor));
+    await act(async () => liquidations.approve(shipmentId, { remarks: null }, actor));
+
+    await expect(
+      act(async () =>
+        allowances.issue(
+          shipmentId,
+          {
+            crewMemberId: driverId,
+            amount: '500.00',
+            issuedAt: null,
+            disbursementMode: DisbursementMode.CASH,
+            referenceNumber: null,
+            receiptId: null,
+            releasedBy: null,
+            remarks: null,
+          },
+          actor,
+        ),
+      ),
+    ).rejects.toThrow(/approved, so its total advanced is frozen/i);
+
+    await expect(
+      act(async () =>
+        liquidations.addLine(
+          shipmentId,
+          {
+            expenseCategoryId: fuelCategoryId,
+            description: 'Late toll',
+            amount: '120.00',
+            spentAt: new Date().toISOString(),
+            receiptId: null,
+          },
+          actor,
+        ),
+      ),
+    ).rejects.toThrow(/approved and locked/i);
+  });
+
+  it('unwinds the settlement, clears the approver, and moves the shipment back', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('reversed', '5000.00');
+    await addLine(shipmentId, '3500.00');
+
+    // Commissions computed, so approval earns LIQUIDATED — the symmetric
+    // predicate both sides share.
+    await act(async () =>
+      prisma.shipment.update({
+        where: { id: shipmentId },
+        data: { commissionsComputedAt: new Date() },
+      }),
+    );
+
+    await act(async () => liquidations.submit(shipmentId, { remarks: null }, actor));
+    await act(async () => liquidations.approve(shipmentId, { remarks: null }, actor));
+
+    const afterApproval = await prisma.shipment.findFirst({ where: { id: shipmentId } });
+    expect(afterApproval?.status).toBe(ShipmentStatus.LIQUIDATED);
+
+    const reversed = await act(async () =>
+      liquidations.reverse(shipmentId, { reason: 'Wrong category on the fuel line' }, actor, {
+        ipAddress: null,
+        userAgent: null,
+      }),
+    );
+
+    expect(reversed.status).toBe(LiquidationStatus.SUBMITTED);
+    // Cleared, so no row claims an approver it no longer has.
+    expect(reversed.approvedAt).toBeNull();
+    expect(reversed.approvedBy).toBeNull();
+    expect(reversed.recognisedCost).toBe('0.00');
+
+    // The settlement went with it: the variance it recorded is no longer final.
+    const live = await prisma.settlement.count({ where: { shipmentId } });
+    expect(live).toBe(0);
+
+    // And the shipment is honest about no longer having an approved
+    // liquidation, rather than sailing through the close guard.
+    const afterReversal = await prisma.shipment.findFirst({ where: { id: shipmentId } });
+    expect(afterReversal?.status).toBe(ShipmentStatus.PENDING_LIQUIDATION);
+
+    const audit = await prisma.auditLog.findFirst({
+      where: { entityType: 'Liquidation', entityId: reversed.id },
+    });
+    expect(audit?.action).toBe('liquidation.reverse-approval');
+    expect(audit?.actorId).toBe(adminId);
+  });
+
+  it('refuses once the cash movement behind the approval has been recorded', async () => {
+    if (!available) return;
+
+    const shipmentId = await deliveredTrip('paid-out', '5000.00');
+    await addLine(shipmentId, '3500.00');
+
+    await act(async () => liquidations.submit(shipmentId, { remarks: null }, actor));
+    await act(async () => liquidations.approve(shipmentId, { remarks: null }, actor));
+    await act(async () =>
+      settlements.record(
+        shipmentId,
+        {
+          disbursementMode: DisbursementMode.CASH,
+          referenceNumber: null,
+          receiptId: null,
+          remarks: null,
+        },
+        actor,
+      ),
+    );
+
+    await expect(
+      act(async () =>
+        liquidations.reverse(shipmentId, { reason: 'Changed my mind' }, actor, {
+          ipAddress: null,
+          userAgent: null,
+        }),
+      ),
+    ).rejects.toThrow(/already been settled/i);
+  });
+});

@@ -131,6 +131,16 @@ export const shipmentSchema = auditFieldsSchema.extend({
    * does not pay for the extra queries.
    */
   commissionsStale: z.boolean().default(false),
+
+  /**
+   * The sum of every allowance released on this trip.
+   *
+   * The figure the variance is measured against, so it is derived server-side
+   * and sent — never one release, and never a stored total that the second
+   * release would have to overwrite. Detail response only, like
+   * `commissionsStale`; the list does not pay for the extra query.
+   */
+  totalAdvanced: z.string().default('0.00'),
 });
 
 export type Shipment = z.infer<typeof shipmentSchema>;

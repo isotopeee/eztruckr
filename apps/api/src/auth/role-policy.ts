@@ -66,6 +66,43 @@ export const CAN_WRITE_SHIPMENTS = [UserRole.ADMINISTRATOR, UserRole.OPERATIONS]
 export const CAN_WRITE_SHIPMENT_MONEY = [UserRole.ADMINISTRATOR, UserRole.ACCOUNTING] as const;
 
 /**
+ * Submitting a liquidation, and editing the lines that go into it.
+ *
+ * CREW is in this list and in almost no other: liquidating the trip's cash is
+ * the one thing the portal exists for. A crew session is confined to trips it
+ * worked, checked against the record rather than the route, so the widened role
+ * list does not widen what any individual can reach.
+ *
+ * The office roles are here too because crews call figures in from the road as
+ * often as they type them, and `LiquidationHistory` names whoever actually
+ * acted — so submitting on someone's behalf is recorded, not disguised.
+ */
+export const CAN_SUBMIT_LIQUIDATION = [
+  UserRole.ADMINISTRATOR,
+  UserRole.OPERATIONS,
+  UserRole.ACCOUNTING,
+  UserRole.CREW,
+] as const;
+
+/**
+ * Uploading an attachment.
+ *
+ * The same list, for the same reason: a receipt photograph is the crew's half
+ * of a liquidation. What may be READ back is decided per receipt, against the
+ * trip it hangs off.
+ */
+export const CAN_UPLOAD_RECEIPTS = CAN_SUBMIT_LIQUIDATION;
+
+/**
+ * Returning, approving and reversing a liquidation, and settling the variance.
+ *
+ * All of it is `CAN_WRITE_SHIPMENT_MONEY` — approval posts cost to the P&L and
+ * settlement moves cash, which is accounting's call in exactly the way the gas
+ * override and the commission computation already are.
+ */
+export const CAN_DECIDE_LIQUIDATION = CAN_WRITE_SHIPMENT_MONEY;
+
+/**
  * Who may drive each status transition.
  *
  * The route-level `@Roles` on the transition endpoint is necessarily the union

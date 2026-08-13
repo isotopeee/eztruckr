@@ -2,8 +2,12 @@ import {
   AdjustmentDirection,
   CommissionMethod,
   CrewRole,
+  DisbursementMode,
+  LiquidationHistoryAction,
   LiquidationStatus,
   PayoutRunStatus,
+  RETIRED_LIQUIDATION_STATUS_CODES,
+  SettlementStatus,
   ShipmentStatus,
   UserRole,
 } from '@eztruckr/types';
@@ -36,6 +40,19 @@ const EXPECTED: ReadonlyArray<{ constraint: string; codes: readonly number[] }> 
   { constraint: 'commission_rule_method_code_valid', codes: Object.values(CommissionMethod) },
   { constraint: 'shipment_status_code_valid', codes: Object.values(ShipmentStatus) },
   { constraint: 'liquidation_status_code_valid', codes: Object.values(LiquidationStatus) },
+  {
+    constraint: 'liquidation_history_action_code_valid',
+    codes: Object.values(LiquidationHistoryAction),
+  },
+  { constraint: 'settlement_status_code_valid', codes: Object.values(SettlementStatus) },
+  {
+    constraint: 'allowance_disbursement_mode_code_valid',
+    codes: Object.values(DisbursementMode),
+  },
+  {
+    constraint: 'settlement_disbursement_mode_code_valid',
+    codes: Object.values(DisbursementMode),
+  },
   { constraint: 'adjustment_direction_code_valid', codes: Object.values(AdjustmentDirection) },
   { constraint: 'commission_role_code_valid', codes: Object.values(CrewRole) },
   { constraint: 'commission_applied_method_code_valid', codes: Object.values(CommissionMethod) },
@@ -113,6 +130,10 @@ describe('database CHECK constraints match the TypeScript code sets', () => {
       'commission_rule.method',
       'shipment.status',
       'liquidation.status',
+      'liquidation_history.action',
+      'settlement.status',
+      'allowance.disbursementMode',
+      'settlement.disbursementMode',
       'adjustment.direction',
       'commission.role',
       'commission.appliedMethod',
@@ -148,11 +169,29 @@ describe('createdBy stays mandatory in the database', () => {
          AND conname LIKE '%_created_by_required'
     `;
 
-    // 24 business tables, minus user and user_profile. The 24th is
-    // crew_deduction_recovery, added when deduction recovery became divisible
-    // across payout runs.
-    expect(rows).toHaveLength(22);
+    // 26 business tables, minus user and user_profile. The last two are
+    // liquidation_history and settlement, added in Phase 5.
+    expect(rows).toHaveLength(24);
     expect(rows.some((row) => row.conname.startsWith('user_'))).toBe(false);
+  });
+});
+
+describe('a retired code stays out of the database as well as the type', () => {
+  it('rejects a liquidation written with the withdrawn FINALIZED code', async () => {
+    if (!available) return;
+
+    // 3 was FINALIZED. It is gone from the code set AND from the CHECK, so a
+    // row cannot be written with it by any path — including the raw SQL that
+    // bypasses every TypeScript guard in the system.
+    expect(RETIRED_LIQUIDATION_STATUS_CODES).toContain(3);
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO "liquidation" (id, "shipmentId", status, "createdAt", "updatedAt", "createdBy")
+        SELECT 'itest-retired-status', id, 3, now(), now(), 'itest'
+          FROM "shipment" LIMIT 1
+      `),
+    ).rejects.toThrow(/liquidation_status_code_valid/i);
   });
 });
 

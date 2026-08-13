@@ -15,6 +15,10 @@ export * from './schemas/expense-category';
 export * from './schemas/commission-rule';
 export * from './schemas/shipment';
 export * from './schemas/commission';
+export * from './schemas/receipt';
+export * from './schemas/allowance';
+export * from './schemas/liquidation';
+export * from './schemas/settlement';
 
 /** IANA zone the UI renders in. Storage is always UTC. */
 export const APP_TIMEZONE = 'Asia/Manila';

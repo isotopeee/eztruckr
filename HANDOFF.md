@@ -1,25 +1,28 @@
 # EZTruckr — Session Handoff
 
-Trucking management system for a Philippine hauling company. Turborepo monorepo, built in phases. This document summarizes everything completed through **Phase 4** so a new session can continue without replaying history.
+Trucking management system for a Philippine hauling company. Turborepo monorepo, built in phases. This document summarizes everything completed through **Phase 5** so a new session can continue without replaying history.
 
 **Git.** Branch `main`, no remote configured.
 
-| Commit    | What                                                    |
-| --------- | ------------------------------------------------------- |
-| `3af269a` | Phase 1 foundation + Phase 2 data model                 |
-| `61195ff` | Handoff formatting, git init recorded                   |
-| `fdd7a52` | Phase 3 — auth, role guards, master data                |
-| `56b371d` | System settings made administrator-only, read included  |
-| `b399139` | CommissionRule becomes the only source of truth for pay |
-| `8af9c76` | Handoff brought current for a Phase 4 session           |
-| `7bf90f7` | **Phase 4** — shipments, the money engine, FORMULA      |
-| `eaa1405` | Gas rate override split from the frozen applied rate    |
-| `d92c56a` | Crew deductions recovered in slices across payout runs  |
-| `d872cd4` | Write-off decision recorded, question list closed       |
-| `a138387` | Commissions record which rule produced them             |
+| Commit     | What                                                       |
+| ---------- | ---------------------------------------------------------- |
+| `3af269a`  | Phase 1 foundation + Phase 2 data model                    |
+| `61195ff`  | Handoff formatting, git init recorded                      |
+| `fdd7a52`  | Phase 3 — auth, role guards, master data                   |
+| `56b371d`  | System settings made administrator-only, read included     |
+| `b399139`  | CommissionRule becomes the only source of truth for pay    |
+| `8af9c76`  | Handoff brought current for a Phase 4 session              |
+| `7bf90f7`  | **Phase 4** — shipments, the money engine, FORMULA         |
+| `eaa1405`  | Gas rate override split from the frozen applied rate       |
+| `d92c56a`  | Crew deductions recovered in slices across payout runs     |
+| `d872cd4`  | Write-off decision recorded, question list closed          |
+| `a138387`  | Commissions record which rule produced them                |
+| `25c9c5c`  | Handoff brought current for a Phase 5 session              |
+| `<phase5>` | **Phase 5** — allowance, liquidation, receipts, settlement |
 
-The last four are Phase 4 follow-ups, each made on an explicit decision after the phase
-was first reported. They are not loose ends — see the decision record below.
+`eaa1405` through `a138387` are Phase 4 follow-ups, each made on an explicit decision
+after the phase was first reported. They are not loose ends — see the decision record
+below.
 
 ---
 
@@ -31,7 +34,7 @@ eztruckr/
 │  ├─ web/          # Next.js 15 App Router, Tailwind v4, shadcn/ui, TanStack Query
 │  └─ api/          # NestJS 11, health check, Zod validation pipe
 ├─ packages/
-│  ├─ db/           # Prisma schema (27 domain tables), migrations, audit + soft-delete extensions
+│  ├─ db/           # Prisma schema (29 domain tables), migrations, audit + soft-delete extensions
 │  ├─ types/        # Money helper, Zod schemas, code sets (const-object enums)
 │  └─ config/       # Shared tsconfig/eslint/prettier, imported via workspace protocol
 ├─ docker-compose.yml   # postgres (5433), minio (9010/9011), api (4000), web (3000)
@@ -395,78 +398,273 @@ visible, own detail 200, colleague's commissions 403, all writes 403.
 
 ---
 
-## Current verified state (end of Phase 4)
+## Phase 5 — Allowance, liquidation, and receipts ✅
+
+The cash trail of a trip: money out, what it was spent on, what came back.
+
+### Four records, and why there are four
+
+| Record               | Answers                                          |
+| -------------------- | ------------------------------------------------ |
+| `Allowance`          | what was released, when, how, and by whom        |
+| `Liquidation`        | what it was spent on, and whether that is agreed |
+| `LiquidationHistory` | who submitted or returned it, when, and why      |
+| `Settlement`         | whether the leftover cash ever came back         |
+
+The last one is the whole point of the phase. An approved liquidation says the spending
+was accounted for and says **nothing** about the change in the driver's pocket. Inferring
+one from the other reports a trip as clear while the crew still hold ₱1,500, so the
+"allowances outstanding" alert reads `settlement.status` directly and never walks the
+liquidation.
+
+### `Allowance` is one row per release
+
+Many per shipment, never one editable figure. A trip carries an initial advance and
+whatever the road demands — a ferry queue, a re-weighing fee — and each release is its
+own row with its own date, mode, reference, attachment and releaser. There is
+deliberately no allowance column on `Shipment` for a second release to overwrite.
+
+- `disbursementMode` (cash / bank transfer / e-wallet) is required; `referenceNumber` and
+  the attachment stay **optional for every mode**, including transfers. A required
+  reference is answered with "N/A", which looks like evidence and is not.
+- `releasedBy` is a User FK distinct from `createdBy`: a supervisor hands cash over in the
+  yard and a clerk records it that afternoon, and the voucher has to name the first.
+- The route's `standardAllowance` (new column) prefills the **first** release only. A
+  top-up is whatever the road cost; offering the standard figure again would suggest a
+  number nobody meant. Nothing downstream reads it — variance is measured against what was
+  actually released.
+- `shipment.totalAdvanced` is summed on the detail response, like `commissionsStale`.
+
+### The liquidation lifecycle
+
+`PENDING → SUBMITTED → APPROVED`, and two reasoned moves backwards.
+
+- **Created at PENDING when the shipment is marked delivered**, in the same statement.
+  Before this, "the crew still owe us paperwork" was the absence of a row, which no query
+  can filter on. `ShipmentsService` does it through the plain function in
+  `liquidation/pending-liquidation.ts` — a DI cycle for one create was not worth it.
+- **`submittedAt` became nullable.** It was `NOT NULL DEFAULT now()`, which asserted every
+  liquidation had been submitted the instant it came into existence.
+- **Returning is not a status.** Accounting returns with a required reason and the row goes
+  back to PENDING, which already means "with the crew". A `RETURNED` state would behave
+  identically to PENDING in every query, guard and screen.
+- **`LiquidationHistory` is what tells them apart** — append-only, one row per submission
+  and per return, with actor, timestamp and (for returns) reason. A CHECK ties the reason
+  to the action. The crew portal shows the latest return reason; the dashboard's "returned
+  for correction" filter is `PENDING` with prior history, exposed as
+  `GET /liquidations?returnedOnly=true` so the definition lives in one place.
+- **Approval is the lock.** No FINALIZED state. An approved liquidation may only move by
+  being explicitly reversed, with a reason written to `AuditLog` — and the reversal clears
+  `approvedAt`/`approvedBy`, because a row sitting at SUBMITTED while naming an approver is
+  a claim the audit trail then has to argue with.
+
+### Costs are recognised, never posted
+
+`recognisedCost` is **derived from the status** on every read: `totalLiquidated` at
+APPROVED, `0.00` everywhere else. That is what makes the brief's hardest requirement true
+by construction rather than by care — return → resubmit → approve cannot post two sets of
+costs, because nothing is ever posted. There is one live liquidation per shipment and it
+either is approved or is not. A `posted` flag or ledger rows written on approval would be
+a second copy of the same fact, needing a compensating entry on every reversal.
+
+### Settlement, and the one direction a payout can recover
+
+One record per shipment, created at approval with the frozen variance. With an advance and
+two top-ups there is no honest way to say which release a returned ₱800 came from, so
+nothing tries.
+
+- Zero variance settles on the spot — otherwise a trip sits on the alert forever with
+  nothing to clear it.
+- `CARRIED_TO_PAYOUT` creates an **ordinary `CrewDeduction`**. That table already recovers
+  in slices, already refuses to over-recover, and already freezes a recovery once its run
+  is PAID; a parallel mechanism would be a weaker copy of all three.
+- **Only a positive variance can be carried.** Money the company owes the crew is handed
+  over, not deducted, and a payout run has nothing to recover from it.
+- **The crew member is asked for, never guessed.** The settlement belongs to the trip; a
+  deduction has to name a person, and the system does not know which of the driver and the
+  helper the company holds responsible.
+- `SettlementService.clearRecoveredCarryovers(actorId)` flips a carried settlement to
+  SETTLED once its debt is fully recovered by runs marked PAID. **Phase 6 calls this when
+  it marks a run Paid** — it is written here, with the settlement rules, rather than left
+  for the payout code to reinvent.
+
+### The LIQUIDATED predicate, lifted into one place
+
+`shipmentStatusAfterLiquidationMilestone()` in `@eztruckr/types` is now the whole rule, and
+both `CommissionService` and `LiquidationService` call it. It also runs **backwards**:
+reversing an approval retracts one of the two facts, and a shipment left at LIQUIDATED with
+no approved liquidation would sail through the close guard. That is the one backward move
+in the shipment workflow; it is derived rather than requested, and it is refused outright
+once the shipment is CLOSED.
+
+### Receipts
+
+One `Receipt` table and one upload path for every attachment — liquidation receipts, proof
+of a release, proof of a settlement.
+
+- **Upload and attach are separate steps.** The file goes up first and comes back as an id.
+  Doing both in one request means a failed validation has already put bytes in the bucket,
+  and a retry uploads them twice.
+- **The bytes are served back through the API**, not by a presigned link. A presigned URL is
+  a bearer token that outlives the request and travels outside `RolesGuard`, and a receipt
+  is exactly the sort of thing one crew member may see and their colleague may not. Crew
+  reads are scoped to trips they worked (or a receipt they uploaded and have not attached
+  yet). It also keeps `@aws-sdk/s3-request-presigner` out of the dependency list.
+- The object key is generated server-side and never leaves the API. A filename from a
+  browser is attacker-controlled text.
+- Allow-list of MIME types (images + PDF), 10 MB, enforced by multer while streaming **and**
+  again in the service.
+
+### Code sets: one appended, one retired
+
+`LiquidationStatus` shipped in Phase 2 as SUBMITTED 1 / APPROVED 2 / FINALIZED 3, before
+this lifecycle was specified. PENDING was **appended at 4**, not slotted in at 1 — even
+though the table was empty and a renumber would have been safe. Nothing in this codebase
+reads order from the number, so a renumber buys a tidier constant and spends the one rule
+that keeps stored rows honest. Code 3 is **retired**: withdrawn, never reused, listed in
+`RETIRED_LIQUIDATION_STATUS_CODES` and pinned by a test so the next code appended is 5.
+
+New sets: `LiquidationHistoryAction` (SUBMITTED 1, RETURNED 2), `DisbursementMode`
+(CASH 1, BANK_TRANSFER 2, EWALLET 3 — one vocabulary for money moving in both directions),
+`SettlementStatus` (OUTSTANDING 1, SETTLED 2, CARRIED_TO_PAYOUT 3).
+
+### Migration `20260813015610_phase5_allowance_liquidation_settlement`
+
+Two new tables (**26 business tables now**), `route.standardAllowance`, the allowance
+columns, the liquidation lifecycle changes, and the constraints that make the rules
+structural rather than conventional:
+
+- `liquidation_history_reason_matches_action` — a reason is required on a return and
+  forbidden on a submission, expressible only because the action is its own column.
+- `liquidation_approved_at_matches_status` and `liquidation_submitted_at_matches_status`.
+- `settlement_movement_matches_status` — a settled variance names how it moved, unless
+  there was nothing to move (zero) or it moved as a payroll deduction rather than as cash.
+- `settlement_carry_needs_deduction` + `settlement_deduction_only_when_carried` — two
+  implications rather than an equivalence, because the deduction link **outlives** the
+  CARRIED_TO_PAYOUT status.
+- `allowance_amount_positive`, `liquidation_line_amount_positive`,
+  `route_standard_allowance_non_negative` — gaps Phase 5 started summing.
+
+### API surface added
+
+| Route                                                        | Roles                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------ |
+| `GET/POST /shipments/:id/allowances`, `PATCH/DELETE .../:id` | read: office + crew (scoped) · write: ADMIN/ACCOUNTING |
+| `GET /shipments/:id/liquidation`                             | office + crew (scoped)                                 |
+| `POST/PATCH/DELETE /shipments/:id/liquidation/lines[/:id]`   | ADMIN/OPS/ACCOUNTING/CREW (scoped)                     |
+| `POST /shipments/:id/liquidation/submit`                     | ADMIN/OPS/ACCOUNTING/CREW (scoped)                     |
+| `POST /shipments/:id/liquidation/{return,approve,reverse}`   | ADMIN/ACCOUNTING                                       |
+| `GET /liquidations?status=&returnedOnly=`                    | office; crew scoped to own trips                       |
+| `GET /shipments/:id/settlement`                              | office + crew (scoped)                                 |
+| `POST /shipments/:id/settlement/{record,carry-to-payout}`    | ADMIN/ACCOUNTING                                       |
+| `GET /settlements/outstanding`                               | office                                                 |
+| `POST /receipts`, `GET /receipts/:id[/content]`              | upload: ADMIN/OPS/ACCOUNTING/CREW · read: per receipt  |
+
+Four named actions rather than one `PATCH /status`, because the payloads genuinely differ —
+returning and reversing require a reason, submitting and approving do not. The transition
+table in `@eztruckr/types` is still the only thing that says which moves exist; each
+endpoint asks it.
+
+### Web
+
+Three cards on the shipment detail (allowances, liquidation, settlement), a shared
+`ReceiptField` that uploads on choose, the crew portal's "Liquidations waiting on you" with
+the latest return reason, and two dashboard alerts — allowances outstanding, and returned
+for correction. The route form gained a standard allowance.
+
+A crew session sees the liquidation card (their half of the trip's cash) and nothing else
+new: no allowance releases, no settlement, no charges, no levers.
+
+---
+
+## Current verified state (end of Phase 5)
 
 - **`pnpm run check`**: 14/14 tasks passing, uncached.
-- **199 tests**, all passing (was 82):
+- **223 tests**, all passing (was 199):
 
-  | Workspace        | Count | Added in Phase 4                                                                                                                      |
-  | ---------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------- |
-  | `packages/types` | 67    | `formula-syntax` [47] — mostly what the parser REFUSES                                                                                |
-  | `packages/db`    | 53    | drift guard confirms status codes 1–7; 3 assert the gas-override pairing; 5 the deduction-recovery join table; 4 the frozen rule link |
-  | `apps/api`       | 79    | `commission-engine` [38], `formula-evaluator` [19]                                                                                    |
+  | Workspace        | Count | Added in Phase 5                                                                            |
+  | ---------------- | ----- | ------------------------------------------------------------------------------------------- |
+  | `packages/types` | 73    | the appended PENDING code, the retired 3, the backwards-running order, the four legal moves |
+  | `packages/db`    | 58    | four new code-column drift guards; a retired code is refused by raw SQL as well as by TS    |
+  | `apps/api`       | 92    | `liquidation-lifecycle` [13] — the first DB-backed tests in this workspace                  |
 
-- **The brief's required assertions pass, in unit tests and again live:**
-  - `netRate 16200`, no commissionable charges, gas 25% → gasDeduction **4050.00**, base
-    **12150.00**, driver **1822.50**, helper **911.25**
-  - with a 1500 commissionable charge → base **13275.00**, driver **1991.25**, helper
-    **995.63** (995.625 half-up — asserted explicitly, both through
-    PERCENT_OF_BASE and through an equivalent FORMULA)
+- **The brief's three required assertions, each asserted twice** — in
+  `apps/api/src/liquidation/liquidation-lifecycle.test.ts` against a real database, and
+  again live through HTTP:
+  - **return → resubmit → approve posts exactly one set of costs.** After a full cycle:
+    `recognisedCost` 4,500 (not 9,000), two lines (not four), one live liquidation, one
+    settlement, and a history of `[SUBMITTED, RETURNED, SUBMITTED]`.
+  - **a returned liquidation contributes nothing.** `totalLiquidated` 3,500 and
+    `recognisedCost` `0.00` at the same time — the figures are visible and unrecognised.
+  - **an approved liquidation with an unsettled variance still reports its allowance as
+    outstanding.** Liquidation APPROVED, settlement OUTSTANDING at 1,500, and the shipment
+    on `GET /settlements/outstanding`.
 
-- **Live, against the containerised stack**, in order: created SH-2026-0001 at 18,000
-  gross / 10% TPC → net 16,200; refused a helper in the driver slot and the same person
-  in both slots; dispatched → in transit → **asked for DELIVERED (4) and got
-  PENDING_LIQUIDATION (5)**; added the extra drop fee; computed; flipped the fee to
-  commissionable and saw `commissionsStale: true`; recomputed to 995.63; overrode the gas
-  rate to 30% with a reason (and was refused without one); created a client-scoped
-  FORMULA rule and watched it beat the unscoped baseline for the driver only; inserted an
-  approved liquidation and watched computation advance the shipment to LIQUIDATED; closed
-  it; was refused on closing it twice.
-- **Formula injection refused at the API boundary**, each with a specific message:
-  `net_rate; process.exit(1)`, `require("fs")`, `net_rate.constructor`, `` `${net_rate}` ``,
-  `net_rate ** 2`, `globalThis`, `net_rate = 1`, and an unknown field.
-- **The no-fallback path proved live**: with only an expired helper baseline left, the
-  coverage report warned first, and computing then failed 422 with a message naming the
-  role, the date and the fix.
-- **Browser-verified**: the shipment list, the detail page rendering the rate chain as a
-  worksheet, the FORMULA commission showing its frozen expression and resolved field
-  values, the gas override showing 30% against the 25% system default with its reason,
-  and both charge lists.
-- `prisma migrate status`: 9 migrations applied, no drift. Seed still idempotent.
-- **Table count, so a re-run of the obvious query matches**: 24 business + 3 Better Auth
-  infra (`session`, `account`, `verification`) = **27 domain tables**. Counting
-  `information_schema.tables` returns **28**, because Prisma's own `_prisma_migrations`
-  is in there too.
+- **Phase 4's assertions still pass unchanged** (`netRate 16200` → base 12,150, driver
+  1,822.50, helper 911.25; with a 1,500 commissionable charge → 995.63 half-up).
+
+- **50 live checks against the containerised stack**, in order: created a route with a
+  standard allowance; booked a trip; confirmed **no liquidation exists before delivery**;
+  dispatched → in transit → delivered, and found a liquidation at PENDING with
+  `submittedAt` null; saw the route standard offered as a default for the first release
+  only; released 4,500 cash then a 1,500 e-wallet top-up with a reference, and got
+  **6,000 advanced from two surviving rows**; was refused a zero release; uploaded a PNG
+  receipt and got the **exact bytes back through the API**; was refused a `text/plain`
+  upload (415); was refused approval of work never submitted; was refused a return with no
+  reason; returned it and saw PENDING + `wasReturned` + the reason; found it via
+  `returnedOnly=true`; resubmitted and approved to **4,500 recognised, variance 1,500**;
+  was refused a further release and a further line; computed commissions and watched the
+  shipment **earn LIQUIDATED**; reversed the approval and watched the shipment drop back to
+  PENDING_LIQUIDATION with the settlement gone and the approver cleared; re-approved;
+  was refused a carry naming someone who never worked the trip; carried it to payout and
+  found the crew deduction; confirmed it **stays on the outstanding alert**; then, as the
+  crew login, listed its own liquidations, read one, saw the return reason, and was refused
+  both settling and releasing cash to itself.
+- **Browser-verified**: the dashboard's outstanding-allowances alert; the shipment detail
+  rendering the liquidation card with its four figures, the receipt link on one line and
+  "No receipt attached" on the other, and the full submit/return/submit history; the
+  allowances card showing both releases with their modes and the frozen-by-approval notice;
+  the settlement card showing "Carried to payout — ₱0.00 taken so far"; and the crew
+  portal's "Liquidations waiting on you".
+- `prisma migrate status`: 10 migrations applied, no drift. Seed still idempotent.
+- **Table count**: 26 business + 3 Better Auth infra (`session`, `account`, `verification`)
+  = **29 domain tables**. `information_schema.tables` returns **30** with Prisma's own
+  `_prisma_migrations`.
 - **The migration chain was replayed from scratch** into a throwaway database
-  (`eztruckr_migrationtest`, since dropped) — worth doing because Phase 4's migrations are
-  largely hand-written SQL. All nine applied cleanly and the invariants held on a virgin
-  schema: 0 enum types, 0 float columns, 0 naive timestamps, 27 domain tables, 9 payout
-  triggers, 17 partial unique indexes, 22 `_created_by_required` CHECKs,
-  `shipment_status_code_valid` accepting 1–7, and `commission.appliedRate` as
-  `numeric(9,4)`.
+  (`eztruckr_p5replay`, since dropped). All ten applied cleanly and the invariants held on
+  a virgin schema: 0 enum types, 0 float columns, 0 naive timestamps, 29 domain tables,
+  9 payout triggers, 21 partial unique indexes, 24 `_created_by_required` CHECKs,
+  26 `_soft_delete_consistent` CHECKs, `liquidation_status_code_valid` accepting exactly
+  `(1, 2, 4)`, `liquidation.status` defaulting to 4, `submittedAt` nullable, and
+  `finalizedAt`/`finalizedBy` gone.
 
 ### Test data left in the development database
 
-Phase 4 verification created rows in the local Postgres. A fresh volume is unaffected.
+A fresh volume is unaffected. `docker compose down -v && docker compose up -d --build`
+gives a clean database with the seed only.
 
-- `SH-2026-0001` — closed, with commissions and one commissionable additional charge.
-  Carries the 30% gas override that proved the freeze.
-- `SH-2026-0002` — pending liquidation, one driver, commissions computed by the FORMULA
-  rule. Used to prove the gas-rate split and the rule-tracing columns end to end.
-- A client-scoped FORMULA rule (`Northport driver formula`, expression
+- **Phase 4's `SH-2026-0001` and `SH-2026-0002` are gone**, along with the hand-inserted
+  `itest-liq-1` liquidation the previous handoff warned about. The `liquidation` table was
+  empty when Phase 5 began, which is why appending a status code reinterpreted nothing.
+- Several `SH-P5-*` shipments from the live verification script, at various points in the
+  lifecycle. The most recent is LIQUIDATED with a carried settlement and a ₱1,500 crew
+  deduction against Ricardo Dela Cruz; an earlier one sits at PENDING with 6,000 advanced
+  and nothing claimed, which is what makes the crew portal card visible.
+- A handful of `P5-*` routes carrying a 4,500 standard allowance.
+- One receipt object in MinIO (`receipts/<uuid>.png`), attached to a fuel line.
+- A client-scoped FORMULA rule (`Northport driver formula`,
   `(net_rate + additional_charges) * 0.12`) and a replacement `Default helper commission`
-  rule — the seeded original was soft-deleted while proving the removal guard. The
-  FORMULA rule was renamed and deactivated during testing, then restored to its original
-  name and `isActive: true`.
-- **One hand-inserted `liquidation` row (`itest-liq-1`)**, written with raw SQL to
-  exercise the LIQUIDATED transition, since Phase 5 owns liquidation. It has
-  `totalLiquidated = 0` and no lines. **Delete it or reset the volume before building
-  Phase 5 against it** — it is the one row here the application could not have created,
-  and it will not behave like a real liquidation.
-- `driver@eztruckr.ph`'s password was reset to `eztruckr-dev-crew` to test crew scoping.
+  rule survive from Phase 4.
+- `driver@eztruckr.ph`'s password is `eztruckr-dev-crew`. It is linked to **Joel Bautista**
+  (helper-only) while the login's display name still reads "Ricardo Dela Cruz" — a Phase 4
+  dev-data quirk, harmless and worth knowing before it looks like a bug.
 
-`docker compose down -v && docker compose up -d --build` gives a clean database with the
-seed only, if you would rather start Phase 5 from nothing.
+**Integration tests share this database.** `apps/api`'s new suite prefixes its rows
+`p5test-`, deliberately NOT the `itest-` prefix `packages/db` uses: turbo runs both
+workspaces at once, and that suite's teardown deletes everything matching `itest-%`.
+Its cleanup matches child rows by their SHIPMENT rather than by id, because the services
+under test generate cuids — matching on id alone leaves allowances behind, and the next
+run's deterministic shipment ids pick them straight back up.
 
 ---
 
@@ -474,9 +672,12 @@ seed only, if you would rather start Phase 5 from nothing.
 
 Turborepo · Docker + docker compose · Next.js App Router + TypeScript · shadcn/ui + Tailwind v4 · TanStack Query · NestJS + TypeScript · Prisma · PostgreSQL 16 · currency.js (configured once in `packages/types/src/money/money.ts`, `{ symbol: '₱', precision: 2 }`) · MinIO (S3-compatible) · Prettier (root-level Turborepo task `//#format:check`) · Better Auth 1.6.26.
 
-**No dependency was added in Phase 4.** The exact arithmetic the formula evaluator needs
-is a ~140-line BigInt rational module rather than a library, so currency.js remains the
-only money dependency and the boundary rule is unchanged.
+**No dependency has been added since Phase 3.** Phase 4's exact arithmetic is a ~140-line
+BigInt rational module rather than a library. Phase 5's uploads use the `FileInterceptor`
+already inside `@nestjs/platform-express` and `PutObject`/`GetObject` from the
+`@aws-sdk/client-s3` that was there from Phase 1; serving the bytes through the API rather
+than by presigned link keeps `@aws-sdk/s3-request-presigner` out of the tree, and is the
+right shape for authorisation anyway.
 
 ---
 
@@ -538,63 +739,76 @@ underneath it.
 | 6   | `user.email` only partially unique                 | Phase 3. Better Auth's adapter uses `findFirst`, so it never assumed total uniqueness.                                         |
 | 7   | Gas override sharing a column with the frozen rate | Phase 4. Split into input (`gasRateOverride`) and output (`appliedGasDeductionRate`).                                          |
 
-### The pattern worth carrying into Phase 5
+### Decided during Phase 5, without a question needing to be asked
+
+The brief settled most of this phase itself. Four calls it did not cover were made here,
+each one following an existing rule in the codebase rather than inventing a new one:
+
+| Decision                                                             | Why                                                                                                                                                                         |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PENDING appended at code 4; FINALIZED (3) retired, never reused      | Codes are permanent. The table was empty, so a renumber was safe — and buys only a tidier constant, since order comes from the declared sequence.                           |
+| Reversal moves the shipment back to PENDING_LIQUIDATION              | The status is derived from two facts; retracting one and leaving LIQUIDATED would let the close guard pass on a claim that is no longer true. Refused outright once CLOSED. |
+| CARRIED_TO_PAYOUT creates an ordinary `CrewDeduction`, positive only | That machinery already recovers in slices, refuses over-recovery and freezes on PAID. Money the company owes is handed over, not deducted — a run has nothing to recover.   |
+| Receipt bytes stream through the API, not a presigned URL            | A presigned link outlives its request and travels outside `RolesGuard`; a receipt is exactly what one crew member may see and their colleague may not.                      |
+
+### The pattern worth carrying forward
 
 Three of these — 4, 7, and the `isSettled` question that fell out of 4 — were the same
 defect: **one column doing two jobs, with a convention rather than a constraint keeping
 the two apart.** In every case the giveaway was that no CHECK could express the rule,
 because the database held the same missing information the reader did.
 
-`Allowance` and `Liquidation` are the next tables to be built on, and are worth reading
-with that lens before Phase 5 adds behaviour to them.
+`Allowance` and `Liquidation` were the next tables to be built on, and Phase 5 read them
+with exactly that lens: the settlement record exists because "was the spending accounted
+for" and "did the change come back" were one column's worth of information short.
 
 ---
 
-## Phase 5 — start here
+## Phase 6 — start here
 
-### First: the brief does not define Phase 5
+### First: the brief does not define Phase 6
 
-The specification supplied by the user covers **Phases 1 to 4 only**. Everything below is
-inferred from the domain concepts and the tables that exist but have no behaviour yet.
+The specification supplied by the user covers **Phases 1 to 4**; Phase 5's scope arrived as
+its own written brief. Everything below is inferred from the domain concepts and the tables
+that still have no behaviour.
 
-**Ask the user for the Phase 5 scope before building.** Do not infer it from this
-document. The most likely shape, from the brief's own domain concepts and the P&L formula
-it specifies, is **allowance → liquidation → receipts**, with payout runs and P&L after
-that — but that is a guess, and the user has been specific about scope every time they
-have been asked.
+**Ask the user for the Phase 6 scope before building.** The most likely shape, from the
+brief's own domain concepts and the P&L formula it specifies, is **payout runs → P&L
+reporting** — but that is a guess, and the user has been specific about scope every time
+they have been asked.
 
-What is certain is what remains unbuilt: `Allowance`, `Liquidation`, `LiquidationLine`,
-`Receipt`, `PayoutRun`, `PayoutLine`, `Adjustment`, `AuditLog` (partially used by
-settings), and `CrewDeduction` / `CrewDeductionRecovery`. All exist as tables with full
-audit, soft-delete and constraint coverage; none has a service, controller or screen.
+What remains unbuilt: `PayoutRun`, `PayoutLine`, `Adjustment`, and the reporting side of
+`AuditLog`. `CrewDeduction` / `CrewDeductionRecovery` have rows and constraints and
+triggers but still no service. All exist as tables with full audit, soft-delete and
+constraint coverage.
 
-### The contract Phase 4 leaves
+### The contract Phase 5 leaves
 
-Whatever the scope turns out to be, these hold:
-
-- **`Shipment` reaches LIQUIDATED when two things are true**: an approved liquidation
-  exists, and commissions are computed. `CommissionService.statusAfterComputing` applies
-  the move from the commission side. **Phase 5 must apply it from the other side** — when
-  a liquidation reaches APPROVED on a shipment whose commissions are already computed.
-  The predicate is deliberately symmetric; lift it into one place rather than writing a
-  second copy.
+- **`SettlementService.clearRecoveredCarryovers(actorId)` is waiting for its caller.** A
+  CARRIED_TO_PAYOUT settlement becomes SETTLED when its `CrewDeduction` is fully recovered
+  by runs marked PAID. Call it when a run is marked Paid; do not re-derive the rule in the
+  payout code.
+- **`shipmentStatusAfterLiquidationMilestone()` is the only definition of LIQUIDATED.**
+  Both the commission side and the liquidation side call it. If a third thing ever affects
+  the status, extend that function.
+- **Cost recognition is derived, not posted.** `recognisedCost` is computed from the
+  liquidation status on every read. A P&L report should sum `liquidation_line.amount` where
+  the liquidation is APPROVED — not a ledger table, and not a `posted` flag. That is what
+  makes a return-and-resubmit cycle safe.
 - **The allowance is not a P&L cost.** It is a receivable from the crew, cleared by the
-  liquidation, and only liquidated actual expenses are recognised as cost. The close
-  guard already refuses to close a shipment carrying allowances with no approved
-  liquidation.
-- **The gas deduction is not a cost line either.** Actual fuel is recognised through the
-  liquidation; counting it in the P&L as well would double it. Both traps are documented
-  in `commission-chain.ts` and in the formula field catalog.
-- **Money locks on `paid`, not on `computed`.** Charges, crew and the gas override stay
-  editable until a commission is attached to a payout line. Apply the same rule to
-  liquidation lines rather than inventing a second one — locking at computation was tried
-  in Phase 4 and is a dead end.
-- **A rule that has paid anything deactivates rather than deletes.** Commissions now hold
-  `appliedRuleId`, so history references the rule. Expect the same to become true of
-  anything Phase 5 links from a payout.
-- **There is still no fallback rate.** A shipment matching no commission rule raises. If
-  Phase 5 adds a screen that computes, it inherits that refusal — do not add a default to
-  make a screen simpler.
+  liquidation. **The gas deduction is not one either** — actual fuel is recognised through
+  the liquidation, and counting it in the P&L as well would double it. Both traps are
+  documented in `commission-chain.ts` and in the formula field catalog.
+- **Money locks on `paid` for commissions and charges; approval is the lock for the
+  liquidation.** These are not in conflict: `paid` guards figures a voucher depends on, and
+  a liquidation line feeds no commission. Approval's lock guards the frozen variance, which
+  is why reversing it is refused once the settlement has moved.
+- **Crew debts are never written off** — see question 9 below. A payout screen showing
+  "closed" deductions should compute it from the recoveries.
+- **A rule that has paid anything deactivates rather than deletes.** Commissions hold
+  `appliedRuleId`, so history references the rule. Expect the same of anything Phase 6
+  links from a payout.
+- **There is still no fallback rate.** A shipment matching no commission rule raises.
 
 ### Where the useful machinery already is
 
@@ -608,24 +822,28 @@ Whatever the scope turns out to be, these hold:
 | Single live row from a partial-unique | `liveOne()` / `liveOneOrThrow()`                                                 |
 | Row → response conversion             | `apps/api/src/master-data/serialize.ts` — decimals as strings, dates as ISO      |
 | Declarative master-data screens       | `apps/web/src/lib/resource-spec.ts` + `resources.tsx`                            |
+| File upload / download                | `StorageService.put()/get()` + `ReceiptsService` — one pipeline, all attachments |
+| Crew scoping off a shipment           | `apps/api/src/liquidation/shipment-access.service.ts`                            |
+| DB-backed service tests               | `apps/api/src/liquidation/liquidation-lifecycle.test.ts` — the pattern to copy   |
 
 ### Still worth doing
 
-Two genuine gaps, both in test coverage rather than design:
-
-- **An API e2e harness (supertest).** The biggest hole in the suite. Phase 4's
-  verification was thorough but manual — a Python script driving the containerised stack,
-  not something CI re-runs. The commission engine's _arithmetic_ is well covered by unit
-  tests; its _wiring_ — status guards, per-transition role policy, crew scoping — is
-  proved only by hand. Worth building before Phase 5 adds more wiring to it.
-- **`CommissionService.computeForShipment` has no unit test**, only live verification,
-  because it needs Prisma. The pure pieces around it are covered; the orchestration is
-  not. A test client against the real Postgres (as `packages/db` already does) would
-  close it.
+- **An API e2e harness (supertest).** Still the biggest hole. Phase 5 closed part of it by
+  testing `LiquidationService`, `AllowancesService` and `SettlementService` against a real
+  database — which is the pattern to extend — but the guards, the per-route role policy and
+  the crew scoping are still proved only by a Python script driving the running stack, not
+  by anything CI re-runs.
+- **`CommissionService.computeForShipment` still has no test**, only live verification.
+  Phase 5 demonstrated the way to write one: build the service by hand over a real Prisma
+  client, wrap the calls in `withActor`, and clean up by relationship rather than by id
+  prefix. It is now a short job rather than a design question.
+- **The web app has no tests at all.** Not a Phase 5 regression, but the card components now
+  carry real conditional logic (who may edit, which actions are legal, what the reason box
+  is for) that is currently only checked by looking at it.
 
 ### How this codebase expects to be worked on
 
-Learned across four phases; following it will make a Phase 5 session much smoother.
+Learned across five phases; following it will make the next session much smoother.
 
 - **Structural enforcement over convention.** If a rule matters, express it as a
   constraint, a trigger, or a type — not a comment and not discipline. `RolesGuard` fails
@@ -640,17 +858,35 @@ Learned across four phases; following it will make a Phase 5 session much smooth
   long docblocks in this repo exist because the obvious alternative is wrong for a reason
   that is not visible locally.
 - **`pnpm run check` is the gate**: format, lint, typecheck, test across every workspace.
-  It was green at every commit of Phase 4.
-- **Verify against the running stack, not just the tests.** Every Phase 4 claim about
-  behaviour was checked live through the API before it was written down.
+  It was green at every commit of Phases 4 and 5.
+- **Verify against the running stack, not just the tests.** Every claim about behaviour in
+  this document was checked live through the API before it was written down.
+- **A status that behaves identically to another status is not a status.** Phase 5 declined
+  `RETURNED` and `FINALIZED` on that test, and both refusals paid for themselves: the
+  question `RETURNED` would have answered is answered better by an append-only history
+  table that also says who, when and why.
+
+### If a migration turns out to be wrong before it is committed
+
+Phase 5 needed this once — two CHECK constraints were too strict and were only found while
+writing the service against them. Prisma refuses to re-run an edited migration, and
+`migrate reset` would have destroyed data the user may still want:
+
+1. Hand-write the inverse DDL and run it in one transaction, ending with
+   `DELETE FROM "_prisma_migrations" WHERE migration_name = '<name>'`.
+2. Fix the migration file.
+3. `prisma migrate dev` re-applies it as if for the first time.
+
+The result is a single clean migration rather than a corrective second one, which matters
+because the chain gets replayed from scratch as a verification step.
 
 ### Housekeeping on the development machine
 
 The Docker VM ran out of disk during Phase 4 — Postgres could not extend a file, which
 failed a migration mid-run (it rolled back cleanly and was re-applied after pruning).
-Pruning dangling images reclaimed 9GB, leaving ~9GB free. Roughly 19GB of build cache and
-14GB of unused images remain reclaimable via `docker builder prune` / `docker image prune
--a` if it gets tight again. The host volume is separately at 97% (35GB free of 926GB).
+Pruning dangling images reclaimed 9GB. Roughly 19GB of build cache and 14GB of unused
+images remain reclaimable via `docker builder prune` / `docker image prune -a` if it gets
+tight again. The host volume is separately at 97% (35GB free of 926GB).
 
-Repeated `docker compose up --build` cycles are what filled it, so a long Phase 5 session
-will do the same. Worth watching if a migration fails for no apparent reason.
+Repeated `docker compose up --build` cycles are what filled it, so a long session will do
+the same. Worth watching if a migration fails for no apparent reason.

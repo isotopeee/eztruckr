@@ -177,6 +177,14 @@ model User {
   liquidationLinesUpdated LiquidationLine[] @relation("LiquidationLineUpdatedBy")
   liquidationLinesDeleted LiquidationLine[] @relation("LiquidationLineDeletedBy")
 
+  liquidationHistoryCreated LiquidationHistory[] @relation("LiquidationHistoryCreatedBy")
+  liquidationHistoryUpdated LiquidationHistory[] @relation("LiquidationHistoryUpdatedBy")
+  liquidationHistoryDeleted LiquidationHistory[] @relation("LiquidationHistoryDeletedBy")
+
+  settlementsCreated Settlement[] @relation("SettlementCreatedBy")
+  settlementsUpdated Settlement[] @relation("SettlementUpdatedBy")
+  settlementsDeleted Settlement[] @relation("SettlementDeletedBy")
+
   receiptsCreated Receipt[] @relation("ReceiptCreatedBy")
   receiptsUpdated Receipt[] @relation("ReceiptUpdatedBy")
   receiptsDeleted Receipt[] @relation("ReceiptDeletedBy")
@@ -218,13 +226,15 @@ model User {
   auditLogsDeleted AuditLog[] @relation("AuditLogDeletedBy")
 
   // --- workflow actor back-relations -------------------------------------
-  auditLogsActed        AuditLog[]    @relation("AuditLogActor")
-  liquidationsApproved  Liquidation[] @relation("LiquidationApprovedBy")
-  liquidationsFinalized Liquidation[] @relation("LiquidationFinalizedBy")
-  adjustmentsApproved   Adjustment[]  @relation("AdjustmentApprovedBy")
-  payoutRunsApproved    PayoutRun[]   @relation("PayoutRunApprovedBy")
-  payoutRunsPaid        PayoutRun[]   @relation("PayoutRunPaidBy")
-  payoutRunsVoided      PayoutRun[]   @relation("PayoutRunVoidedBy")
+  auditLogsActed       AuditLog[]           @relation("AuditLogActor")
+  allowancesReleased   Allowance[]          @relation("AllowanceReleasedBy")
+  liquidationsApproved Liquidation[]        @relation("LiquidationApprovedBy")
+  liquidationHistory   LiquidationHistory[] @relation("LiquidationHistoryActor")
+  settlementsRecorded  Settlement[]         @relation("SettlementRecordedBy")
+  adjustmentsApproved  Adjustment[]         @relation("AdjustmentApprovedBy")
+  payoutRunsApproved   PayoutRun[]          @relation("PayoutRunApprovedBy")
+  payoutRunsPaid       PayoutRun[]          @relation("PayoutRunPaidBy")
+  payoutRunsVoided     PayoutRun[]          @relation("PayoutRunVoidedBy")
 
   @@index([role])
   @@index([isActive])
@@ -495,7 +505,16 @@ model Route {
   distanceKm   Decimal? @db.Decimal(10, 2)
   /// Indicative freight rate used to prefill a shipment. Money.
   standardRate Decimal? @db.Decimal(15, 4)
-  isActive     Boolean  @default(true)
+
+  /// What the crew are normally advanced for this run. Money.
+  ///
+  /// A DEFAULT, not a rule. It prefills the first allowance on a trip and is
+  /// editable there, and nothing downstream reads it — the variance is measured
+  /// against the allowances actually issued, never against this. A long run
+  /// that hits a closed ferry costs what it costs.
+  standardAllowance Decimal? @db.Decimal(15, 4)
+
+  isActive Boolean @default(true)
 
   shipments       Shipment[]
   commissionRules CommissionRule[]
@@ -778,6 +797,7 @@ model Shipment {
 
   allowances        Allowance[]
   liquidations      Liquidation[]
+  settlements       Settlement[]
   billableExpenses  BillableExpense[]
   additionalCharges AdditionalCharge[]
   commissions       Commission[]
@@ -803,9 +823,17 @@ model Shipment {
   @@map("shipment")
 }
 
-/// Cash handed to the crew before or during a trip.
+/// ONE RELEASE of cash to the crew. Many rows per shipment, never one.
 ///
-/// NOT a P&L cost: it is a receivable from the crew, cleared by the
+/// A trip carries an initial advance and, often, top-ups called in from the
+/// road — a ferry queue, a re-weighing fee, a breakdown. Each release is its
+/// own row with its own date, mode and paper trail, because each one is a
+/// separate movement of cash that somebody has to be able to point at. The
+/// shipment's total advanced is the SUM of these; there is deliberately no
+/// editable "allowance amount" on the shipment for a second release to
+/// overwrite, which would leave the first one with no record it ever happened.
+///
+/// NOT a P&L cost: an allowance is a receivable from the crew, cleared by the
 /// liquidation. Only liquidated actual expenses are recognised as cost.
 model Allowance {
   id         String   @id @default(cuid())
@@ -820,6 +848,27 @@ model Allowance {
   issuedAt DateTime @default(now()) @db.Timestamptz(6)
   remarks  String?
 
+  /// The user who released the cash. Distinct from `createdBy`, which is
+  /// whoever typed the row in: a supervisor hands over cash in the yard and a
+  /// clerk records it that afternoon, and a voucher has to name the first.
+  releasedBy     String
+  releasedByUser User   @relation("AllowanceReleasedBy", fields: [releasedBy], references: [id], onDelete: Restrict)
+
+  /// Code set: DisbursementMode (1 CASH, 2 BANK_TRANSFER, 3 EWALLET).
+  disbursementMode Int @db.SmallInt
+
+  /// Bank or wallet reference. OPTIONAL FOR EVERY MODE, including transfers:
+  /// the alternative is a required field somebody fills with "N/A", which looks
+  /// like evidence and is not. `expectsReferenceNumber()` decides whether the
+  /// form asks; nothing requires it.
+  referenceNumber String?
+
+  /// Proof of release — a deposit slip, a wallet screenshot. Same table and the
+  /// same S3 pipeline as a liquidation receipt, because it is the same kind of
+  /// object and splitting it would mean two upload paths to keep in step.
+  receiptId String?
+  receipt   Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
   createdBy     String?
@@ -832,11 +881,24 @@ model Allowance {
 
   @@index([shipmentId])
   @@index([crewMemberId])
+  @@index([releasedBy])
   @@index([deletedAt])
   @@map("allowance")
 }
 
-/// Settlement of the allowance against actual receipted spend.
+/// The crew accounting for what they spent the trip's cash on.
+///
+/// LIFECYCLE: PENDING -> SUBMITTED -> APPROVED, and nothing else. The row is
+/// created at PENDING the moment the shipment is marked delivered, so a trip
+/// awaiting paperwork is a state you can query rather than a missing row.
+/// Costs post to the P&L on APPROVED — derived from this status, never posted
+/// into a ledger — and the liquidation locks there.
+///
+/// RETURNING IS NOT A STATUS. Accounting returns work with a required reason
+/// and it goes back to PENDING, which already means "with the crew, awaiting
+/// their action". What a `RETURNED` state would have recorded is recorded
+/// better by `LiquidationHistory`, which also says when, by whom and why. See
+/// the code set for the full argument.
 model Liquidation {
   id String @id @default(cuid())
 
@@ -845,10 +907,14 @@ model Liquidation {
   shipmentId String
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
 
-  /// Code set: LiquidationStatus (1 SUBMITTED, 2 APPROVED, 3 FINALIZED).
-  status Int @default(1) @db.SmallInt
+  /// Code set: LiquidationStatus (4 PENDING, 1 SUBMITTED, 2 APPROVED). Order
+  /// comes from the declared sequence in @eztruckr/types — PENDING is the first
+  /// stage and carries the highest code, so a numeric comparison would get
+  /// every question about this column backwards.
+  status Int @default(4) @db.SmallInt
 
-  /// Sum of the shipment's allowances, frozen at submission.
+  /// Sum of ALL the shipment's allowances — every release, not one of them.
+  /// Recomputed while the liquidation is open and frozen on approval.
   totalAllowance  Decimal @default(0) @db.Decimal(15, 4)
   /// Sum of the liquidation lines — this is the figure recognised as P&L cost.
   totalLiquidated Decimal @default(0) @db.Decimal(15, 4)
@@ -856,16 +922,19 @@ model Liquidation {
   /// company reimburses crew. Settled separately; never a P&L line.
   variance        Decimal @default(0) @db.Decimal(15, 4)
 
-  submittedAt     DateTime  @default(now()) @db.Timestamptz(6)
-  approvedAt      DateTime? @db.Timestamptz(6)
-  approvedBy      String?
-  approvedByUser  User?     @relation("LiquidationApprovedBy", fields: [approvedBy], references: [id], onDelete: Restrict)
-  finalizedAt     DateTime? @db.Timestamptz(6)
-  finalizedBy     String?
-  finalizedByUser User?     @relation("LiquidationFinalizedBy", fields: [finalizedBy], references: [id], onDelete: Restrict)
-  remarks         String?
+  /// Null until the crew first submit. NOT a creation timestamp — a liquidation
+  /// exists from the moment of delivery, and `createdAt` records that. A
+  /// resubmission after a return moves this forward; every submission is kept
+  /// in `history` regardless.
+  submittedAt DateTime? @db.Timestamptz(6)
 
-  lines LiquidationLine[]
+  approvedAt     DateTime? @db.Timestamptz(6)
+  approvedBy     String?
+  approvedByUser User?     @relation("LiquidationApprovedBy", fields: [approvedBy], references: [id], onDelete: Restrict)
+  remarks        String?
+
+  lines   LiquidationLine[]
+  history LiquidationHistory[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -881,6 +950,56 @@ model Liquidation {
   @@index([status])
   @@index([deletedAt])
   @@map("liquidation")
+}
+
+/// Append-only record of every submission and every return.
+///
+/// WHY THIS EXISTS: both events leave the liquidation at a status it has held
+/// before. Without these rows, a liquidation returned twice and resubmitted
+/// looks exactly like one submitted for the first time, and the crew are told
+/// to correct something with no record of what. Nothing here is ever updated or
+/// deleted — a corrected reason is a new row, not an edit to the old one.
+///
+/// WHAT READS IT: the crew portal shows the latest RETURNED row's reason, and
+/// the dashboard's "returned for correction" filter is PENDING with any history
+/// at all. Both of those are the questions a `RETURNED` status would have
+/// answered worse.
+model LiquidationHistory {
+  id            String      @id @default(cuid())
+  liquidationId String
+  liquidation   Liquidation @relation(fields: [liquidationId], references: [id], onDelete: Restrict)
+
+  /// Code set: LiquidationHistoryAction (1 SUBMITTED, 2 RETURNED).
+  action Int @db.SmallInt
+
+  /// Who did it. Separate from `createdBy` for the same reason as an
+  /// allowance's `releasedBy`: the actor is the point of the row, not an audit
+  /// footnote, and it is what the portal renders.
+  actorId String
+  actor   User   @relation("LiquidationHistoryActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  occurredAt DateTime @default(now()) @db.Timestamptz(6)
+
+  /// Required on a RETURNED row, forbidden on a SUBMITTED one, enforced by
+  /// `liquidation_history_reason_matches_action`. A return with no reason is
+  /// the crew being told to try again with no idea what was wrong; a blank
+  /// reason box on every submission would only dilute the ones that matter.
+  reason String?
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("LiquidationHistoryCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("LiquidationHistoryUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("LiquidationHistoryDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([liquidationId, occurredAt])
+  @@index([actorId])
+  @@index([deletedAt])
+  @@map("liquidation_history")
 }
 
 model LiquidationLine {
@@ -916,8 +1035,17 @@ model LiquidationLine {
   @@map("liquidation_line")
 }
 
-/// A file in S3-compatible object storage. Holds the object key, never a URL —
-/// links are presigned on demand.
+/// A file in S3-compatible object storage. Holds the object key, never a URL.
+///
+/// One table for every attachment in the system — liquidation receipts, proof
+/// of an allowance release, proof of a settlement — because they are the same
+/// kind of object and a second upload path would be a second thing to keep in
+/// step with bucket configuration, size limits and MIME checks.
+///
+/// The bytes are served back through the API rather than by a presigned link.
+/// A presigned URL is a bearer token for the object that outlives the request
+/// and travels outside the role guard, which is the wrong shape for a receipt a
+/// crew member may see and a colleague may not.
 model Receipt {
   id String @id @default(cuid())
 
@@ -932,6 +1060,8 @@ model Receipt {
 
   liquidationLines LiquidationLine[]
   billableExpenses BillableExpense[]
+  allowances       Allowance[]
+  settlements      Settlement[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -945,6 +1075,85 @@ model Receipt {
 
   @@index([deletedAt])
   @@map("receipt")
+}
+
+/// What happened to the cash left over after a trip was liquidated.
+///
+/// ONE RECORD PER SHIPMENT, not per allowance, and that is a modelling decision
+/// rather than a convenience. With an initial advance and two top-ups there is
+/// no meaningful way to say which release a returned ₱800 came from — the crew
+/// spent from one pocket. Attaching settlement to individual allowances would
+/// force an arbitrary allocation and then report it as fact.
+///
+/// The amount is the variance: positive means the crew hold cash that has to
+/// come back, negative means the company owes them. Both directions are
+/// documented the same way as the release was — mode, optional reference,
+/// optional attachment — so a trip's cash trail reads identically in both
+/// directions.
+///
+/// THIS IS WHAT THE "ALLOWANCES OUTSTANDING" ALERT READS. Never the
+/// liquidation: an approved liquidation says the spending was accounted for and
+/// says nothing at all about whether the leftover cash came back.
+model Settlement {
+  id String @id @default(cuid())
+
+  /// Partial-unique WHERE "deletedAt" IS NULL — at most one live settlement per
+  /// shipment. A reversed approval soft-deletes it, and re-approval writes a
+  /// fresh one against the recomputed variance.
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  /// Code set: SettlementStatus (1 OUTSTANDING, 2 SETTLED, 3 CARRIED_TO_PAYOUT).
+  status Int @default(1) @db.SmallInt
+
+  /// The variance being settled, frozen from the liquidation at approval.
+  /// Signed: positive = crew returns cash, negative = company reimburses crew.
+  amount Decimal @db.Decimal(15, 4)
+
+  // --- the movement, mirroring how the allowance was released ---------------
+
+  /// Code set: DisbursementMode. Null until the money actually moves, and null
+  /// forever on a zero variance, where there is nothing to move. A CHECK ties
+  /// it to the status rather than leaving it to convention.
+  disbursementMode Int?    @db.SmallInt
+  referenceNumber  String?
+
+  receiptId String?
+  receipt   Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+
+  settledAt     DateTime? @db.Timestamptz(6)
+  settledBy     String?
+  settledByUser User?     @relation("SettlementRecordedBy", fields: [settledBy], references: [id], onDelete: Restrict)
+  remarks       String?
+
+  /// Set only when the balance is being recovered from the crew's pay instead
+  /// of in cash. The debt itself is an ordinary `CrewDeduction`, recovered in
+  /// slices by payout runs like any other, so this status needs no parallel
+  /// recovery machinery — it clears when that deduction is fully recovered by
+  /// runs that have been marked Paid.
+  ///
+  /// Only a positive variance can be carried: recovering money the crew owe is
+  /// a deduction, while money the COMPANY owes is not something a payout run
+  /// recovers, and inventing an adjustment for it here would be guessing at
+  /// what should be handed over in cash.
+  crewDeductionId String?
+  crewDeduction   CrewDeduction? @relation(fields: [crewDeductionId], references: [id], onDelete: Restrict)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("SettlementCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("SettlementUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("SettlementDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([shipmentId])
+  @@index([status])
+  @@index([crewDeductionId])
+  @@index([deletedAt])
+  @@map("settlement")
 }
 
 // ---------------------------------------------------------------------------
@@ -1064,6 +1273,10 @@ model CrewDeduction {
   /// (like `Adjustment`), not a boolean that can disagree with the sum
   /// underneath it.
   recoveries CrewDeductionRecovery[]
+
+  /// Set when this debt is a trip's unreturned allowance carried to payout.
+  /// At most one, by partial unique on settlement."shipmentId".
+  settlements Settlement[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)

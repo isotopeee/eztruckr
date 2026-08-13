@@ -15,6 +15,7 @@ export const routeSchema = auditFieldsSchema.extend({
   destination: z.string(),
   distanceKm: z.string().nullable(),
   standardRate: z.string().nullable(),
+  standardAllowance: z.string().nullable(),
   isActive: z.boolean(),
 });
 
@@ -28,6 +29,14 @@ export const createRouteSchema = z.object({
   distanceKm: quantityStringSchema.nullish().transform((value) => value ?? null),
   /** Indicative freight rate used to prefill a shipment. Money. */
   standardRate: moneyStringSchema.nullish().transform((value) => value ?? null),
+  /**
+   * What the crew are normally advanced for this run. Money.
+   *
+   * A default that prefills the first allowance and is editable there. Nothing
+   * downstream reads it: the variance is measured against what was actually
+   * released, never against what was expected to be.
+   */
+  standardAllowance: moneyStringSchema.nullish().transform((value) => value ?? null),
   isActive: z.boolean().default(true),
 });
 

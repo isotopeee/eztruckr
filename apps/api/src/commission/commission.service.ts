@@ -11,6 +11,7 @@ import {
   ShipmentStatus,
   isCommissionMethod,
   isCrewRole,
+  shipmentStatusAfterLiquidationMilestone,
   shipmentStatusAtLeast,
   type CommissionComputation,
   type Commission as CommissionResponse,
@@ -370,19 +371,25 @@ export class CommissionService {
    * Computing is one of the two conditions for LIQUIDATED; an approved
    * liquidation is the other. Whichever lands second applies the move, so this
    * side checks for the liquidation.
+   *
+   * The rule itself lives in `@eztruckr/types` and the liquidation service
+   * calls the same function from the other side. Two copies of a symmetric
+   * predicate is how the two sides end up disagreeing about what "liquidated"
+   * means; there is one.
    */
   private statusAfterComputing(shipment: ShipmentWithChain): ShipmentStatus | null {
-    if (shipment.status !== ShipmentStatus.PENDING_LIQUIDATION) {
-      return null;
+    if (!isShipmentStatusCode(shipment.status)) {
+      throw new UnprocessableEntityException(`Shipment ${shipment.id} has an unrecognised status.`);
     }
 
-    const approved = shipment.liquidations.some(
-      (liquidation) =>
-        liquidation.status === LiquidationStatus.APPROVED ||
-        liquidation.status === LiquidationStatus.FINALIZED,
-    );
-
-    return approved ? ShipmentStatus.LIQUIDATED : null;
+    return shipmentStatusAfterLiquidationMilestone(shipment.status, {
+      liquidationApproved: shipment.liquidations.some(
+        (liquidation) => liquidation.status === LiquidationStatus.APPROVED,
+      ),
+      // This is the computation that makes it true, so it is true by the time
+      // the caller applies the result.
+      commissionsComputed: true,
+    });
   }
 }
 
