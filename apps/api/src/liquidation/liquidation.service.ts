@@ -60,7 +60,8 @@ import { ReceiptsService } from './receipts.service';
  * actually moved.
  */
 
-const LIQUIDATION_INCLUDE = {
+/** Exported alongside `toLiquidation`, which cannot be called without it. */
+export const LIQUIDATION_INCLUDE = {
   shipment: {
     select: {
       shipmentNumber: true,
@@ -690,7 +691,13 @@ export function toLiquidation(row: LiquidationRow): Liquidation {
 
     // Derived, never stored. See the class docblock: this is what stops a
     // return-and-resubmit cycle posting a second set of costs.
-    recognisedCost: isCostRecognised(status) ? row.totalLiquidated.toString() : '0.00',
+    //
+    // Both branches at 2dp. `Decimal.toString()` drops trailing zeros, so this
+    // used to answer "0.00" when unrecognised and "9000" when recognised — one
+    // field, two formats, decided by a branch the caller cannot see. Anything
+    // comparing the two answers would have been comparing strings that never
+    // agree on their own shape.
+    recognisedCost: toDecimalString(money(isCostRecognised(status) ? row.totalLiquidated : 0)),
 
     wasReturned: wasReturnedForCorrection(status, history.length),
     latestReturnReason: latestReturn?.reason ?? null,

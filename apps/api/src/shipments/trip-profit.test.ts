@@ -1,6 +1,7 @@
 import { createPrismaClient, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
 import { CrewRole, LiquidationStatus, ShipmentStatus } from '@eztruckr/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { LIQUIDATION_INCLUDE, toLiquidation } from '../liquidation/liquidation.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import { CompanyPaidExpensesService } from './company-paid-expenses.service';
 import { GrossProfitService } from './gross-profit.service';
@@ -284,11 +285,15 @@ describe('gross profit', () => {
   });
 
   /**
-   * `isCostRecognised` expressed as a query. Before approval the lines are the
-   * crew's CLAIM about money they were given, not a cost — and a screen that
-   * folded a claim into a margin would report a profit that is about to fall.
+   * The crew's spending counts AS IT IS CLAIMED, not from approval.
+   *
+   * A manager looking at a trip in transit is asking whether it is still
+   * earning, and a ₱9,000 fuel claim does not become less spent by waiting for
+   * a signature — excluding it answers that question with a number that is
+   * simply too high. What approval changes is whether the figure can still
+   * move, which `costsRecognised` reports and `isProvisional` acts on.
    */
-  it('ignores the liquidation until it is approved, and says so', async () => {
+  it('counts the running liquidation, and flags that it is not yet approved', async () => {
     if (!available) return;
 
     const liquidation = await act(async () =>
@@ -315,7 +320,9 @@ describe('gross profit', () => {
 
     const pending = await grossProfits.forShipment(SHIPMENT_ID);
 
-    expect(pending.liquidatedExpenses).toBe('0.00');
+    expect(pending.liquidatedExpenses).toBe('9000.00');
+    expect(pending.grossProfit).toBe('36000.00');
+    // Counted, but not settled — and the response has to say which.
     expect(pending.costsRecognised).toBe(false);
     expect(pending.isProvisional).toBe(true);
 
@@ -336,9 +343,47 @@ describe('gross profit', () => {
 
     const approved = await grossProfits.forShipment(SHIPMENT_ID);
 
+    // The figure does not jump on approval — it was already right. All that
+    // changes is that it has stopped being able to move.
     expect(approved.liquidatedExpenses).toBe('9000.00');
-    expect(approved.costsRecognised).toBe(true);
     expect(approved.grossProfit).toBe('36000.00');
+    expect(approved.costsRecognised).toBe(true);
+  });
+
+  /**
+   * THE LINE THIS CHANGE MUST NOT CROSS. Counting the running liquidation in a
+   * management figure is a different question from posting cost to the P&L,
+   * and each still has exactly one answer. If somebody later "simplifies" the
+   * two into one, `recognisedCost` starts reporting unapproved spending as
+   * posted — and the guarantee that a return-and-resubmit cycle cannot post
+   * two sets of costs goes with it.
+   */
+  it('does not make the unapproved spending count as recognised P&L cost', async () => {
+    if (!available) return;
+
+    const liquidation = await act(async () =>
+      prisma.liquidation.create({
+        data: {
+          shipmentId: SHIPMENT_ID,
+          status: LiquidationStatus.PENDING,
+          totalLiquidated: '9000.0000',
+        },
+      }),
+    );
+
+    const profit = await grossProfits.forShipment(SHIPMENT_ID);
+
+    // Through the real serialiser, not by re-deriving the rule here — the
+    // point is that the shipped code answers the two questions differently.
+    const recognised = toLiquidation(
+      await prisma.liquidation.findFirstOrThrow({
+        where: { id: liquidation.id },
+        include: LIQUIDATION_INCLUDE,
+      }),
+    ).recognisedCost;
+
+    expect(profit.liquidatedExpenses).toBe('9000.00');
+    expect(recognised).toBe('0.00');
   });
 
   /**

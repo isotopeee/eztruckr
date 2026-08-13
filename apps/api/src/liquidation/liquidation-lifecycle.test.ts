@@ -376,7 +376,12 @@ describe('return, resubmit, approve', () => {
     // The heart of it: one trip, one set of costs, however many times it went
     // round. Recognition is derived from the status rather than posted, so
     // there is nothing a second cycle could post twice.
-    expect(approved.recognisedCost).toBe('3500');
+    //
+    // `recognisedCost` is normalised to 2dp and `totalLiquidated` echoes its
+    // column, which is why they are spelled differently here: the first is a
+    // computed answer that used to change format with its own branch, the
+    // second is a Decimal rendered the way every other column is.
+    expect(approved.recognisedCost).toBe('3500.00');
     expect(approved.totalLiquidated).toBe('3500');
     expect(approved.lines).toHaveLength(1);
 

@@ -27,10 +27,13 @@ import { ShipmentsService } from './shipments.service';
  * and nothing else, and a settlement is cash squaring an advance. Counting any
  * of them would book the same peso twice.
  *
- * THE LIQUIDATION IS ONLY A COST ONCE APPROVED, which is `isCostRecognised`
- * expressed as a query rather than re-derived here. Before approval the lines
- * are the crew's claim about money they were given, and the response says so
- * through `costsRecognised` rather than quietly folding a claim into a margin.
+ * THE LIQUIDATION COUNTS AS IT RUNS, approved or not, and that is not the P&L
+ * recognition rule being broken — it is a different question. What has POSTED
+ * is `Liquidation.recognisedCost`, still zero until approval and still derived
+ * from the status. What the trip has SPENT is this, and a manager watching a
+ * trip in transit is asking the second one: money the crew have demonstrably
+ * spent does not become less spent by waiting for a signature. The response
+ * carries `costsRecognised` and `isProvisional` so the two are never confused.
  */
 @Injectable()
 export class GrossProfitService {
@@ -75,9 +78,13 @@ export class GrossProfitService {
     const netRate = money(shipment.netRate);
     const revenue = netRate.add(billableExpenses).add(additionalCharges);
 
+    // THE RUNNING TOTAL, not just the approved one. `totalLiquidated` is
+    // refreshed on every line change while the liquidation is open and frozen
+    // at approval, so this one column is the right read in both states — and
+    // reading it rather than re-summing the lines means an approved figure is
+    // the figure that was actually approved.
     const costsRecognised = liquidation?.status === LiquidationStatus.APPROVED;
-    const liquidatedExpenses =
-      costsRecognised && liquidation ? money(liquidation.totalLiquidated) : zero();
+    const liquidatedExpenses = liquidation ? money(liquidation.totalLiquidated) : zero();
 
     const companyPaidExpenses = sum(companyPaid.map((row) => row.amount));
     const crewCommissions = sum(commissions.map((row) => row.amount));

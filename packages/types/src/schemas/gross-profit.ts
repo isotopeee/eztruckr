@@ -21,12 +21,30 @@ import { z } from 'zod';
  *
  * WHAT COUNTS AS COST
  *
- *   liquidatedExpenses  what the crew spent, and ONLY once the liquidation is
- *                       approved. Before that the figure is a claim, not a
- *                       cost, and `costsRecognised` says so.
+ *   liquidatedExpenses  what the crew have claimed so far — the RUNNING total
+ *                       of the liquidation's lines, whether or not it has been
+ *                       approved. `costsRecognised` says which it is.
  *   companyPaidExpenses what the office spent directly. Real from the moment
  *                       it is recorded — the money has already gone.
  *   crewCommissions     the crew's pay, from the computed rows.
+ *
+ * THE RUNNING LIQUIDATION COUNTS, AND THAT IS NOT THE RECOGNITION RULE BEING
+ * BROKEN. Two different questions are being asked in two places, and each
+ * still has exactly one answer:
+ *
+ *   `Liquidation.recognisedCost` — what has POSTED to the P&L. Zero until
+ *   approval, derived from the status, and the reason a return-and-resubmit
+ *   cycle cannot post two sets of costs.
+ *
+ *   `liquidatedExpenses` here — what the trip has SPENT so far. A manager
+ *   looking at a trip in transit wants to know whether it is still earning,
+ *   and excluding money the crew have demonstrably spent answers that
+ *   question with a number that is simply too high. Waiting for approval to
+ *   admit a ₱9,000 fuel claim does not make the ₱9,000 less gone.
+ *
+ * The two never disagree once approved, and while pending the response says so
+ * through `costsRecognised` and `isProvisional` — so nobody reads a running
+ * figure as a posted one.
  *
  * WHAT IS DELIBERATELY ABSENT, each for a reason that has bitten somebody:
  *
@@ -73,7 +91,12 @@ export const grossProfitSchema = z.object({
   margin: z.string().nullable(),
 
   // --- what the number is standing on --------------------------------------
-  /** The liquidation is approved, so the crew's spending counts as cost. */
+  /**
+   * The liquidation is approved, so the crew's spending above is final.
+   *
+   * NOT whether it is counted — it always is. What this decides is whether the
+   * amount can still move, which is why it feeds `isProvisional`.
+   */
   costsRecognised: z.boolean(),
   commissionsComputed: z.boolean(),
   /** Commissions were computed before a charge on this trip last changed. */
@@ -106,7 +129,9 @@ export function grossProfitCaveats(basis: GrossProfitBasis): string[] {
   const caveats: string[] = [];
 
   if (!basis.costsRecognised) {
-    caveats.push('The liquidation is not approved, so nothing the crew spent counts as cost yet.');
+    caveats.push(
+      'The crew’s expenses are counted as they are claimed, but the liquidation is not approved — the amount can still change.',
+    );
   }
 
   if (!basis.commissionsComputed) {

@@ -17,10 +17,12 @@ import { getGrossProfit, shipmentKeys } from '@/lib/shipment-api';
  * bottom for the same reason: their absence is a decision, and a reader who
  * cannot see it will assume an omission.
  *
- * The provisional banner is not a nicety either. Before the liquidation is
- * approved the crew's spending is a claim rather than a cost, so the profit
- * shown is too high, and the one thing worse than not showing it is showing it
- * without saying which way it will move.
+ * The crew's expenses count AS THEY ARE CLAIMED, which is why the cost line is
+ * labelled differently before and after approval. A trip still in transit is
+ * exactly when somebody wants to know whether it is earning, and money the crew
+ * have already spent does not become less spent by waiting for a signature —
+ * but a running figure read as a settled one is its own mistake, so the label,
+ * the note and the banner all say which it is.
  */
 export function GrossProfitCard({ shipment }: { shipment: Shipment }) {
   const grossProfit = useQuery({
@@ -78,10 +80,13 @@ export function GrossProfitCard({ shipment }: { shipment: Shipment }) {
             <h3 className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
               Cost
             </h3>
+            {/* The label changes with the status, not just a note beside it:
+                "liquidated" and "claimed so far" are different claims about
+                the same figure, and only one of them is true at a time. */}
             <Line
-              label="Liquidated by crew"
+              label={data.costsRecognised ? 'Liquidated by crew' : 'Claimed by crew so far'}
               amount={data.liquidatedExpenses}
-              note={data.costsRecognised ? undefined : 'not yet recognised'}
+              note={data.costsRecognised ? undefined : 'running, not yet approved'}
             />
             <Line label="Company-paid" amount={data.companyPaidExpenses} />
             <Line
