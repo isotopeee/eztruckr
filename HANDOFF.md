@@ -19,10 +19,11 @@ Trucking management system for a Philippine hauling company. Turborepo monorepo,
 | `a138387` | Commissions record which rule produced them                |
 | `25c9c5c` | Handoff brought current for a Phase 5 session              |
 | `d5405ad` | **Phase 5** — allowance, liquidation, receipts, settlement |
+| `a96e2d7` | LiquidationStatus renumbered; orphaned receipts swept      |
 
-`eaa1405` through `a138387` are Phase 4 follow-ups, each made on an explicit decision
-after the phase was first reported. They are not loose ends — see the decision record
-below.
+`eaa1405` through `a138387` are Phase 4 follow-ups, and `a96e2d7` is Phase 5's, each made
+on an explicit decision after the phase was first reported. They are not loose ends — see
+the decision record below.
 
 ---
 
