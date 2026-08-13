@@ -1,8 +1,11 @@
 import type {
   AdditionalCharge,
+  Adjustment,
   BillableExpense,
   Commission,
   CommissionComputation,
+  CreateAdjustmentInput,
+  CrewPayLine,
   CompanyPaidExpense,
   CreateAdditionalChargeInput,
   CreateBillableExpenseInput,
@@ -36,6 +39,7 @@ export const shipmentKeys = {
   companyExpenses: (id: string) => ['shipments', id, 'company-expenses'] as const,
   grossProfit: (id: string) => ['shipments', id, 'gross-profit'] as const,
   commissions: (id: string) => ['shipments', id, 'commissions'] as const,
+  crewPay: (id: string) => ['shipments', id, 'crew-pay'] as const,
   gasRate: (id: string) => ['shipments', id, 'gas-rate'] as const,
   ruleCoverage: ['commissions', 'rule-coverage'] as const,
 };
@@ -175,6 +179,26 @@ export function listCommissions(id: string): Promise<Commission[]> {
 
 export function computeCommissions(id: string): Promise<CommissionComputation> {
   return apiFetch<CommissionComputation>(`/shipments/${id}/commissions`, { method: 'POST' });
+}
+
+/**
+ * What each crew member is actually owed: commission plus adjustments, added
+ * up by the API. The net is NOT computed here — nothing under `src/` does
+ * money arithmetic, which is why this endpoint exists at all.
+ */
+export function getCrewPay(id: string): Promise<CrewPayLine[]> {
+  return apiFetch<CrewPayLine[]>(`/shipments/${id}/crew-pay`);
+}
+
+export function addAdjustment(input: CreateAdjustmentInput): Promise<Adjustment> {
+  return apiFetch<Adjustment>('/adjustments', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function removeAdjustment(id: string): Promise<void> {
+  return apiFetch<void>(`/adjustments/${id}`, { method: 'DELETE' });
 }
 
 export function getRuleCoverage(): Promise<RuleCoverageReport> {

@@ -13,6 +13,7 @@ import {
   UserRole,
   type CommissionComputation,
   type Commission,
+  type CrewPayLine,
   type GrossProfit,
   type Page,
   type Shipment,
@@ -26,6 +27,7 @@ import {
   CAN_WRITE_SHIPMENTS,
   ROLES_BY_TRANSITION,
 } from '../auth/role-policy';
+import { AdjustmentsService } from '../commission/adjustments.service';
 import { CommissionService } from '../commission/commission.service';
 import { GrossProfitService } from './gross-profit.service';
 import {
@@ -45,6 +47,7 @@ export class ShipmentsController {
     private readonly shipments: ShipmentsService,
     private readonly commissions: CommissionService,
     private readonly grossProfits: GrossProfitService,
+    private readonly adjustments: AdjustmentsService,
   ) {}
 
   /**
@@ -177,6 +180,30 @@ export class ShipmentsController {
   @Roles(...CAN_WRITE_SHIPMENT_MONEY)
   compute(@Param('id') id: string): Promise<CommissionComputation> {
     return this.commissions.computeForShipment(id);
+  }
+
+  /**
+   * What each crew member is actually owed for this trip: the computed
+   * commission, the adjustments against it, and the total.
+   *
+   * A roll-up rather than a stored figure — the commission stays frozen and
+   * self-verifying, the adjustments stay separately explainable, and only this
+   * adds them up. Crew-visible, filtered to the caller's own line for the same
+   * reason the commissions list is: a crew member should see a deduction here
+   * rather than discover it from a short payout.
+   */
+  @Get(':id/crew-pay')
+  @Roles(...CAN_READ_SHIPMENTS, UserRole.CREW)
+  async crewPay(@Param('id') id: string, @CurrentUser() user: RequestUser): Promise<CrewPayLine[]> {
+    const shipment = await this.shipments.get(id);
+
+    this.assertCrewMayRead(shipment, user);
+
+    const lines = await this.adjustments.crewPayForShipment(id);
+
+    return user.role === UserRole.CREW
+      ? lines.filter((line) => line.crewMemberId === user.crewMemberId)
+      : lines;
   }
 
   // -------------------------------------------------------------------------

@@ -810,6 +810,7 @@ model Shipment {
   companyPaidExpenses CompanyPaidExpense[]
   additionalCharges   AdditionalCharge[]
   commissions         Commission[]
+  adjustments         Adjustment[]
   crewDeductions      CrewDeduction[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
@@ -1404,20 +1405,51 @@ model CrewDeductionRecovery {
 
 /// Manual increase or decrease applied to a crew member at payout. Reason and
 /// approver are both required.
+/// A manual increase or decrease to what a crew member is paid.
+///
+/// NOT AN EDIT TO A COMMISSION, and it must never become one. A `Commission`
+/// row is self-verifying — base x rate = amount from values on the row alone —
+/// so writing an adjustment into `amount` would break the one property that
+/// makes a payout defensible months later. It is a sibling row, and the two are
+/// added together only when something asks what a person is actually owed.
+///
+/// SCOPED BY `shipmentId`, NOT BY COMMISSION ID, and that is load-bearing rather
+/// than a preference. Recomputing a shipment SOFT-DELETES its commissions and
+/// creates new ones, so a link to a commission row would dangle every time a
+/// late charge was recorded — the adjustment would silently detach from the pay
+/// it was adjusting. A trip and a crew member both survive recomputation, so
+/// the adjustment stays attached to what it was actually about.
+///
+/// A NULL `shipmentId` is a standing adjustment against the person rather than
+/// a trip: a uniform deduction, a month-end bonus. Both kinds land on a payout
+/// line the same way, which is why they are one table.
 model Adjustment {
   id           String     @id @default(cuid())
   crewMemberId String
   crewMember   CrewMember @relation(fields: [crewMemberId], references: [id], onDelete: Restrict)
 
-  /// Code set: AdjustmentDirection (1 INCREASE, 2 DECREASE).
+  /// The trip this adjusts pay for, or null for a standing adjustment against
+  /// the crew member. See the model docblock for why this is not a commission
+  /// id.
+  shipmentId String?
+  shipment   Shipment? @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  /// Code set: AdjustmentDirection (1 INCREASE, 2 DECREASE). The DIRECTION
+  /// carries the sign; `amount` is always a positive magnitude, so a decrease
+  /// cannot be recorded twice over as a negative increase.
   direction Int     @db.SmallInt
   amount    Decimal @db.Decimal(15, 4)
+  /// Required, and required to be non-blank by CHECK. An unexplained change to
+  /// somebody's pay is indistinguishable from an error when they query it.
   reason    String
 
   approvedBy     String
   approvedByUser User     @relation("AdjustmentApprovedBy", fields: [approvedBy], references: [id], onDelete: Restrict)
   approvedAt     DateTime @default(now()) @db.Timestamptz(6)
 
+  /// Set when a payout run picks this up. THE LOCK: an adjustment that has been
+  /// paid can no longer be edited or removed, for the same reason a paid
+  /// commission cannot — the voucher behind it has to keep reconciling.
   payoutLineId String?
   payoutLine   PayoutLine? @relation(fields: [payoutLineId], references: [id], onDelete: SetNull)
 
@@ -1432,6 +1464,7 @@ model Adjustment {
   deletedByUser User?     @relation("AdjustmentDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
   @@index([crewMemberId])
+  @@index([shipmentId])
   @@index([payoutLineId])
   @@index([deletedAt])
   @@map("adjustment")

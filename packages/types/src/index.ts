@@ -19,6 +19,7 @@ export * from './schemas/shipment';
 export * from './schemas/company-paid-expense';
 export * from './schemas/gross-profit';
 export * from './schemas/commission';
+export * from './schemas/adjustment';
 export * from './schemas/receipt';
 export * from './schemas/allowance';
 export * from './schemas/liquidation';

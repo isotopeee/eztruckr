@@ -1,43 +1,70 @@
 'use client';
 
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ADJUSTMENT_DIRECTION_LABELS,
+  AdjustmentDirection,
   COMMISSION_METHOD_LABELS,
   CREW_ROLE_LABELS,
   CommissionMethod,
   UserRole,
   formatRate,
+  type Adjustment,
   type Commission,
+  type CrewPayLine,
   type Shipment,
 } from '@eztruckr/types';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { ApiError } from '@/lib/api-client';
 import { formatDateTime, formatMoney } from '@/lib/format';
-import { computeCommissions, listCommissions, shipmentKeys } from '@/lib/shipment-api';
+import {
+  addAdjustment,
+  computeCommissions,
+  getCrewPay,
+  removeAdjustment,
+  shipmentKeys,
+} from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 
 /**
- * Computed commissions, with every input that produced them.
+ * What each crew member earns on this trip: the computed commission, any
+ * adjustments to it, and the total.
  *
- * The row shows base, rate and amount together so the multiplication is
- * visible rather than asserted. For a formula rule it also shows the
- * expression and the field values it read, because that is the one method
- * whose logic lives in editable data — without them the amount stops being
- * reproducible the moment somebody edits the rule.
+ * DRIVEN BY `crew-pay`, NOT BY THE COMMISSIONS LIST, because the net is money
+ * arithmetic and nothing under `src/` does money arithmetic. The API adds the
+ * commission and the adjustments together; this renders three numbers it was
+ * given.
+ *
+ * The commission row still shows base, rate and amount together so the
+ * multiplication is visible rather than asserted — and an adjustment is shown
+ * BESIDE it rather than folded into it, because the commission is frozen and
+ * self-verifying and an adjustment is somebody's decision with a reason. A
+ * screen that showed only the total would make the two indistinguishable.
  */
 export function CommissionsCard({ shipment }: { shipment: Shipment }) {
   const { user } = useCurrentUser();
   const queryClient = useQueryClient();
 
   const canCompute = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
+  const isCrew = user?.role === UserRole.CREW;
 
-  const commissions = useQuery({
-    queryKey: shipmentKeys.commissions(shipment.id),
-    queryFn: () => listCommissions(shipment.id),
+  const crewPay = useQuery({
+    queryKey: shipmentKeys.crewPay(shipment.id),
+    queryFn: () => getCrewPay(shipment.id),
   });
 
   const compute = useMutation({
@@ -59,8 +86,8 @@ export function CommissionsCard({ shipment }: { shipment: Shipment }) {
     },
   });
 
-  const rows = commissions.data ?? [];
-  const paid = rows.some((row) => row.payoutLineId !== null);
+  const lines = crewPay.data ?? [];
+  const paid = lines.some((line) => line.commission?.payoutLineId);
 
   return (
     <Card>
@@ -99,20 +126,27 @@ export function CommissionsCard({ shipment }: { shipment: Shipment }) {
         {paid ? (
           <p className="text-muted-foreground text-xs">
             Some of these commissions have been paid. The figures behind a payout cannot move, so
-            recomputing is closed and the charges are locked with them.
+            recomputing is closed and the charges are locked with them. An adjustment can still be
+            recorded — it is a separate line on a future run, not a change to what was paid.
           </p>
         ) : null}
 
-        {commissions.isPending ? (
+        {crewPay.isPending ? (
           <p className="text-muted-foreground text-sm">Loading…</p>
-        ) : rows.length === 0 ? (
+        ) : lines.length === 0 ? (
           <p className="text-muted-foreground text-sm">
             No commissions computed for this shipment yet.
           </p>
         ) : (
           <div className="space-y-3">
-            {rows.map((row) => (
-              <CommissionRow key={row.id} commission={row} />
+            {lines.map((line) => (
+              <CrewPayRow
+                key={line.crewMemberId}
+                shipmentId={shipment.id}
+                line={line}
+                canAdjust={canCompute}
+                isCrew={isCrew}
+              />
             ))}
           </div>
         )}
@@ -121,67 +155,322 @@ export function CommissionsCard({ shipment }: { shipment: Shipment }) {
   );
 }
 
-function CommissionRow({ commission }: { commission: Commission }) {
-  const isFormula = commission.appliedMethod === CommissionMethod.FORMULA;
+function CrewPayRow({
+  shipmentId,
+  line,
+  canAdjust,
+  isCrew,
+}: {
+  shipmentId: string;
+  line: CrewPayLine;
+  canAdjust: boolean;
+  isCrew: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [adding, setAdding] = useState(false);
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: shipmentKeys.all });
+  };
+
+  const remove = useMutation({
+    mutationFn: (id: string) => removeAdjustment(id),
+    onSuccess: invalidate,
+    onError: (error) =>
+      toast.error('Could not remove that adjustment', {
+        description: error instanceof ApiError ? error.displayMessage : String(error),
+      }),
+  });
+
+  const hasAdjustments = line.adjustments.length > 0;
 
   return (
     <div className="rounded-md border p-3 text-sm">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span className="font-medium">{commission.crewMemberName}</span>
-          <Badge variant="secondary">{CREW_ROLE_LABELS[commission.role]}</Badge>
-          {commission.payoutLineId ? <Badge>Paid</Badge> : null}
+          <span className="font-medium">{line.crewMemberName}</span>
+          {line.commission ? (
+            <Badge variant="secondary">{CREW_ROLE_LABELS[line.commission.role]}</Badge>
+          ) : null}
+          {line.commission?.payoutLineId ? <Badge>Paid</Badge> : null}
         </div>
-        <span className="text-base font-medium tabular-nums">{formatMoney(commission.amount)}</span>
+        {/* The net leads only when it differs from the commission; otherwise
+            showing two identical figures invites the reader to hunt for a
+            difference that is not there. */}
+        <span className="text-base font-medium tabular-nums">{formatMoney(line.netAmount)}</span>
       </div>
 
-      <div className="text-muted-foreground mt-2 space-y-1 text-xs">
-        <p>
-          {COMMISSION_METHOD_LABELS[commission.appliedMethod]}
-          {commission.appliedRuleName ? (
-            <>
-              {' · '}
-              {/* The name frozen at computation, not the rule's name today —
-                  a rename must not relabel an old voucher. */}
-              <span title={`Rule ${commission.appliedRuleId ?? ''}`}>
-                {commission.appliedRuleName}
-              </span>
-            </>
-          ) : null}
+      {line.commission ? (
+        <CommissionDetail commission={line.commission} />
+      ) : (
+        <p className="text-muted-foreground mt-2 text-xs">
+          No commission computed for this person on this trip — the adjustment below stands on its
+          own.
         </p>
-        <p className="tabular-nums">
-          {formatMoney(commission.commissionableBase)} base
-          {commission.appliedRate === null ? (
-            <span className="ml-2">
-              — no meaningful rate for this method on this shipment (the amount is authoritative)
-            </span>
-          ) : (
-            <>
-              {' × '}
-              {formatRate(commission.appliedRate)}
-              {isFormula ? ' effective' : ''}
-              {' = '}
-              {formatMoney(commission.amount)}
-            </>
-          )}
-        </p>
+      )}
 
-        {isFormula && commission.appliedFormulaExpression ? (
-          <div className="mt-2 rounded bg-muted/50 p-2">
-            <code className="block break-all">{commission.appliedFormulaExpression}</code>
-            {commission.appliedFormulaFields ? (
-              <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3">
-                {Object.entries(commission.appliedFormulaFields).map(([field, value]) => (
-                  <div key={field} className="contents">
-                    <dt className="font-mono">{field}</dt>
-                    <dd className="tabular-nums">{value}</dd>
-                  </div>
-                ))}
-              </dl>
-            ) : null}
+      {hasAdjustments ? (
+        <div className="mt-3 space-y-1 border-t pt-2">
+          <div className="text-muted-foreground flex items-baseline justify-between text-xs">
+            <span>Commission</span>
+            <span className="tabular-nums">{formatMoney(line.commissionAmount)}</span>
           </div>
+          {line.adjustments.map((adjustment) => (
+            <AdjustmentRow
+              key={adjustment.id}
+              adjustment={adjustment}
+              canRemove={canAdjust}
+              onRemove={() => remove.mutate(adjustment.id)}
+              removing={remove.isPending}
+            />
+          ))}
+          <div className="flex items-baseline justify-between border-t pt-1 text-sm font-medium">
+            <span>Net pay</span>
+            <span className="tabular-nums">{formatMoney(line.netAmount)}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {canAdjust ? (
+        adding ? (
+          <AdjustmentForm
+            shipmentId={shipmentId}
+            crewMemberId={line.crewMemberId}
+            onDone={() => {
+              setAdding(false);
+              invalidate();
+            }}
+            onCancel={() => setAdding(false)}
+          />
+        ) : (
+          <Button variant="ghost" size="sm" className="mt-2 -ml-2" onClick={() => setAdding(true)}>
+            <Plus className="mr-1 h-3 w-3" />
+            Adjust {line.crewMemberName.split(' ')[0]}&apos;s pay
+          </Button>
+        )
+      ) : null}
+
+      {isCrew && hasAdjustments ? (
+        <p className="text-muted-foreground mt-2 text-xs">
+          Adjustments to your pay are shown here with the reason recorded for each.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function AdjustmentRow({
+  adjustment,
+  canRemove,
+  onRemove,
+  removing,
+}: {
+  adjustment: Adjustment;
+  canRemove: boolean;
+  onRemove: () => void;
+  removing: boolean;
+}) {
+  const isDecrease = adjustment.direction === AdjustmentDirection.DECREASE;
+
+  return (
+    <div className="flex items-start justify-between gap-3 text-xs">
+      <div className="min-w-0">
+        <span className={isDecrease ? 'text-destructive' : ''}>
+          {ADJUSTMENT_DIRECTION_LABELS[adjustment.direction]}
+        </span>
+        <span className="text-muted-foreground"> · {adjustment.reason}</span>
+        {adjustment.approvedByName ? (
+          <span className="text-muted-foreground"> · {adjustment.approvedByName}</span>
         ) : null}
       </div>
+      <div className="flex shrink-0 items-center gap-1">
+        <span className={`tabular-nums ${isDecrease ? 'text-destructive' : ''}`}>
+          {/* The sign came from the API. Rendering `signedAmount` rather than
+              deciding here is what stops a screen disagreeing with a payout. */}
+          {formatMoney(adjustment.signedAmount)}
+        </span>
+        {canRemove && adjustment.isEditable ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            aria-label={`Remove adjustment: ${adjustment.reason}`}
+            onClick={onRemove}
+            disabled={removing}
+          >
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        ) : null}
+        {!adjustment.isEditable ? <Badge variant="outline">Paid</Badge> : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Recording an adjustment. The reason is required by the form because it is
+ * required by the schema and by a CHECK — an unexplained change to somebody's
+ * pay cannot be told apart from a mistake when they query it.
+ */
+function AdjustmentForm({
+  shipmentId,
+  crewMemberId,
+  onDone,
+  onCancel,
+}: {
+  shipmentId: string;
+  crewMemberId: string;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState({
+    direction: String(AdjustmentDirection.INCREASE),
+    amount: '',
+    reason: '',
+  });
+
+  const save = useMutation({
+    mutationFn: () =>
+      addAdjustment({
+        crewMemberId,
+        shipmentId,
+        direction: Number(draft.direction) as AdjustmentDirection,
+        amount: draft.amount,
+        reason: draft.reason,
+      }),
+    onSuccess: () => {
+      toast.success('Adjustment recorded');
+      onDone();
+    },
+    onError: (error) =>
+      toast.error('Could not record that adjustment', {
+        description: error instanceof ApiError ? error.displayMessage : String(error),
+      }),
+  });
+
+  return (
+    <form
+      className="mt-3 space-y-2 border-t pt-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        save.mutate();
+      }}
+    >
+      <div className="grid gap-2 sm:grid-cols-[9rem_1fr]">
+        <div className="space-y-1">
+          <Label htmlFor={`adj-direction-${crewMemberId}`} className="text-xs">
+            Direction
+          </Label>
+          <Select
+            value={draft.direction}
+            onValueChange={(value) => setDraft((current) => ({ ...current, direction: value }))}
+          >
+            <SelectTrigger id={`adj-direction-${crewMemberId}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={String(AdjustmentDirection.INCREASE)}>
+                {ADJUSTMENT_DIRECTION_LABELS[AdjustmentDirection.INCREASE]}
+              </SelectItem>
+              <SelectItem value={String(AdjustmentDirection.DECREASE)}>
+                {ADJUSTMENT_DIRECTION_LABELS[AdjustmentDirection.DECREASE]}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`adj-amount-${crewMemberId}`} className="text-xs">
+            Amount
+          </Label>
+          <Input
+            id={`adj-amount-${crewMemberId}`}
+            placeholder="0.00"
+            inputMode="decimal"
+            required
+            value={draft.amount}
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, amount: event.target.value }))
+            }
+          />
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        <Label htmlFor={`adj-reason-${crewMemberId}`} className="text-xs">
+          Reason
+        </Label>
+        <Input
+          id={`adj-reason-${crewMemberId}`}
+          placeholder="Why this trip's pay is being changed"
+          required
+          value={draft.reason}
+          onChange={(event) => setDraft((current) => ({ ...current, reason: event.target.value }))}
+        />
+      </div>
+
+      <div className="flex gap-2">
+        <Button type="submit" size="sm" disabled={save.isPending}>
+          {save.isPending ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
+          Record adjustment
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function CommissionDetail({ commission }: { commission: Commission }) {
+  const isFormula = commission.appliedMethod === CommissionMethod.FORMULA;
+
+  return (
+    <div className="text-muted-foreground mt-2 space-y-1 text-xs">
+      <p>
+        {COMMISSION_METHOD_LABELS[commission.appliedMethod]}
+        {commission.appliedRuleName ? (
+          <>
+            {' · '}
+            {/* The name frozen at computation, not the rule's name today —
+                a rename must not relabel an old voucher. */}
+            <span title={`Rule ${commission.appliedRuleId ?? ''}`}>
+              {commission.appliedRuleName}
+            </span>
+          </>
+        ) : null}
+      </p>
+      <p className="tabular-nums">
+        {formatMoney(commission.commissionableBase)} base
+        {commission.appliedRate === null ? (
+          <span className="ml-2">
+            — no meaningful rate for this method on this shipment (the amount is authoritative)
+          </span>
+        ) : (
+          <>
+            {' × '}
+            {formatRate(commission.appliedRate)}
+            {isFormula ? ' effective' : ''}
+            {' = '}
+            {formatMoney(commission.amount)}
+          </>
+        )}
+      </p>
+
+      {isFormula && commission.appliedFormulaExpression ? (
+        <div className="bg-muted/50 mt-2 rounded p-2">
+          <code className="block break-all">{commission.appliedFormulaExpression}</code>
+          {commission.appliedFormulaFields ? (
+            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3">
+              {Object.entries(commission.appliedFormulaFields).map(([field, value]) => (
+                <div key={field} className="contents">
+                  <dt className="font-mono">{field}</dt>
+                  <dd className="tabular-nums">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

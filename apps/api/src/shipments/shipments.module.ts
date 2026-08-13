@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { AdjustmentsController } from '../commission/adjustments.controller';
+import { AdjustmentsService } from '../commission/adjustments.service';
 import { CommissionCoverageService } from '../commission/commission-coverage.service';
 import { CommissionController } from '../commission/commission.controller';
 import { CommissionService } from '../commission/commission.service';
@@ -25,6 +27,7 @@ import { ShipmentsService } from './shipments.service';
     ShipmentChargesController,
     CompanyPaidExpensesController,
     CommissionController,
+    AdjustmentsController,
   ],
   providers: [
     ShipmentsService,
@@ -33,7 +36,8 @@ import { ShipmentsService } from './shipments.service';
     GrossProfitService,
     CommissionService,
     CommissionCoverageService,
+    AdjustmentsService,
   ],
-  exports: [CommissionService, CommissionCoverageService],
+  exports: [CommissionService, CommissionCoverageService, AdjustmentsService],
 })
 export class ShipmentsModule {}
