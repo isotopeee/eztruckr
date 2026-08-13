@@ -26,6 +26,8 @@ export async function databaseIsReachable(client: ExtendedPrismaClient): Promise
  */
 const CLEANUP_ORDER = [
   'commission',
+  // Before payout_line and crew_deduction, both of which it references.
+  'crew_deduction_recovery',
   'payout_line',
   'payout_run',
   'additional_charge',

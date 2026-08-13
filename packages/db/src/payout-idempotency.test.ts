@@ -273,3 +273,236 @@ describe.runIf(process.env.SKIP_DB_TESTS !== '1')('payout idempotency survives s
     expect(seen?.payoutLineId).toBe(line.id);
   });
 });
+
+/**
+ * The same guarantee, on the other side of the ledger.
+ *
+ * A commission is indivisible — paid whole or not at all — so one link with a
+ * full unique models it. A deduction is DIVISIBLE: a ₱9,000 damage claim
+ * against someone earning ₱1,800 a fortnight comes back a slice at a time. It
+ * used to be modelled with a single `payoutLineId` plus a `recovered` running
+ * total, which meant the link was repointed on every run (losing all but the
+ * last recovery) and the total could be incremented twice for the same run —
+ * recovering a debt twice and short-changing the crew member.
+ *
+ * `CrewDeductionRecovery` replaces both. These assertions are why it exists.
+ */
+describe.runIf(process.env.SKIP_DB_TESTS !== '1')('crew deduction recovery', () => {
+  /** A debt, a payout run, and a line to recover against. */
+  async function createDebt(suffix: string, amount = '9000.0000') {
+    return withActor({ userId: adminId }, async () => {
+      const deduction = await prisma.crewDeduction.create({
+        data: {
+          id: testId(`ded-${suffix}`),
+          crewMemberId,
+          reason: 'Damaged tyre',
+          amount,
+        },
+      });
+
+      const run = await prisma.payoutRun.create({
+        data: {
+          id: testId(`drun-${suffix}`),
+          runNumber: testId(`DRUN-${suffix}`),
+          status: PayoutRunStatus.DRAFT,
+          periodStart: new Date('2026-02-01T00:00:00Z'),
+          periodEnd: new Date('2026-02-28T00:00:00Z'),
+        },
+      });
+
+      const line = await prisma.payoutLine.create({
+        data: {
+          id: testId(`dline-${suffix}`),
+          payoutRunId: run.id,
+          crewMemberId,
+          grossAmount: '1800.0000',
+          netAmount: '0.0000',
+        },
+      });
+
+      return { deduction, run, line };
+    });
+  }
+
+  async function addLine(suffix: string, runId: string, index: number) {
+    return withActor({ userId: adminId }, async () =>
+      prisma.payoutLine.create({
+        data: {
+          id: testId(`dline-${suffix}-${index}`),
+          payoutRunId: runId,
+          crewMemberId,
+          grossAmount: '1800.0000',
+          netAmount: '0.0000',
+        },
+      }),
+    );
+  }
+
+  it('records one debt recovered in slices across several payout lines', async () => {
+    if (!available) return;
+    const { deduction, run, line } = await createDebt('multi');
+    const second = await addLine('multi', run.id, 2);
+    const third = await addLine('multi', run.id, 3);
+
+    for (const [index, target] of [line, second, third].entries()) {
+      await withActor({ userId: adminId }, async () =>
+        prisma.crewDeductionRecovery.create({
+          data: {
+            id: testId(`rec-multi-${index}`),
+            crewDeductionId: deduction.id,
+            payoutLineId: target.id,
+            amount: '3000.0000',
+          },
+        }),
+      );
+    }
+
+    // The thing the old model could not do: every slice is still there, and
+    // each one still names the line that took it.
+    const recoveries = await prisma.crewDeductionRecovery.findMany({
+      where: { crewDeductionId: deduction.id },
+    });
+
+    expect(recoveries).toHaveLength(3);
+    expect(recoveries.map((row) => row.payoutLineId).sort()).toEqual(
+      [line.id, second.id, third.id].sort(),
+    );
+
+    // And the balance is derived from them rather than cached anywhere.
+    const total = await prisma.crewDeductionRecovery.aggregate({
+      where: { crewDeductionId: deduction.id },
+      _sum: { amount: true },
+    });
+
+    expect(total._sum.amount?.toString()).toBe('9000');
+  });
+
+  it('refuses to recover more than the debt', async () => {
+    if (!available) return;
+    const { deduction, run, line } = await createDebt('over', '1000.0000');
+    const second = await addLine('over', run.id, 2);
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.crewDeductionRecovery.create({
+        data: {
+          id: testId('rec-over-1'),
+          crewDeductionId: deduction.id,
+          payoutLineId: line.id,
+          amount: '800.0000',
+        },
+      }),
+    );
+
+    // 800 + 300 > 1000. Without this the derived balance would go negative and
+    // the crew member would be over-collected.
+    await expect(
+      withActor({ userId: adminId }, async () =>
+        prisma.crewDeductionRecovery.create({
+          data: {
+            id: testId('rec-over-2'),
+            crewDeductionId: deduction.id,
+            payoutLineId: second.id,
+            amount: '300.0000',
+          },
+        }),
+      ),
+    ).rejects.toThrow(/over-recovered/i);
+  });
+
+  it('refuses two slices of the same debt on one payout line', async () => {
+    if (!available) return;
+    const { deduction, line } = await createDebt('dupe');
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.crewDeductionRecovery.create({
+        data: {
+          id: testId('rec-dupe-1'),
+          crewDeductionId: deduction.id,
+          payoutLineId: line.id,
+          amount: '100.0000',
+        },
+      }),
+    );
+
+    await expect(
+      withActor({ userId: adminId }, async () =>
+        prisma.crewDeductionRecovery.create({
+          data: {
+            id: testId('rec-dupe-2'),
+            crewDeductionId: deduction.id,
+            payoutLineId: line.id,
+            amount: '100.0000',
+          },
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('refuses a zero or negative recovery', async () => {
+    if (!available) return;
+    const { deduction, line } = await createDebt('sign');
+
+    await expect(
+      withActor({ userId: adminId }, async () =>
+        prisma.crewDeductionRecovery.create({
+          data: {
+            id: testId('rec-sign'),
+            crewDeductionId: deduction.id,
+            payoutLineId: line.id,
+            amount: '-100.0000',
+          },
+        }),
+      ),
+    ).rejects.toThrow(/amount_positive/i);
+  });
+
+  it('freezes a recovery once its run is paid', async () => {
+    if (!available) return;
+    const { deduction, run, line } = await createDebt('paid');
+
+    const recovery = await withActor({ userId: adminId }, async () =>
+      prisma.crewDeductionRecovery.create({
+        data: {
+          id: testId('rec-paid'),
+          crewDeductionId: deduction.id,
+          payoutLineId: line.id,
+          amount: '3000.0000',
+        },
+      }),
+    );
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.payoutRun.update({
+        where: { id: run.id },
+        data: { status: PayoutRunStatus.PAID, paidAt: new Date(), paidBy: adminId },
+      }),
+    );
+
+    // The amount is money that has left the building.
+    await expect(
+      withActor({ userId: adminId }, async () =>
+        prisma.crewDeductionRecovery.update({
+          where: { id: recovery.id },
+          data: { amount: '1.0000' },
+        }),
+      ),
+    ).rejects.toThrow(/paid payout run and cannot be altered/i);
+
+    // Soft-deleting it would make the debt look outstanding again, so the same
+    // slice could be taken from the crew member a second time.
+    await expect(
+      withActor({ userId: adminId }, async () =>
+        prisma.crewDeductionRecovery.softDelete({ id: recovery.id }),
+      ),
+    ).rejects.toThrow(/has been paid and cannot be deleted/i);
+
+    await expect(
+      withHardDelete(async () =>
+        prisma.crewDeductionRecovery.delete({ where: { id: recovery.id } }),
+      ),
+    ).rejects.toThrow(/paid payout run and cannot be deleted/i);
+
+    const survivor = await prisma.crewDeductionRecovery.findFirst({ where: { id: recovery.id } });
+    expect(survivor?.amount.toString()).toBe('3000');
+  });
+});

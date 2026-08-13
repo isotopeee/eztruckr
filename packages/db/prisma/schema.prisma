@@ -193,6 +193,10 @@ model User {
   crewDeductionsUpdated CrewDeduction[] @relation("CrewDeductionUpdatedBy")
   crewDeductionsDeleted CrewDeduction[] @relation("CrewDeductionDeletedBy")
 
+  crewDeductionRecoveriesCreated CrewDeductionRecovery[] @relation("CrewDeductionRecoveryCreatedBy")
+  crewDeductionRecoveriesUpdated CrewDeductionRecovery[] @relation("CrewDeductionRecoveryUpdatedBy")
+  crewDeductionRecoveriesDeleted CrewDeductionRecovery[] @relation("CrewDeductionRecoveryDeletedBy")
+
   adjustmentsCreated Adjustment[] @relation("AdjustmentCreatedBy")
   adjustmentsUpdated Adjustment[] @relation("AdjustmentUpdatedBy")
   adjustmentsDeleted Adjustment[] @relation("AdjustmentDeletedBy")
@@ -1008,6 +1012,20 @@ model AdditionalCharge {
 
 /// A charge against a crew member (cash shortage, damage, violation).
 /// Recovered at payout. Never a client charge.
+///
+/// A DEDUCTION IS DIVISIBLE, WHICH IS WHY IT LOOKS DIFFERENT FROM A COMMISSION.
+/// A commission is paid whole or not at all, so `Commission.payoutLineId` is a
+/// single link. A ₱9,000 damage claim against a crew member earning ₱1,800 a
+/// fortnight cannot be taken in one go — it comes back a slice at a time, over
+/// several runs. This model therefore has no payout link of its own: the
+/// recoveries are rows in `CrewDeductionRecovery`, one per run that took a
+/// slice.
+///
+/// It previously carried a single `payoutLineId` plus a `recovered` running
+/// total, which was two incompatible designs at once. The link was repointed
+/// on every run, so all but the last recovery vanished and an earlier payout
+/// voucher could no longer be itemised; and the running total was a mutable
+/// number with no record of what made it up.
 model CrewDeduction {
   id           String     @id @default(cuid())
   crewMemberId String
@@ -1019,14 +1037,17 @@ model CrewDeduction {
 
   reason     String
   amount     Decimal  @db.Decimal(15, 4)
-  /// Clawed back so far across payout runs.
-  recovered  Decimal  @default(0) @db.Decimal(15, 4)
-  isSettled  Boolean  @default(false)
   incurredAt DateTime @default(now()) @db.Timestamptz(6)
 
-  /// The payout line that recovered it, once settled.
-  payoutLineId String?
-  payoutLine   PayoutLine? @relation(fields: [payoutLineId], references: [id], onDelete: SetNull)
+  /// Every slice clawed back, one row per payout line that took one.
+  ///
+  /// HOW MUCH IS OUTSTANDING IS DERIVED FROM THESE, never stored. A cached
+  /// `recovered` column lived here and was dropped: it is the same mistake as
+  /// the commission-rate fallback, two places holding one number where the
+  /// weaker one wins silently when they disagree. The sum of live recoveries
+  /// is the only answer, and `crew_deduction_recovery_not_over_recovered`
+  /// stops it exceeding the debt.
+  recoveries CrewDeductionRecovery[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -1038,10 +1059,53 @@ model CrewDeduction {
   deletedBy     String?
   deletedByUser User?     @relation("CrewDeductionDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
-  @@index([crewMemberId, isSettled])
-  @@index([payoutLineId])
+  @@index([crewMemberId])
   @@index([deletedAt])
   @@map("crew_deduction")
+}
+
+/// One slice of a crew deduction, recovered by one payout line.
+///
+/// This is the money movement itself, so it is a record rather than a pointer:
+/// it says which debt, which run, and how much — which is exactly what an
+/// itemised voucher needs, and exactly what a repointed foreign key destroyed.
+///
+/// IDEMPOTENCY, mirroring the commission guarantees. Once the run is PAID the
+/// row is frozen: triggers refuse to change its amount or its links, to delete
+/// it, and to soft-delete it. Without that, re-running recovery would take the
+/// same slice twice and short-change the crew member — the mirror image of the
+/// double-payment the commission triggers exist to prevent, and previously
+/// unguarded on this side of the ledger entirely.
+///
+/// Partial-unique on (crewDeductionId, payoutLineId) WHERE "deletedAt" IS NULL,
+/// so one line cannot take two slices of one debt.
+model CrewDeductionRecovery {
+  id String @id @default(cuid())
+
+  crewDeductionId String
+  crewDeduction   CrewDeduction @relation(fields: [crewDeductionId], references: [id], onDelete: Restrict)
+
+  payoutLineId String
+  payoutLine   PayoutLine @relation(fields: [payoutLineId], references: [id], onDelete: Restrict)
+
+  /// Money. Must be positive: a negative recovery would be a repayment TO the
+  /// crew member, which is an adjustment, not a recovery.
+  amount Decimal @db.Decimal(15, 4)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("CrewDeductionRecoveryCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("CrewDeductionRecoveryUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("CrewDeductionRecoveryDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([crewDeductionId])
+  @@index([payoutLineId])
+  @@index([deletedAt])
+  @@map("crew_deduction_recovery")
 }
 
 /// Manual increase or decrease applied to a crew member at payout. Reason and
@@ -1233,8 +1297,10 @@ model PayoutLine {
   adjustmentAmount Decimal @default(0) @db.Decimal(15, 4)
   netAmount        Decimal @db.Decimal(15, 4)
 
-  deductions  CrewDeduction[]
-  adjustments Adjustment[]
+  /// The slices of crew debt this line recovered, itemised. A line may touch
+  /// several debts, and a debt may be touched by several lines.
+  deductionRecoveries CrewDeductionRecovery[]
+  adjustments         Adjustment[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)

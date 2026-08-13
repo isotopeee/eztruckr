@@ -24,7 +24,7 @@ eztruckr/
 │  ├─ web/          # Next.js 15 App Router, Tailwind v4, shadcn/ui, TanStack Query
 │  └─ api/          # NestJS 11, health check, Zod validation pipe
 ├─ packages/
-│  ├─ db/           # Prisma schema (26 tables), migrations, audit + soft-delete extensions
+│  ├─ db/           # Prisma schema (27 tables), migrations, audit + soft-delete extensions
 │  ├─ types/        # Money helper, Zod schemas, code sets (const-object enums)
 │  └─ config/       # Shared tsconfig/eslint/prettier, imported via workspace protocol
 ├─ docker-compose.yml   # postgres (5433), minio (9010/9011), api (4000), web (3000)
@@ -274,6 +274,17 @@ Phase 3 decision. Verified live.
 The date tested is `dispatchedAt` (falling back to `createdAt`): the rate in force when
 the crew set off, not when the paperwork caught up.
 
+### Later schema work in the same phase
+
+Two follow-ups, each on an explicit decision rather than as part of the original build.
+Both are described under the resolved open questions below:
+
+- `20260812181020_split_gas_rate_override_from_applied` — the gas rate becomes an input
+  column and an output column, so override-ness is structural.
+- `20260812192500_crew_deduction_recovery_join_table` — deduction recovery becomes
+  divisible across payout runs. **This is the 24th business table**, so the counts in the
+  Phase 2 section above (23 business, 26 total) are the Phase 2 figures; it is now 24 and 27.
+
 ### Schema changes (migration `20260812170815_phase4_formula_and_status_codes`)
 
 - `CommissionRule.params` JSON, with a CHECK: FORMULA needs a non-empty
@@ -376,13 +387,13 @@ visible, own detail 200, colleague's commissions 403, all writes 403.
 ## Current verified state (end of Phase 4)
 
 - **`pnpm run check`**: 14/14 tasks passing, uncached.
-- **190 tests**, all passing (was 82):
+- **195 tests**, all passing (was 82):
 
-  | Workspace        | Count | Added in Phase 4                                                                   |
-  | ---------------- | ----- | ---------------------------------------------------------------------------------- |
-  | `packages/types` | 67    | `formula-syntax` [47] — mostly what the parser REFUSES                             |
-  | `packages/db`    | 44    | drift guard now confirms status codes 1–7; 3 assert the gas-override pairing CHECK |
-  | `apps/api`       | 79    | `commission-engine` [38], `formula-evaluator` [19]                                 |
+  | Workspace        | Count | Added in Phase 4                                                                                              |
+  | ---------------- | ----- | ------------------------------------------------------------------------------------------------------------- |
+  | `packages/types` | 67    | `formula-syntax` [47] — mostly what the parser REFUSES                                                        |
+  | `packages/db`    | 49    | drift guard confirms status codes 1–7; 3 assert the gas-override pairing; 5 the deduction-recovery join table |
+  | `apps/api`       | 79    | `commission-engine` [38], `formula-evaluator` [19]                                                            |
 
 - **The brief's required assertions pass, in unit tests and again live:**
   - `netRate 16200`, no commissionable charges, gas 25% → gasDeduction **4050.00**, base
@@ -410,12 +421,12 @@ visible, own detail 200, colleague's commissions 403, all writes 403.
   worksheet, the FORMULA commission showing its frozen expression and resolved field
   values, the gas override showing 30% against the 25% system default with its reason,
   and both charge lists.
-- `prisma migrate status`: 7 migrations applied, no drift. Seed still idempotent.
+- `prisma migrate status`: 8 migrations applied, no drift. Seed still idempotent.
 - **The migration chain was replayed from scratch** into a throwaway database
   (`eztruckr_migrationtest`, since dropped) — worth doing because Phase 4's migrations are
-  largely hand-written SQL. All seven applied cleanly and the invariants held on a virgin
-  schema: 0 enum types, 0 float columns, 0 naive timestamps, 26 tables, 5 payout
-  triggers, 16 partial unique indexes, 21 `_created_by_required` CHECKs,
+  largely hand-written SQL. All eight applied cleanly and the invariants held on a virgin
+  schema: 0 enum types, 0 float columns, 0 naive timestamps, 27 tables, 9 payout
+  triggers, 17 partial unique indexes, 22 `_created_by_required` CHECKs,
   `shipment_status_code_valid` accepting 1–7, and `commission.appliedRate` as
   `numeric(9,4)`.
 
@@ -511,10 +522,33 @@ Phase 5 is allowance, liquidation and receipts. Everything it depends on exists.
 3. ~~**`CommissionRule` vs `SystemSetting` fallback overlap**~~ — **RESOLVED (Phase 3).**
    `CommissionRule` is the only source of truth for crew pay. Phase 4 honoured it: a
    shipment matching no rule raises, and the two gaps this opened are now closed.
-4. **`CrewDeduction` partial recovery across multiple payout runs** — one nullable
-   `payoutLineId` plus a `recovered` running total cannot fully represent a debt clawed
-   back across more than one run. Would need a join table. Untouched by Phase 4; becomes
-   real in Phase 6.
+4. ~~**`CrewDeduction` partial recovery across multiple payout runs**~~ — **RESOLVED
+   (user decision): added the join table.** Migration
+   `20260812192500_crew_deduction_recovery_join_table`.
+
+   A commission is indivisible, so one link with a full unique models it. A deduction is
+   **divisible** — a ₱9,000 damage claim against someone earning ₱1,800 a fortnight comes
+   back a slice at a time — and it was being modelled with a single `payoutLineId` PLUS a
+   `recovered` running total, which is two incompatible designs at once. The link was
+   repointed every run, so all but the last recovery vanished and an earlier voucher
+   could no longer be itemised; the running total had no record of what made it up; and
+   nothing stopped it being incremented twice, recovering a debt twice and
+   short-changing the crew member.
+
+   Now `crew_deduction_recovery` holds one row per slice (which debt, which line, how
+   much). `payoutLineId`, `recovered` and `isSettled` are **dropped** rather than kept as
+   a cache — same reasoning as the SystemSetting rate fallback, two places holding one
+   number where the weaker wins silently. The outstanding balance is the debt less the
+   sum of live recoveries.
+
+   Guarantees, all asserted: a partial-unique on (deduction, line) so one line cannot
+   take two slices of one debt; `amount > 0`; a constraint trigger refusing
+   over-recovery (a CHECK cannot span rows); and the **same idempotency family as
+   commissions** — once the run is PAID the recovery cannot be altered, soft-deleted or
+   hard-deleted. That last one was previously absent on this side of the ledger
+   entirely. `eztruckr_commission_is_paid` is reused rather than duplicated, so PAID has
+   one definition in SQL.
+
 5. ~~**1:1 relations modeled as 1:many**~~ — **RESOLVED (Phase 3).** `liveOne()` /
    `liveOneOrThrow()` unwrap the single live row.
 6. ~~**`user.email` only partially unique**~~ — **RESOLVED (Phase 3).**
@@ -550,6 +584,11 @@ Phase 5 is allowance, liquidation and receipts. Everything it depends on exists.
    and formula methods.** See the schema section above. The alternative was refusing to
    record a legitimate flat fee on a zero-rated backhaul because the _reporting_ rate is
    undefined, which seemed worse.
-9. **Charges stay editable after commissions are computed, until something is paid.**
-   The shipment then reports `commissionsStale` and the UI prompts a recompute. The
-   stricter reading — lock at computation — was tried first and is a dead end.
+9. **Dropping `isSettled` means a write-off has nowhere to live.** Settlement is now
+   derived (recovered = amount), so "we forgave the rest of the tyre debt" cannot be
+   expressed. That is a different concept from a recovery and wants its own
+   representation — a write-off amount or a status — rather than a boolean that can
+   disagree with the arithmetic. Flagging it for Phase 6 rather than guessing now.
+10. **Charges stay editable after commissions are computed, until something is paid.**
+    The shipment then reports `commissionsStale` and the UI prompts a recompute. The
+    stricter reading — lock at computation — was tried first and is a dead end.

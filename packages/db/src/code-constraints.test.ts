@@ -148,8 +148,10 @@ describe('createdBy stays mandatory in the database', () => {
          AND conname LIKE '%_created_by_required'
     `;
 
-    // 23 business tables, minus user and user_profile.
-    expect(rows).toHaveLength(21);
+    // 24 business tables, minus user and user_profile. The 24th is
+    // crew_deduction_recovery, added when deduction recovery became divisible
+    // across payout runs.
+    expect(rows).toHaveLength(22);
     expect(rows.some((row) => row.conname.startsWith('user_'))).toBe(false);
   });
 });
