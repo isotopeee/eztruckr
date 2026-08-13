@@ -4,20 +4,24 @@ import { LiquidationStatus } from '@eztruckr/types';
 /**
  * The bit of the liquidation lifecycle that the SHIPMENT owns.
  *
- * A liquidation comes into existence when a trip is marked delivered, not when
- * somebody first opens a form. Before this existed, "the crew still owe us
- * paperwork" was the absence of a row — which no query can filter on, no
- * dashboard can count, and no crew portal can show.
+ * A liquidation comes into existence when the trip is BOOKED, not when somebody
+ * first opens a form. It began as "when the trip is marked delivered", which
+ * was already an improvement on the absence of a row — no query can filter on
+ * a missing row, no dashboard can count it, no crew portal can show it — but
+ * delivery is the end of the trip, not the start of the paperwork. A crew
+ * spending money on the road on day one had nowhere to record it until the
+ * office got round to closing the trip out.
  *
  * WHY A FUNCTION AND NOT A SERVICE METHOD. `ShipmentsService` needs to do this
- * inside the same statement that records delivery, and `LiquidationService`
+ * inside the same statement that creates the shipment, and `LiquidationService`
  * needs `ShipmentsService` for everything it does. Injecting both ways is a
  * dependency cycle for the sake of one create; a plain function over the
  * transaction client is the same code with none of the ceremony.
  *
- * Takes the transaction client so the liquidation and the status change land
- * together. A delivered shipment with no liquidation row is precisely the state
- * this exists to make impossible.
+ * Takes the transaction client so the liquidation and the shipment land
+ * together. A shipment with no liquidation row is precisely the state this
+ * exists to make impossible — and it is still called on delivery, as a backstop
+ * for every trip booked before creation started doing it.
  */
 export type PendingLiquidationClient = Pick<ExtendedPrismaClient, 'liquidation'>;
 

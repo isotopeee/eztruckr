@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@eztruckr/db';
+import { Prisma, withDeleted } from '@eztruckr/db';
 import {
   allowedManualTransitions,
   areChargesEditable,
@@ -15,9 +15,11 @@ import {
   isRateChainEditable,
   isShipmentStatus,
   LiquidationStatus,
+  nextShipmentNumber,
   SAME_PERSON_BOTH_SLOTS_MESSAGE,
   SHIPMENT_STATUS_LABELS,
   ShipmentStatus,
+  shipmentNumberDatePart,
   shipmentStatusAtLeast,
   statusAfterManualTransition,
   sum,
@@ -59,6 +61,38 @@ const SHIPMENT_INCLUDE = {
 } satisfies Prisma.ShipmentInclude;
 
 type ShipmentRow = Prisma.ShipmentGetPayload<{ include: typeof SHIPMENT_INCLUDE }>;
+
+/**
+ * How many times a booking will recompute its number before giving up.
+ *
+ * Each retry costs one round trip and only happens when two bookings land in
+ * the same instant, so the ceiling is about bounding a pathological loop rather
+ * than about contention: reaching it would mean five consecutive collisions,
+ * which is a signal worth surfacing rather than retrying through.
+ */
+const SHIPMENT_NUMBER_ATTEMPTS = 5;
+
+/**
+ * A racing booking took the number this one had computed.
+ *
+ * Narrowed to the shipment-number index specifically. A blanket "was it P2002"
+ * would also swallow a genuine duplicate somewhere else in the same statement
+ * and retry it forever with the same outcome.
+ */
+function isShipmentNumberCollision(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+    return false;
+  }
+
+  // BOTH SPELLINGS, because which one arrives is not ours to decide. The
+  // constraint is a raw partial index named `shipment_number_live_key`, but
+  // Prisma resolves it back to the model field and reports `shipmentNumber` —
+  // and it is the client's business, not this code's, if that ever changes.
+  // Matching only the index name silently turned every retry into a 500.
+  const detail = `${JSON.stringify(error.meta?.target ?? '')} ${error.message}`;
+
+  return detail.includes('shipmentNumber') || detail.includes('shipment_number');
+}
 
 @Injectable()
 export class ShipmentsService {
@@ -121,6 +155,25 @@ export class ShipmentsService {
     };
   }
 
+  /**
+   * Books a trip: a generated number, and the liquidation it will need.
+   *
+   * BOTH LAND IN ONE TRANSACTION, for different reasons that happen to want
+   * the same thing.
+   *
+   * The NUMBER is generated rather than typed — see `shipment-number.ts` for
+   * the format and why the date is Manila's. Two people booking at the same
+   * moment can compute the same next number, so the partial unique index is
+   * the arbiter and a collision is retried rather than reported: the second
+   * booker did nothing wrong and should not be shown a constraint name. The
+   * retry is OUTSIDE the transaction on purpose, because a caught constraint
+   * violation has already poisoned the one it happened in.
+   *
+   * The LIQUIDATION exists from this moment rather than from delivery. A trip
+   * starts spending as soon as it has cash against it, and the crew had
+   * nowhere to record that until the office marked it delivered — which is the
+   * end of the trip, not the start of the paperwork.
+   */
   async create(input: CreateShipmentInput): Promise<Shipment> {
     await this.assertReferencesExist(input);
 
@@ -132,26 +185,67 @@ export class ShipmentsService {
 
     this.assertNetRateIsSane(rates.netRate, rates.grossRate);
 
-    const row = await this.shipments.create({
-      data: {
-        shipmentNumber: input.shipmentNumber,
-        status: ShipmentStatus.DRAFT,
-        clientId: input.clientId,
-        thirdPartyId: input.thirdPartyId,
-        routeId: input.routeId,
-        truckId: input.truckId,
-        origin: input.origin,
-        destination: input.destination,
-        cargoDescription: input.cargoDescription,
-        grossRate: rates.grossRate,
-        tpcAmount: rates.tpcAmount,
-        netRate: rates.netRate,
-        appliedTpcRate: rates.appliedTpcRate,
-      },
-      include: SHIPMENT_INCLUDE,
-    });
+    const data = {
+      status: ShipmentStatus.DRAFT,
+      clientId: input.clientId,
+      thirdPartyId: input.thirdPartyId,
+      routeId: input.routeId,
+      truckId: input.truckId,
+      origin: input.origin,
+      destination: input.destination,
+      cargoDescription: input.cargoDescription,
+      grossRate: rates.grossRate,
+      tpcAmount: rates.tpcAmount,
+      netRate: rates.netRate,
+      appliedTpcRate: rates.appliedTpcRate,
+    };
 
-    return toShipment(row);
+    for (let attempt = 1; ; attempt += 1) {
+      const shipmentNumber = await this.generateShipmentNumber();
+
+      try {
+        const row = await this.prisma.client.$transaction(async (tx) => {
+          const created = await tx.shipment.create({
+            data: { ...data, shipmentNumber },
+            include: SHIPMENT_INCLUDE,
+          });
+
+          await ensurePendingLiquidation(tx, created.id);
+
+          return created;
+        });
+
+        return toShipment(row);
+      } catch (error) {
+        if (attempt >= SHIPMENT_NUMBER_ATTEMPTS || !isShipmentNumberCollision(error)) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  /**
+   * The next number for today, in the company's own timezone.
+   *
+   * Scans SOFT-DELETED rows too. A number that has been issued is spent: the
+   * trip it belonged to may have been removed here, but not from whatever
+   * paperwork left the building first, and two trips behind one label is worse
+   * than a gap in the sequence.
+   */
+  private async generateShipmentNumber(): Promise<string> {
+    const datePart = shipmentNumberDatePart(new Date());
+
+    const issued = await withDeleted(async () =>
+      this.shipments.findMany({
+        where: { shipmentNumber: { startsWith: datePart } },
+        select: { shipmentNumber: true },
+      }),
+    );
+
+    return nextShipmentNumber(
+      datePart,
+      issued.map((row) => row.shipmentNumber),
+    );
   }
 
   /**
@@ -190,7 +284,9 @@ export class ShipmentsService {
 
     const data: Prisma.ShipmentUncheckedUpdateInput = {};
 
-    if (input.shipmentNumber !== undefined) data.shipmentNumber = input.shipmentNumber;
+    // No `shipmentNumber` here, and none in the schema either: it is generated
+    // at creation, and a generated identifier anybody can overwrite carries
+    // none of the guarantees that made generating it worthwhile.
     if (input.clientId !== undefined) data.clientId = input.clientId;
     if (input.thirdPartyId !== undefined) data.thirdPartyId = input.thirdPartyId;
     if (input.routeId !== undefined) data.routeId = input.routeId;
@@ -353,11 +449,12 @@ export class ShipmentsService {
     const row = await this.prisma.client.$transaction(async (tx) => {
       const updated = await tx.shipment.update({ where: { id }, data, include: SHIPMENT_INCLUDE });
 
-      // Delivery brings the liquidation into existence, in the same statement.
-      // Before this, "the crew still owe us paperwork" was the ABSENCE of a
-      // row, which no query can filter on and no crew portal can show. The
-      // shipment lands in PENDING_LIQUIDATION here; its liquidation lands in
-      // PENDING, and the two mean the same thing on purpose.
+      // A BACKSTOP, no longer the creation point. Booking a trip now creates
+      // its liquidation, so this call finds one and returns. It stays because
+      // every shipment booked before that change has none, and delivery is
+      // exactly the moment their absence starts to matter — `ensurePending`
+      // is idempotent by lookup, so the cost is one query on a path that is
+      // already writing.
       if (input.to === ShipmentStatus.DELIVERED) {
         await ensurePendingLiquidation(tx, id);
       }

@@ -3,12 +3,14 @@ import {
   assignTruckSchema,
   createAdditionalChargeSchema,
   createBillableExpenseSchema,
+  createCompanyPaidExpenseSchema,
   createShipmentSchema,
   setGasRateOverrideSchema,
   shipmentListQuerySchema,
   transitionShipmentSchema,
   updateAdditionalChargeSchema,
   updateBillableExpenseSchema,
+  updateCompanyPaidExpenseSchema,
   updateShipmentSchema,
 } from '@eztruckr/types';
 import { z } from 'zod';
@@ -34,6 +36,9 @@ export class CreateBillableExpenseDto extends createZodDto(createBillableExpense
 export class UpdateBillableExpenseDto extends createZodDto(updateBillableExpenseSchema) {}
 export class CreateAdditionalChargeDto extends createZodDto(createAdditionalChargeSchema) {}
 export class UpdateAdditionalChargeDto extends createZodDto(updateAdditionalChargeSchema) {}
+
+export class CreateCompanyPaidExpenseDto extends createZodDto(createCompanyPaidExpenseSchema) {}
+export class UpdateCompanyPaidExpenseDto extends createZodDto(updateCompanyPaidExpenseSchema) {}
 
 /** Horizon for the proactive rule-coverage check, in days. */
 export const ruleCoverageQuerySchema = z.object({

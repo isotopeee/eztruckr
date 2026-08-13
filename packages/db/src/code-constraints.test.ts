@@ -168,9 +168,9 @@ describe('createdBy stays mandatory in the database', () => {
          AND conname LIKE '%_created_by_required'
     `;
 
-    // 26 business tables, minus user and user_profile. The last two are
-    // liquidation_history and settlement, added in Phase 5.
-    expect(rows).toHaveLength(24);
+    // 27 business tables, minus user and user_profile. The most recent is
+    // company_paid_expense; before it, liquidation_history and settlement.
+    expect(rows).toHaveLength(25);
     expect(rows.some((row) => row.conname.startsWith('user_'))).toBe(false);
   });
 });

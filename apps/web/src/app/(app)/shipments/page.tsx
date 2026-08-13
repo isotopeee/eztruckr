@@ -197,7 +197,6 @@ function CreateShipmentDialog() {
   const [open, setOpen] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [form, setForm] = useState({
-    shipmentNumber: '',
     clientId: '',
     thirdPartyId: NONE,
     routeId: NONE,
@@ -264,7 +263,6 @@ function CreateShipmentDialog() {
   const create = useMutation({
     mutationFn: () =>
       createShipment({
-        shipmentNumber: form.shipmentNumber,
         clientId: form.clientId,
         thirdPartyId: hasBroker ? form.thirdPartyId : null,
         routeId: form.routeId === NONE ? null : form.routeId,
@@ -304,7 +302,8 @@ function CreateShipmentDialog() {
         <DialogHeader>
           <DialogTitle>New shipment</DialogTitle>
           <DialogDescription>
-            Starts as a draft. The rate chain can only be edited while it is one.
+            Starts as a draft, numbered automatically — today&apos;s date and the trip&apos;s
+            position in it, like 20260813001. The rate chain can only be edited while it is a draft.
           </DialogDescription>
         </DialogHeader>
 
@@ -315,15 +314,6 @@ function CreateShipmentDialog() {
             create.mutate();
           }}
         >
-          <Field id="shipmentNumber" label="Shipment number" error={errors.shipmentNumber}>
-            <Input
-              id="shipmentNumber"
-              required
-              value={form.shipmentNumber}
-              onChange={(event) => set('shipmentNumber')(event.target.value)}
-            />
-          </Field>
-
           <Field id="clientId" label="Client" error={errors.clientId}>
             <Select value={form.clientId} onValueChange={set('clientId')}>
               <SelectTrigger id="clientId">

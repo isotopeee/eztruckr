@@ -3,10 +3,13 @@ import type {
   BillableExpense,
   Commission,
   CommissionComputation,
+  CompanyPaidExpense,
   CreateAdditionalChargeInput,
   CreateBillableExpenseInput,
+  CreateCompanyPaidExpenseInput,
   CreateShipmentInput,
   GasRateContext,
+  GrossProfit,
   Page,
   RuleCoverageReport,
   Shipment,
@@ -30,6 +33,8 @@ export const shipmentKeys = {
   detail: (id: string) => ['shipments', id] as const,
   billableExpenses: (id: string) => ['shipments', id, 'billable-expenses'] as const,
   additionalCharges: (id: string) => ['shipments', id, 'additional-charges'] as const,
+  companyExpenses: (id: string) => ['shipments', id, 'company-expenses'] as const,
+  grossProfit: (id: string) => ['shipments', id, 'gross-profit'] as const,
   commissions: (id: string) => ['shipments', id, 'commissions'] as const,
   gasRate: (id: string) => ['shipments', id, 'gas-rate'] as const,
   ruleCoverage: ['commissions', 'rule-coverage'] as const,
@@ -135,6 +140,33 @@ export function addAdditionalCharge(
 
 export function removeAdditionalCharge(id: string, lineId: string): Promise<void> {
   return apiFetch<void>(`/shipments/${id}/additional-charges/${lineId}`, { method: 'DELETE' });
+}
+
+/**
+ * Costs the company settled itself. Separate endpoints from the charges above,
+ * because they are the other side of the P&L and stay editable later — see
+ * `CompanyPaidExpensesService`.
+ */
+export function listCompanyPaidExpenses(id: string): Promise<CompanyPaidExpense[]> {
+  return apiFetch<CompanyPaidExpense[]>(`/shipments/${id}/company-expenses`);
+}
+
+export function addCompanyPaidExpense(
+  id: string,
+  input: CreateCompanyPaidExpenseInput,
+): Promise<CompanyPaidExpense> {
+  return apiFetch<CompanyPaidExpense>(`/shipments/${id}/company-expenses`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function removeCompanyPaidExpense(id: string, expenseId: string): Promise<void> {
+  return apiFetch<void>(`/shipments/${id}/company-expenses/${expenseId}`, { method: 'DELETE' });
+}
+
+export function getGrossProfit(id: string): Promise<GrossProfit> {
+  return apiFetch<GrossProfit>(`/shipments/${id}/gross-profit`);
 }
 
 export function listCommissions(id: string): Promise<Commission[]> {

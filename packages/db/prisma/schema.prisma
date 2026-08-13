@@ -193,6 +193,10 @@ model User {
   billableExpensesUpdated BillableExpense[] @relation("BillableExpenseUpdatedBy")
   billableExpensesDeleted BillableExpense[] @relation("BillableExpenseDeletedBy")
 
+  companyPaidExpensesCreated CompanyPaidExpense[] @relation("CompanyPaidExpenseCreatedBy")
+  companyPaidExpensesUpdated CompanyPaidExpense[] @relation("CompanyPaidExpenseUpdatedBy")
+  companyPaidExpensesDeleted CompanyPaidExpense[] @relation("CompanyPaidExpenseDeletedBy")
+
   additionalChargesCreated AdditionalCharge[] @relation("AdditionalChargeCreatedBy")
   additionalChargesUpdated AdditionalCharge[] @relation("AdditionalChargeUpdatedBy")
   additionalChargesDeleted AdditionalCharge[] @relation("AdditionalChargeDeletedBy")
@@ -547,11 +551,15 @@ model ExpenseCategory {
   /// Default for the commissionable flag when this category is used as a
   /// billable expense. The per-row flag still wins.
   defaultCommissionable Boolean @default(false)
-  sortOrder             Int     @default(0)
+  /// 10, not 0: the seeded categories are spaced 10 apart, so a category added
+  /// without a stated order lands beside the first rather than ahead of
+  /// everything — and 0 made "unspecified" indistinguishable from "first".
+  sortOrder             Int     @default(10)
   isActive              Boolean @default(true)
 
-  liquidationLines LiquidationLine[]
-  billableExpenses BillableExpense[]
+  liquidationLines    LiquidationLine[]
+  billableExpenses    BillableExpense[]
+  companyPaidExpenses CompanyPaidExpense[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -795,13 +803,14 @@ model Shipment {
   commissionableBase    Decimal?  @db.Decimal(15, 4)
   commissionsComputedAt DateTime? @db.Timestamptz(6)
 
-  allowances        Allowance[]
-  liquidations      Liquidation[]
-  settlements       Settlement[]
-  billableExpenses  BillableExpense[]
-  additionalCharges AdditionalCharge[]
-  commissions       Commission[]
-  crewDeductions    CrewDeduction[]
+  allowances          Allowance[]
+  liquidations        Liquidation[]
+  settlements         Settlement[]
+  billableExpenses    BillableExpense[]
+  companyPaidExpenses CompanyPaidExpense[]
+  additionalCharges   AdditionalCharge[]
+  commissions         Commission[]
+  crewDeductions      CrewDeduction[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -1057,10 +1066,11 @@ model Receipt {
 
   uploadedAt DateTime @default(now()) @db.Timestamptz(6)
 
-  liquidationLines LiquidationLine[]
-  billableExpenses BillableExpense[]
-  allowances       Allowance[]
-  settlements      Settlement[]
+  liquidationLines    LiquidationLine[]
+  billableExpenses    BillableExpense[]
+  companyPaidExpenses CompanyPaidExpense[]
+  allowances          Allowance[]
+  settlements         Settlement[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -1191,6 +1201,62 @@ model BillableExpense {
   @@index([shipmentId])
   @@index([deletedAt])
   @@map("billable_expense")
+}
+
+/// A trip cost the COMPANY paid directly, so it never passed through the crew's
+/// cash and is never liquidated.
+///
+/// The gap this fills: a fleet-card fuel purchase, an office-paid toll account,
+/// a repair invoiced to the company. Real costs of the trip that no crew member
+/// can account for, because no crew member ever held the money. Before this
+/// table they had two possible homes and both lied — a LiquidationLine would
+/// put a variance on a crew who were never advanced it, and a BillableExpense
+/// would invent revenue from a client who is not being charged.
+///
+/// RECOGNISED WHEN RECORDED. There is no status column, because there is no
+/// lifecycle to wait for: the money left the company before anybody typed the
+/// row. Contrast LiquidationLine, whose cost is recognised only on approval
+/// because until then it is the crew's claim about cash they were given.
+///
+/// Editable until the trip is CLOSED — deliberately NOT locked on `paid`, the
+/// way charges are. A charge feeds the commission base and a paid commission
+/// names a figure it must keep reconciling; this feeds no commission at all, so
+/// the only thing that should stop the record being corrected is the trip being
+/// closed for good.
+model CompanyPaidExpense {
+  id         String   @id @default(cuid())
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  /// Required, unlike a billable expense's: this row exists to be a cost in the
+  /// P&L, and an uncategorised cost is one nobody can report on.
+  expenseCategoryId String
+  expenseCategory   ExpenseCategory @relation(fields: [expenseCategoryId], references: [id], onDelete: Restrict)
+
+  description String?
+  amount      Decimal  @db.Decimal(15, 4)
+  /// When the money left, which is not when the row was typed.
+  spentAt     DateTime @db.Timestamptz(6)
+
+  /// Partial-unique WHERE "deletedAt" IS NULL — a receipt backs at most one
+  /// live row, the same rule as every other attachment in the system.
+  receiptId String?
+  receipt   Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?
+  createdByUser User?     @relation("CompanyPaidExpenseCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?
+  updatedByUser User?     @relation("CompanyPaidExpenseUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?
+  deletedByUser User?     @relation("CompanyPaidExpenseDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([shipmentId])
+  @@index([expenseCategoryId])
+  @@index([deletedAt])
+  @@map("company_paid_expense")
 }
 
 /// A fee or surcharge with no underlying cost (extra drop, detention, fuel

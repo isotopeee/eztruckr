@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { auditFieldsSchema, naturalCodeSchema, requiredText } from './common';
 
+/**
+ * Where an unordered category lands. Matches the column default in Postgres,
+ * so the API and a direct insert agree.
+ */
+export const DEFAULT_EXPENSE_CATEGORY_SORT_ORDER = 10;
+
 export const expenseCategorySchema = auditFieldsSchema.extend({
   id: z.string(),
   code: z.string(),
@@ -22,7 +28,28 @@ export const createExpenseCategorySchema = z.object({
    * billable expense. The per-row flag on the expense still wins.
    */
   defaultCommissionable: z.boolean().default(false),
-  sortOrder: z.number().int().min(0).max(9999).default(0),
+  /**
+   * Optional, and 10 rather than 0 when it is left out.
+   *
+   * The seeded categories are spaced 10 apart, so a category added without
+   * thinking about order lands beside the first one instead of jumping ahead
+   * of everything — and a 0 default made "I didn't say" indistinguishable from
+   * "put this first". A gap of 10 also leaves room to slot something between
+   * two existing categories without renumbering the rest.
+   *
+   * `nullish().transform()` rather than `default()`, because those two are not
+   * the same thing here. A cleared number input reaches the API as an explicit
+   * NULL, not as an absent field, and `.default()` only fires on `undefined` —
+   * so a plain default would have rejected the very case this is meant to
+   * serve, with a type error about null at that.
+   */
+  sortOrder: z
+    .number()
+    .int()
+    .min(0)
+    .max(9999)
+    .nullish()
+    .transform((value) => value ?? DEFAULT_EXPENSE_CATEGORY_SORT_ORDER),
   isActive: z.boolean().default(true),
 });
 

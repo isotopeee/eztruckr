@@ -13,6 +13,7 @@ import {
   UserRole,
   type CommissionComputation,
   type Commission,
+  type GrossProfit,
   type Page,
   type Shipment,
 } from '@eztruckr/types';
@@ -26,6 +27,7 @@ import {
   ROLES_BY_TRANSITION,
 } from '../auth/role-policy';
 import { CommissionService } from '../commission/commission.service';
+import { GrossProfitService } from './gross-profit.service';
 import {
   AssignCrewDto,
   AssignTruckDto,
@@ -42,6 +44,7 @@ export class ShipmentsController {
   constructor(
     private readonly shipments: ShipmentsService,
     private readonly commissions: CommissionService,
+    private readonly grossProfits: GrossProfitService,
   ) {}
 
   /**
@@ -122,6 +125,21 @@ export class ShipmentsController {
     }
 
     return this.shipments.transition(id, dto);
+  }
+
+  /**
+   * What the trip made, with the breakdown behind it.
+   *
+   * `CAN_READ_SHIPMENTS` without CREW, unlike the endpoints either side of it.
+   * A crew member sees their own pay and their own liquidation because both are
+   * their record; the company's margin on the trip they drove is not, and a
+   * portal session that could read it could assemble the whole P&L one trip at
+   * a time.
+   */
+  @Get(':id/gross-profit')
+  @Roles(...CAN_READ_SHIPMENTS)
+  grossProfit(@Param('id') id: string): Promise<GrossProfit> {
+    return this.grossProfits.forShipment(id);
   }
 
   @Get(':id/gas-rate')

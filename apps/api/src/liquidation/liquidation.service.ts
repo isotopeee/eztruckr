@@ -117,6 +117,13 @@ export class LiquidationService {
    * `crewMemberId` is passed by the controller from the session, never from the
    * query string, and when it is set it OVERWRITES rather than narrows — there
    * is no parameter a crew login can send to widen its own list.
+   *
+   * DRAFTS ARE EXCLUDED, unconditionally. A liquidation now exists from the
+   * moment a trip is booked, so PENDING on its own has stopped meaning "the
+   * crew owe us paperwork" — a draft has nothing to account for, and without
+   * this every unbooked trip would sit in accounting's queue and in the crew
+   * portal's. The row is still reachable through the shipment; what this list
+   * is, is a work queue, and work that has not started is not on it.
    */
   async list(query: LiquidationListQuery, crewMemberId: string | null): Promise<Liquidation[]> {
     const rows = await this.prisma.client.liquidation.findMany({
@@ -126,9 +133,10 @@ export class LiquidationService {
           : query.status === undefined
             ? {}
             : { status: query.status }),
-        ...(crewMemberId
-          ? { shipment: { OR: [{ driverId: crewMemberId }, { helperId: crewMemberId }] } }
-          : {}),
+        shipment: {
+          status: { not: ShipmentStatus.DRAFT },
+          ...(crewMemberId ? { OR: [{ driverId: crewMemberId }, { helperId: crewMemberId }] } : {}),
+        },
       },
       include: LIQUIDATION_INCLUDE,
       orderBy: { updatedAt: 'desc' },
@@ -470,7 +478,7 @@ export class LiquidationService {
 
     if (!row) {
       throw new NotFoundException(
-        `Shipment ${shipmentId} has no liquidation. One is created when the trip is marked delivered.`,
+        `Shipment ${shipmentId} has no liquidation. One is created with the trip; a shipment booked before that was the rule gets its own when it is marked delivered.`,
       );
     }
 

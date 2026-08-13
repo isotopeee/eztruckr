@@ -3,6 +3,9 @@ import { CommissionCoverageService } from '../commission/commission-coverage.ser
 import { CommissionController } from '../commission/commission.controller';
 import { CommissionService } from '../commission/commission.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { CompanyPaidExpensesController } from './company-paid-expenses.controller';
+import { CompanyPaidExpensesService } from './company-paid-expenses.service';
+import { GrossProfitService } from './gross-profit.service';
 import { ShipmentChargesController } from './shipment-charges.controller';
 import { ShipmentChargesService } from './shipment-charges.service';
 import { ShipmentsController } from './shipments.controller';
@@ -17,10 +20,17 @@ import { ShipmentsService } from './shipments.service';
  */
 @Module({
   imports: [PrismaModule],
-  controllers: [ShipmentsController, ShipmentChargesController, CommissionController],
+  controllers: [
+    ShipmentsController,
+    ShipmentChargesController,
+    CompanyPaidExpensesController,
+    CommissionController,
+  ],
   providers: [
     ShipmentsService,
     ShipmentChargesService,
+    CompanyPaidExpensesService,
+    GrossProfitService,
     CommissionService,
     CommissionCoverageService,
   ],

@@ -8,8 +8,10 @@ import { ArrowLeft } from 'lucide-react';
 import { AllowancesCard } from '@/components/shipments/allowances-card';
 import { ChargesCard } from '@/components/shipments/charges-card';
 import { CommissionsCard } from '@/components/shipments/commissions-card';
+import { CompanyExpensesCard } from '@/components/shipments/company-expenses-card';
 import { CrewAndLifecycleCard } from '@/components/shipments/crew-and-lifecycle-card';
 import { GasRateOverrideCard } from '@/components/shipments/gas-rate-override-card';
+import { GrossProfitCard } from '@/components/shipments/gross-profit-card';
 import { LiquidationCard } from '@/components/shipments/liquidation-card';
 import { RateChainCard } from '@/components/shipments/rate-chain-card';
 import { SettlementCard } from '@/components/shipments/settlement-card';
@@ -87,7 +89,16 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
         </div>
       </div>
 
-      {isCrew ? null : <ChargesCard shipment={data} />}
+      {/* Below the fold and office-only: the trip's own P&L. A crew member sees
+          their pay and their liquidation, both of which are their record; what
+          the company made on the trip they drove is not. */}
+      {isCrew ? null : (
+        <>
+          <ChargesCard shipment={data} />
+          <CompanyExpensesCard shipment={data} />
+          <GrossProfitCard shipment={data} />
+        </>
+      )}
     </div>
   );
 }

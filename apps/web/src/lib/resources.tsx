@@ -359,7 +359,7 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
       name: 'sortOrder',
       label: 'Sort order',
       type: 'integer',
-      help: 'Lower appears first on the liquidation form.',
+      help: 'Lower appears first on expense forms. Leave it blank for 10 — the standard categories are spaced 10 apart, so there is room to slot one between two others.',
     },
     { name: 'isActive', label: 'Offered on new liquidations', type: 'boolean' },
   ],

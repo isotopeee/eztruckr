@@ -1,0 +1,245 @@
+import { createPrismaClient, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
+import {
+  LiquidationStatus,
+  shipmentNumberDatePart,
+  ShipmentStatus,
+  type CreateShipmentInput,
+} from '@eztruckr/types';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { PrismaService } from '../prisma/prisma.service';
+import { ShipmentsService } from './shipments.service';
+
+/**
+ * What happens when a trip is BOOKED: it is numbered, and it gets the
+ * liquidation it will need.
+ *
+ * Both are new in this phase and both replace something that used to be
+ * somebody's job — typing a unique number, and remembering that the crew have
+ * nowhere to record spending until the office marks the trip delivered.
+ */
+
+let prisma: ExtendedPrismaClient;
+let available = false;
+let shipments: ShipmentsService;
+
+let adminId: string;
+let clientId: string;
+
+/** Not `itest-`: see the note in liquidation-lifecycle.test.ts. */
+const PREFIX = 'booktest-';
+const id = (name: string) => `${PREFIX}${name}`;
+
+async function cleanup(): Promise<void> {
+  await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
+  try {
+    // Child rows are matched through the shipment rather than by id prefix:
+    // the services generate cuids, so nothing below the shipment carries one.
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM "liquidation" WHERE "shipmentId" IN (SELECT id FROM "shipment" WHERE "clientId" LIKE '${PREFIX}%')`,
+    );
+    await prisma.$executeRawUnsafe(`DELETE FROM "shipment" WHERE "clientId" LIKE '${PREFIX}%'`);
+    await prisma.$executeRawUnsafe(`DELETE FROM "client" WHERE id LIKE '${PREFIX}%'`);
+  } finally {
+    await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
+  }
+}
+
+beforeAll(async () => {
+  prisma = createPrismaClient();
+
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    available = true;
+  } catch {
+    console.warn('[shipment-booking] database unreachable — skipping integration tests');
+    return;
+  }
+
+  const admin = await prisma.user.findFirst({ where: { email: 'admin@eztruckr.ph' } });
+  if (!admin) throw new Error('Seed the database first: pnpm db:seed');
+  adminId = admin.id;
+
+  shipments = new ShipmentsService({ client: prisma } as unknown as PrismaService);
+
+  await cleanup();
+
+  await withActor({ userId: adminId }, async () => {
+    const client = await prisma.client.create({
+      data: { id: id('client'), code: id('CLT').toUpperCase(), name: 'Booking Test Client' },
+    });
+    clientId = client.id;
+  });
+});
+
+afterAll(async () => {
+  if (available) await cleanup();
+  await prisma.$disconnect();
+});
+
+beforeEach(async () => {
+  if (!available) return;
+  await cleanup();
+
+  await withActor({ userId: adminId }, async () => {
+    await prisma.client.create({
+      data: { id: id('client'), code: id('CLT').toUpperCase(), name: 'Booking Test Client' },
+    });
+  });
+});
+
+function booking(overrides: Partial<CreateShipmentInput> = {}): CreateShipmentInput {
+  return {
+    clientId,
+    thirdPartyId: null,
+    routeId: null,
+    truckId: null,
+    origin: 'Manila',
+    destination: 'Batangas',
+    cargoDescription: null,
+    grossRate: '20000.00',
+    tpcRate: null,
+    tpcAmount: null,
+    ...overrides,
+  };
+}
+
+const book = (overrides?: Partial<CreateShipmentInput>) =>
+  withActor({ userId: adminId }, () => shipments.create(booking(overrides)));
+
+describe('the shipment number is generated', () => {
+  it('is today’s Manila date followed by 001 for the day’s first trip', async () => {
+    if (!available) return;
+
+    const today = shipmentNumberDatePart(new Date());
+    const shipment = await book();
+
+    // Not asserted as an exact string: the sequence depends on what else was
+    // booked today, and a test that owned the whole day's numbering would
+    // break the moment somebody used the app.
+    expect(shipment.shipmentNumber).toMatch(new RegExp(`^${today}\\d{3,}$`));
+  });
+
+  it('counts up, and never issues the same number twice', async () => {
+    if (!available) return;
+
+    const first = await book();
+    const second = await book();
+    const third = await book();
+
+    expect(new Set([first, second, third].map((row) => row.shipmentNumber)).size).toBe(3);
+    expect(Number(second.shipmentNumber)).toBe(Number(first.shipmentNumber) + 1);
+    expect(Number(third.shipmentNumber)).toBe(Number(second.shipmentNumber) + 1);
+  });
+
+  /**
+   * THE RACE. Two bookings landing together compute the same next number, and
+   * the partial unique index refuses the loser. The person who clicked second
+   * did nothing wrong, so the create retries rather than showing them an index
+   * name — and this is the only test that can tell a working retry from a
+   * fluke of timing.
+   */
+  it('survives concurrent bookings, giving each a distinct number', async () => {
+    if (!available) return;
+
+    const booked = await Promise.all([book(), book(), book(), book(), book()]);
+    const numbers = booked.map((row) => row.shipmentNumber);
+
+    expect(new Set(numbers).size).toBe(5);
+  });
+
+  /**
+   * A soft-deleted trip keeps its number out of circulation. The trip may be
+   * gone from here, but not from whatever left the building with that number
+   * printed on it, and two trips behind one label is worse than a gap.
+   */
+  it('does not reissue the number of a soft-deleted trip', async () => {
+    if (!available) return;
+
+    const first = await book();
+    await prisma.shipment.softDelete({ id: first.id });
+
+    const second = await book();
+
+    expect(second.shipmentNumber).not.toBe(first.shipmentNumber);
+    expect(Number(second.shipmentNumber)).toBeGreaterThan(Number(first.shipmentNumber));
+  });
+});
+
+describe('the liquidation exists from the booking', () => {
+  it('is created with the shipment, at PENDING', async () => {
+    if (!available) return;
+
+    const shipment = await book();
+    const liquidation = await prisma.liquidation.findFirst({
+      where: { shipmentId: shipment.id },
+    });
+
+    expect(liquidation).not.toBeNull();
+    expect(liquidation?.status).toBe(LiquidationStatus.PENDING);
+    // Not submitted, and the column says so. It used to be NOT NULL DEFAULT
+    // now(), which claimed every liquidation had been submitted the moment it
+    // came into existence — now more visibly wrong, since that moment is the
+    // booking.
+    expect(liquidation?.submittedAt).toBeNull();
+  });
+
+  it('leaves the shipment a draft — the liquidation is waiting, not owed', async () => {
+    if (!available) return;
+
+    const shipment = await book();
+
+    expect(shipment.status).toBe(ShipmentStatus.DRAFT);
+  });
+
+  /**
+   * Every draft now has a PENDING liquidation, so PENDING alone has stopped
+   * meaning "the crew owe us paperwork". Without the draft exclusion, every
+   * unbooked trip would sit in accounting's queue and in the crew portal's.
+   */
+  it('keeps a draft out of the liquidation work queue', async () => {
+    if (!available) return;
+
+    const shipment = await book();
+
+    const queued = await prisma.liquidation.findMany({
+      where: {
+        status: LiquidationStatus.PENDING,
+        shipment: { status: { not: ShipmentStatus.DRAFT } },
+      },
+      select: { shipmentId: true },
+    });
+
+    expect(queued.map((row) => row.shipmentId)).not.toContain(shipment.id);
+  });
+
+  /**
+   * The delivery path still calls `ensurePendingLiquidation`, as a backstop for
+   * trips booked before creation started doing it. It must find the existing
+   * row rather than create a second one — the partial unique index would
+   * refuse anyway, and inside a transaction that failure would abort the
+   * delivery it was riding along with.
+   */
+  it('is not duplicated when the trip is later delivered', async () => {
+    if (!available) return;
+
+    const shipment = await book({ truckId: null });
+
+    await withActor({ userId: adminId }, async () => {
+      // Straight to delivered through the database: this test is about the
+      // liquidation, not about the dispatch preconditions.
+      await prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { status: ShipmentStatus.IN_TRANSIT },
+      });
+
+      await shipments.transition(shipment.id, {
+        to: ShipmentStatus.DELIVERED,
+        occurredAt: null,
+      });
+    });
+
+    const count = await prisma.liquidation.count({ where: { shipmentId: shipment.id } });
+
+    expect(count).toBe(1);
+  });
+});
