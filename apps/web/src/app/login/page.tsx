@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { Loader2, Truck } from 'lucide-react';
@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { signIn } from '@/lib/auth-client';
+import { useSystemStatus } from '@/lib/use-system-status';
 
 /**
  * Sign in.
@@ -16,15 +17,32 @@ import { signIn } from '@/lib/auth-client';
  * There is deliberately no "create an account" link: accounts are provisioned
  * by an administrator, and the API refuses public sign-up outright. Offering
  * the link and then rejecting the request would be worse than not offering it.
+ *
+ * THE ONE EXCEPTION IS AN UNSET-UP SYSTEM, which has no accounts at all — this
+ * page is where every unauthenticated path already lands, so it is also where
+ * the redirect to `/setup` belongs. Doing it here rather than in the app shell
+ * keeps it in one place: the shell sends you here, and here decides whether
+ * "sign in" is even a meaningful thing to offer yet.
  */
 export default function LoginPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { initialized, isPending: statusPending } = useSystemStatus();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+
+  // Strictly `=== false`: the hook returns undefined while loading and when the
+  // API is unreachable, and neither of those means "not set up". Sending
+  // somebody to setup because a request failed would offer to create a second
+  // first-administrator on a system that already has one.
+  useEffect(() => {
+    if (initialized === false) {
+      router.replace('/setup');
+    }
+  }, [initialized, router]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -47,6 +65,16 @@ export default function LoginPage() {
     await queryClient.invalidateQueries({ queryKey: ['me'] });
     router.replace('/');
   };
+
+  // Hold the form back until we know whether signing in is possible at all,
+  // so an unset-up system never flashes a login screen on its way to /setup.
+  if (statusPending || initialized === false) {
+    return (
+      <main className="flex min-h-screen items-center justify-center p-6">
+        <Loader2 className="text-muted-foreground size-6 animate-spin" />
+      </main>
+    );
+  }
 
   return (
     <main className="flex min-h-screen items-center justify-center p-6">

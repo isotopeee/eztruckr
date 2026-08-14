@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { auditFieldsSchema, naturalCodeSchema, requiredText } from './common';
+import { auditFieldsSchema, requiredText } from './common';
 
 /**
  * Where an unordered category lands. Matches the column default in Postgres,
@@ -9,7 +9,6 @@ export const DEFAULT_EXPENSE_CATEGORY_SORT_ORDER = 10;
 
 export const expenseCategorySchema = auditFieldsSchema.extend({
   id: z.string(),
-  code: z.string(),
   name: z.string(),
   requiresReceipt: z.boolean(),
   requiresPayee: z.boolean(),
@@ -21,7 +20,6 @@ export const expenseCategorySchema = auditFieldsSchema.extend({
 export type ExpenseCategory = z.infer<typeof expenseCategorySchema>;
 
 export const createExpenseCategorySchema = z.object({
-  code: naturalCodeSchema,
   name: requiredText(120),
   requiresReceipt: z.boolean().default(true),
   /**

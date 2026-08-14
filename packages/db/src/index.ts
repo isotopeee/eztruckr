@@ -21,3 +21,5 @@ export type { SoftDeleteScope } from './soft-delete-context';
 export { liveOne, liveOneOrThrow, MissingLiveRowError, MultipleLiveRowsError } from './relations';
 
 export { uuidv7, testUuid } from './uuid';
+
+export { testDatabaseUrl, prepareTestDatabase } from './test-database';

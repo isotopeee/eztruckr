@@ -119,21 +119,20 @@ export const staffResource: ResourceSpec<Staff> = {
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
-      key: 'staffCode',
-      label: 'Code',
-      render: (row) => <span className="font-medium">{row.staffCode}</span>,
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{`${row.lastName}, ${row.firstName}`}</span>,
     },
-    { key: 'name', label: 'Name', render: (row) => `${row.lastName}, ${row.firstName}` },
     {
       key: 'eligibleRoles',
       label: 'Eligible as',
       render: (row) => row.eligibleRoles.map((role) => STAFF_ROLE_LABELS[role]).join(', ') || '—',
     },
     { key: 'phone', label: 'Phone', render: (row) => text(row.phone) },
+    { key: 'email', label: 'Email', render: (row) => text(row.email) },
     { key: 'licenseNumber', label: 'Licence', render: (row) => text(row.licenseNumber) },
   ],
   fields: [
-    { name: 'staffCode', label: 'Staff code', type: 'text', required: true },
     { name: 'firstName', label: 'First name', type: 'text', required: true },
     { name: 'lastName', label: 'Last name', type: 'text', required: true },
     {
@@ -150,18 +149,32 @@ export const staffResource: ResourceSpec<Staff> = {
       help: 'Anyone eligible to drive needs a licence number on file. A dispatch manager may hold a trip’s cash without being assigned to it, and earns no commission.',
     },
     { name: 'phone', label: 'Phone', type: 'text' },
+    {
+      name: 'email',
+      label: 'Email',
+      type: 'email',
+      help: 'Contact address for this person. Separate from their login — changing it here does not move an account.',
+    },
     { name: 'address', label: 'Address', type: 'text' },
     { name: 'dateHired', label: 'Date hired', type: 'date' },
     { name: 'licenseNumber', label: 'Licence number', type: 'text' },
-    { name: 'licenseExpiry', label: 'Licence expiry', type: 'date' },
+    {
+      name: 'licenseExpiry',
+      label: 'Licence expiry',
+      type: 'date',
+      // Not marked `required`: it is required only for the driver-eligible,
+      // and the form has no way to express "required when another field says
+      // so". The API names whichever half is missing.
+      help: 'Required for anyone eligible to drive. A past date is accepted here — it is the driver slot that refuses to dispatch against a lapsed licence.',
+    },
     { name: 'isActive', label: 'Offered for new assignments', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    staffCode: row.staffCode,
     firstName: row.firstName,
     lastName: row.lastName,
     eligibleRoles: row.eligibleRoles.map(String),
     phone: row.phone,
+    email: row.email,
     address: row.address,
     dateHired: dateInput(row.dateHired),
     licenseNumber: row.licenseNumber,
@@ -179,17 +192,15 @@ export const clientResource: ResourceSpec<Client> = {
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
-      key: 'code',
-      label: 'Code',
-      render: (row) => <span className="font-medium">{row.code}</span>,
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{row.name}</span>,
     },
-    { key: 'name', label: 'Name', render: (row) => row.name },
     { key: 'contactName', label: 'Contact', render: (row) => text(row.contactName) },
     { key: 'phone', label: 'Phone', render: (row) => text(row.phone) },
     { key: 'tin', label: 'TIN', render: (row) => text(row.tin) },
   ],
   fields: [
-    { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'CLT-SMT' },
     { name: 'name', label: 'Name', type: 'text', required: true },
     { name: 'contactName', label: 'Contact person', type: 'text' },
     { name: 'phone', label: 'Phone', type: 'text' },
@@ -204,7 +215,6 @@ export const clientResource: ResourceSpec<Client> = {
     { name: 'isActive', label: 'Offered for new shipments', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    code: row.code,
     name: row.name,
     contactName: row.contactName,
     phone: row.phone,
@@ -224,11 +234,10 @@ export const thirdPartyResource: ResourceSpec<ThirdParty> = {
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
-      key: 'code',
-      label: 'Code',
-      render: (row) => <span className="font-medium">{row.code}</span>,
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{row.name}</span>,
     },
-    { key: 'name', label: 'Name', render: (row) => row.name },
     { key: 'contactName', label: 'Contact', render: (row) => text(row.contactName) },
     {
       key: 'defaultCommissionRate',
@@ -241,7 +250,6 @@ export const thirdPartyResource: ResourceSpec<ThirdParty> = {
     },
   ],
   fields: [
-    { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'TPB-001' },
     { name: 'name', label: 'Name', type: 'text', required: true },
     { name: 'contactName', label: 'Contact person', type: 'text' },
     { name: 'phone', label: 'Phone', type: 'text' },
@@ -256,7 +264,6 @@ export const thirdPartyResource: ResourceSpec<ThirdParty> = {
     { name: 'isActive', label: 'Offered for new shipments', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    code: row.code,
     name: row.name,
     contactName: row.contactName,
     phone: row.phone,
@@ -282,11 +289,10 @@ export const payeeResource: ResourceSpec<Payee> = {
   writeRoles: WRITE_PAYEES,
   columns: [
     {
-      key: 'code',
-      label: 'Code',
-      render: (row) => <span className="font-medium">{row.code}</span>,
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{row.name}</span>,
     },
-    { key: 'name', label: 'Name', render: (row) => row.name },
     {
       key: 'payeeType',
       label: 'Type',
@@ -296,7 +302,6 @@ export const payeeResource: ResourceSpec<Payee> = {
     { key: 'tin', label: 'TIN', render: (row) => text(row.tin) },
   ],
   fields: [
-    { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'PAY-001' },
     {
       name: 'payeeType',
       label: 'Type',
@@ -322,7 +327,6 @@ export const payeeResource: ResourceSpec<Payee> = {
     { name: 'isActive', label: 'Offered on new expenses', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    code: row.code,
     payeeType: row.payeeType,
     name: row.name,
     contactName: row.contactName,
@@ -345,11 +349,10 @@ export const routeResource: ResourceSpec<Route> = {
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
-      key: 'code',
-      label: 'Code',
-      render: (row) => <span className="font-medium">{row.code}</span>,
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{row.name}</span>,
     },
-    { key: 'name', label: 'Name', render: (row) => row.name },
     { key: 'lane', label: 'Lane', render: (row) => `${row.origin} → ${row.destination}` },
     {
       key: 'distanceKm',
@@ -371,7 +374,6 @@ export const routeResource: ResourceSpec<Route> = {
     },
   ],
   fields: [
-    { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'RTE-MNL-BTG' },
     { name: 'name', label: 'Name', type: 'text', required: true },
     { name: 'origin', label: 'Origin', type: 'text', required: true },
     { name: 'destination', label: 'Destination', type: 'text', required: true },
@@ -391,7 +393,6 @@ export const routeResource: ResourceSpec<Route> = {
     { name: 'isActive', label: 'Offered for new shipments', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    code: row.code,
     name: row.name,
     origin: row.origin,
     destination: row.destination,
@@ -413,11 +414,10 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
     'A category nothing has been filed under is deleted outright. Once a liquidation line or billable expense uses it, it is deactivated instead so those records keep reading correctly.',
   columns: [
     {
-      key: 'code',
-      label: 'Code',
-      render: (row) => <span className="font-medium">{row.code}</span>,
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{row.name}</span>,
     },
-    { key: 'name', label: 'Name', render: (row) => row.name },
     {
       key: 'requiresReceipt',
       label: 'Receipt required',
@@ -436,7 +436,6 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
     { key: 'sortOrder', label: 'Order', numeric: true, render: (row) => row.sortOrder },
   ],
   fields: [
-    { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'FUEL' },
     { name: 'name', label: 'Name', type: 'text', required: true },
     {
       name: 'requiresReceipt',
@@ -465,7 +464,6 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
     { name: 'isActive', label: 'Offered on new liquidations', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    code: row.code,
     name: row.name,
     requiresReceipt: row.requiresReceipt,
     requiresPayee: row.requiresPayee,

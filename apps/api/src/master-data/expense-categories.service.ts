@@ -37,10 +37,7 @@ export class ExpenseCategoriesService {
       ...(query.includeInactive ? {} : { isActive: true }),
       ...(query.search
         ? {
-            OR: [
-              { code: { contains: query.search, mode: 'insensitive' } },
-              { name: { contains: query.search, mode: 'insensitive' } },
-            ],
+            OR: [{ name: { contains: query.search, mode: 'insensitive' } }],
           }
         : {}),
     };
@@ -118,7 +115,6 @@ export class ExpenseCategoriesService {
 function toExpenseCategory(row: ExpenseCategoryRow): ExpenseCategory {
   return {
     id: row.id,
-    code: row.code,
     name: row.name,
     requiresReceipt: row.requiresReceipt,
     requiresPayee: row.requiresPayee,

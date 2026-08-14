@@ -111,12 +111,14 @@ beforeAll(async () => {
   if (!admin) throw new Error('Seed the database first: pnpm db:seed');
   adminId = admin.id;
 
-  const crew = await prisma.staff.findFirst({ where: { staffCode: 'CRW-001' } });
-  const fuel = await prisma.expenseCategory.findFirst({ where: { code: 'FUEL' } });
+  const crew = await prisma.staff.findFirst({
+    where: { firstName: 'Ricardo', lastName: 'Dela Cruz' },
+  });
+  const fuel = await prisma.expenseCategory.findFirst({ where: { name: 'Fuel' } });
   // Seeded, like the crew and the FUEL category: nothing here mutates a payee,
   // so there is no reason to own one. Contrast `toggleCategoryId`, which these
   // tests do mutate and therefore create per test.
-  const payee = await prisma.payee.findFirst({ where: { code: 'PAY-PETRON-CAL' } });
+  const payee = await prisma.payee.findFirst({ where: { name: 'Petron Calamba' } });
   if (!crew || !fuel || !payee) throw new Error('Seed the database first: pnpm db:seed');
   staffId = crew.id;
   fuelCategoryId = fuel.id;
@@ -141,7 +143,7 @@ beforeEach(async () => {
 
   await withActor({ userId: adminId }, async () => {
     await prisma.client.create({
-      data: { id: id('client'), code: id('CLT').toUpperCase(), name: 'Profit Test Client' },
+      data: { id: id('client'), name: 'Profit Test Client' },
     });
     clientId = id('client');
 
@@ -149,8 +151,7 @@ beforeEach(async () => {
     const toggleCategory = await prisma.expenseCategory.create({
       data: {
         id: id('toggle-category'),
-        code: id('TOGGLE').toUpperCase(),
-        name: 'Toggle',
+        name: 'Toggle (profit suite)',
         requiresReceipt: false,
       },
     });
@@ -287,7 +288,9 @@ describe('recording a cost the company paid itself', () => {
     expect(errors).toEqual([
       {
         path: 'payeeId',
-        message: expect.stringMatching(/^Toggle expenses must record who was paid/),
+        message: expect.stringMatching(
+          /^Toggle \(profit suite\) expenses must record who was paid/,
+        ),
       },
     ]);
   });

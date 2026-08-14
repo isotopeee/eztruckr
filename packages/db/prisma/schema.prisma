@@ -107,6 +107,10 @@ model User {
   accounts      Account[]
   verifications Verification[]
 
+  /// Every invite ever issued for this login, newest last. At most one is
+  /// pending at a time, enforced by a partial unique index.
+  invitations StaffInvitation[] @relation("StaffInvitationUser")
+
   lastLoginAt DateTime? @db.Timestamptz(6)
 
   createdAt DateTime @default(now()) @db.Timestamptz(6)
@@ -130,6 +134,10 @@ model User {
   userProfilesCreated UserProfile[] @relation("UserProfileCreatedBy")
   userProfilesUpdated UserProfile[] @relation("UserProfileUpdatedBy")
   userProfilesDeleted UserProfile[] @relation("UserProfileDeletedBy")
+
+  staffInvitationsCreated StaffInvitation[] @relation("StaffInvitationCreatedBy")
+  staffInvitationsUpdated StaffInvitation[] @relation("StaffInvitationUpdatedBy")
+  staffInvitationsDeleted StaffInvitation[] @relation("StaffInvitationDeletedBy")
 
   trucksCreated Truck[] @relation("TruckCreatedBy")
   trucksUpdated Truck[] @relation("TruckUpdatedBy")
@@ -347,6 +355,61 @@ model Verification {
   @@map("verification")
 }
 
+/// An invitation to take ownership of a provisioned login.
+///
+/// WHY THIS IS NOT `verification`. Better Auth's own table would hold a token
+/// with an `expiresAt`, and reusing it would mean namespacing our rows by an
+/// `identifier` prefix inside a table Better Auth also writes and prunes —
+/// one column doing two jobs, kept apart by convention. It also models none of
+/// what an administrator needs to see: who invited, whether the mail actually
+/// went out, and whether the invite was revoked before it was used.
+///
+/// Rows are never updated in place to re-invite. Resending REVOKES the pending
+/// row and inserts a new one, so the table is the history of every invite ever
+/// issued rather than the current state of one.
+model StaffInvitation {
+  id String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+
+  userId String @db.Uuid
+  user   User   @relation("StaffInvitationUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the token, hex. The plaintext exists only in the email that
+  /// carried it: a database dump must not yield working invite links, and an
+  /// administrator reading this table must not be able to accept on somebody
+  /// else's behalf. Partial-unique WHERE "deletedAt" IS NULL.
+  tokenHash String
+
+  expiresAt  DateTime  @db.Timestamptz(6)
+  /// Set once, when the invitee chooses their password. Also the moment the
+  /// login becomes usable at all — `emailVerified` is written here too, since
+  /// following the link is what proves they hold the mailbox.
+  acceptedAt DateTime? @db.Timestamptz(6)
+  /// Withdrawn by an administrator before it was used. Mutually exclusive with
+  /// `acceptedAt` by CHECK — an invite cannot both be taken up and withdrawn.
+  revokedAt  DateTime? @db.Timestamptz(6)
+
+  /// When the transport accepted the message, or why it refused. Mutually
+  /// exclusive by CHECK; both null means delivery has not been attempted.
+  /// A failed send leaves the invitation valid — the token is already minted,
+  /// so the fix is to resend, not to re-provision the account.
+  sentAt        DateTime? @db.Timestamptz(6)
+  deliveryError String?
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?   @db.Uuid
+  createdByUser User?     @relation("StaffInvitationCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?   @db.Uuid
+  updatedByUser User?     @relation("StaffInvitationUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?   @db.Uuid
+  deletedByUser User?     @relation("StaffInvitationDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([deletedAt])
+  @@map("staff_invitation")
+}
+
 // ---------------------------------------------------------------------------
 // Master data
 // ---------------------------------------------------------------------------
@@ -398,11 +461,21 @@ model Truck {
 model Staff {
   id String @id @default(dbgenerated("uuidv7()")) @db.Uuid
 
-  /// Partial-unique WHERE "deletedAt" IS NULL.
-  staffCode String
+  /// NOT UNIQUE, and deliberately so. `staffCode` used to carry a partial
+  /// unique and was dropped; a name cannot replace it, because two people
+  /// working here can genuinely be called the same thing. Forcing a
+  /// discriminator into `firstName` to satisfy an index would be one column
+  /// doing two jobs. Duplicates are therefore representable — tell them apart
+  /// by phone, email or hire date.
   firstName String
   lastName  String
   phone     String?
+  /// Contact address for the person, and where an invite would be sent if one
+  /// is ever provisioned from here. Deliberately NOT unique and NOT the login:
+  /// `user.email` is the credential, partial-unique and owned by Better Auth,
+  /// and a staff member may have no login at all. Keeping them separate means
+  /// correcting somebody's contact details cannot move an account.
+  email     String?
   address   String?
   dateHired DateTime? @db.Timestamptz(6)
   /// Deactivated = still valid on history, not offered for new assignments
@@ -453,8 +526,9 @@ model Staff {
 model Client {
   id String @id @default(dbgenerated("uuidv7()")) @db.Uuid
 
-  /// Partial-unique WHERE "deletedAt" IS NULL.
-  code        String
+  /// Partial-unique WHERE "deletedAt" IS NULL — the name is the identity now
+  /// that `code` is gone. A genuinely distinct second entity with the same
+  /// registered name is named for what distinguishes it, e.g. "… (Cebu)".
   name        String
   contactName String?
   phone       String?
@@ -485,8 +559,9 @@ model Client {
 model ThirdParty {
   id String @id @default(dbgenerated("uuidv7()")) @db.Uuid
 
-  /// Partial-unique WHERE "deletedAt" IS NULL.
-  code        String
+  /// Partial-unique WHERE "deletedAt" IS NULL — the name is the identity now
+  /// that `code` is gone. A genuinely distinct second entity with the same
+  /// registered name is named for what distinguishes it, e.g. "… (Cebu)".
   name        String
   contactName String?
   phone       String?
@@ -538,9 +613,6 @@ model ThirdParty {
 model Payee {
   id String @id @default(dbgenerated("uuidv7()")) @db.Uuid
 
-  /// Partial-unique WHERE "deletedAt" IS NULL.
-  code String
-
   /// Code set: PayeeType (1 COMPANY, 2 INDIVIDUAL). Stated, never inferred —
   /// no rule over the name tells a sole proprietor from a partnership, and the
   /// two produce different vouchers.
@@ -580,7 +652,6 @@ model Route {
   id String @id @default(dbgenerated("uuidv7()")) @db.Uuid
 
   /// Partial-unique WHERE "deletedAt" IS NULL.
-  code         String
   name         String
   origin       String
   destination  String
@@ -623,7 +694,6 @@ model ExpenseCategory {
   id String @id @default(dbgenerated("uuidv7()")) @db.Uuid
 
   /// Partial-unique WHERE "deletedAt" IS NULL.
-  code String
   name String
 
   requiresReceipt Boolean @default(true)
@@ -777,6 +847,21 @@ model CommissionRule {
 /// is now an error the engine raises, not a number it invents.
 model SystemSetting {
   id String @id @default("singleton")
+
+  /// When the first administrator was created, through `POST /system/initialize`.
+  ///
+  /// STORED, not derived from "does an administrator exist", and the difference
+  /// is the security property. `/system/initialize` is public — it has to be,
+  /// since nobody can sign in before it runs — and what closes it is this
+  /// column being set. Deriving it from a user count would reopen a public
+  /// administrator-creation endpoint the moment the last admin was removed or
+  /// deactivated, which is a privilege escalation with a very short recipe.
+  ///
+  /// Once set, never cleared. Its being on the singleton row is also what makes
+  /// initialising atomic: two concurrent requests both try to move it from
+  /// null, and the `WHERE "initializedAt" IS NULL` on the update means exactly
+  /// one of them affects a row.
+  initializedAt DateTime? @db.Timestamptz(6)
 
   /// Share of fuel spend deducted before commission is computed. Genuinely
   /// system-wide: not a per-role rate, so it has no CommissionRule equivalent

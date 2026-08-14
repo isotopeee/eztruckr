@@ -17,13 +17,28 @@ export class ApiError extends Error {
   }
 
   /**
-   * The API's own message, when it has one worth showing.
+   * The most specific thing the API said, in one sentence.
    *
-   * Nest wraps thrown exceptions as `{ message }`, and the Zod pipe adds
-   * `{ message, errors }`. Falling back to the HTTP status keeps the caller
-   * from ever rendering "undefined" at a user.
+   * FIELD ERRORS COME FIRST, and that is the whole point. A refused write
+   * arrives as `{ message: 'Validation failed', errors: [{ path, message }] }`
+   * — the wrapper is generic and the reason is in `errors`. Reading `message`
+   * alone showed "Validation failed" at people who then had no idea which
+   * field, or why. Assigning a driver with no licence expiry on file was the
+   * case that surfaced it: the API says exactly that, and the screen said
+   * nothing.
+   *
+   * Only 5 of the ~34 places that render this also show `fieldErrors` beside
+   * the inputs, so for the rest this is the only explanation the user gets.
+   * Those five now repeat the text in the toast, which is redundant rather
+   * than wrong — and much better than the alternative.
+   *
+   * Falls back to the wrapper, then to the HTTP status, so a 403 or a 500
+   * still reads as it did and nothing ever renders "undefined".
    */
   get displayMessage(): string {
+    const fields = Object.values(this.fieldErrors);
+    if (fields.length > 0) return fields.join(' ');
+
     const body = this.body;
 
     if (typeof body === 'object' && body !== null && 'message' in body) {

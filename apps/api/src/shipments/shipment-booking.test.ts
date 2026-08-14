@@ -67,7 +67,7 @@ beforeAll(async () => {
 
   await withActor({ userId: adminId }, async () => {
     const client = await prisma.client.create({
-      data: { id: id('client'), code: id('CLT').toUpperCase(), name: 'Booking Test Client' },
+      data: { id: id('client'), name: 'Booking Test Client' },
     });
     clientId = client.id;
   });
@@ -84,7 +84,7 @@ beforeEach(async () => {
 
   await withActor({ userId: adminId }, async () => {
     await prisma.client.create({
-      data: { id: id('client'), code: id('CLT').toUpperCase(), name: 'Booking Test Client' },
+      data: { id: id('client'), name: 'Booking Test Client' },
     });
   });
 });

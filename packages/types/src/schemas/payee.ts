@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { payeeTypeSchema } from '../codes/payee-type';
-import { auditFieldsSchema, naturalCodeSchema, optionalText, requiredText } from './common';
+import { auditFieldsSchema, optionalText, requiredText } from './common';
 
 /**
  * Somebody OUTSIDE the company that money is disbursed to — a fuel station, a
@@ -24,7 +24,6 @@ import { auditFieldsSchema, naturalCodeSchema, optionalText, requiredText } from
  */
 export const payeeSchema = auditFieldsSchema.extend({
   id: z.string(),
-  code: z.string(),
   payeeType: payeeTypeSchema,
   name: z.string(),
   contactName: z.string().nullable(),
@@ -38,7 +37,6 @@ export const payeeSchema = auditFieldsSchema.extend({
 export type Payee = z.infer<typeof payeeSchema>;
 
 export const createPayeeSchema = z.object({
-  code: naturalCodeSchema,
   /**
    * Stated, never inferred. No rule over the name distinguishes a sole
    * proprietor from a partnership, and the two produce different vouchers.

@@ -69,7 +69,9 @@ export default function MyRecordPage() {
               </Badge>
             ) : null}
           </CardTitle>
-          <CardDescription>{record.data?.staffCode}</CardDescription>
+          <CardDescription>
+            {record.data ? `${record.data.lastName}, ${record.data.firstName}` : null}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {record.isPending ? (
@@ -86,6 +88,7 @@ export default function MyRecordPage() {
                 {record.data.eligibleRoles.map((role) => STAFF_ROLE_LABELS[role]).join(', ') || '—'}
               </Row>
               <Row label="Phone">{record.data.phone ?? '—'}</Row>
+              <Row label="Email">{record.data.email ?? '—'}</Row>
               <Row label="Address">{record.data.address ?? '—'}</Row>
               <Row label="Date hired">
                 {record.data.dateHired ? formatDate(record.data.dateHired) : '—'}

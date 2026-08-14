@@ -37,6 +37,33 @@ export const envSchema = z.object({
     .transform((value) => value === 'true'),
 
   APP_TIMEZONE: z.string().default('Asia/Manila'),
+
+  // Outbound mail (Resend). Optional so the stack still boots without a key.
+  RESEND_API_KEY: z.string().optional(),
+  /**
+   * With no API key, write invite emails to the log instead of failing.
+   *
+   * AN EXPLICIT OPT-IN, not derived from `NODE_ENV`, because the development
+   * compose stack deliberately runs `NODE_ENV=production` — it builds and runs
+   * the production images — so keying off that would disable this exactly where
+   * it is needed and enable nothing anywhere.
+   *
+   * Defaults to FALSE so a real deployment that forgets its key gets a loud
+   * delivery failure rather than a quiet one. Turning it on writes invite links
+   * to the log, which is a credential in a log file; only ever do that locally.
+   */
+  MAIL_LOG_INSTEAD_OF_SENDING: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  /** Must be a verified sender on the Resend account. */
+  MAIL_FROM: z.string().default('EZTruckr <onboarding@resend.dev>'),
+  /**
+   * Where the WEB app is reached, for links inside emails. Distinct from
+   * `BETTER_AUTH_URL`, which is the API's own origin: an invite link that
+   * pointed at the API would land on a JSON 404.
+   */
+  APP_BASE_URL: z.string().url().default('http://localhost:3000'),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -200,14 +200,13 @@ beforeAll(async () => {
 
   await withActor({ userId: adminId }, async () => {
     const client = await prisma.client.create({
-      data: { id: id('client'), code: id('CLT').toUpperCase(), name: 'Phase 5 Test Client' },
+      data: { id: id('client'), name: 'Phase 5 Test Client' },
     });
     clientId = client.id;
 
     const driver = await prisma.staff.create({
       data: {
         id: id('driver'),
-        staffCode: id('CREW').toUpperCase(),
         firstName: 'Test',
         lastName: 'Driver',
         eligibleRoles: [CrewRole.DRIVER],
@@ -220,7 +219,6 @@ beforeAll(async () => {
     const dispatcher = await prisma.staff.create({
       data: {
         id: id('dispatcher'),
-        staffCode: id('OPS').toUpperCase(),
         firstName: 'Test',
         lastName: 'Dispatcher',
         eligibleRoles: [StaffRole.DISPATCH_MANAGER],
@@ -233,7 +231,6 @@ beforeAll(async () => {
     const helper = await prisma.staff.create({
       data: {
         id: id('helper'),
-        staffCode: id('CREW2').toUpperCase(),
         firstName: 'Test',
         lastName: 'Helper',
         eligibleRoles: [CrewRole.HELPER],
@@ -244,8 +241,9 @@ beforeAll(async () => {
     const category = await prisma.expenseCategory.create({
       data: {
         id: id('fuel'),
-        code: id('FUEL').toUpperCase(),
-        name: 'Fuel',
+        // NOT 'Fuel': the seed already owns that name, and `name` carries the
+        // partial unique now that `code` is gone.
+        name: 'Fuel (liquidation suite)',
         requiresReceipt: false,
       },
     });
@@ -255,7 +253,6 @@ beforeAll(async () => {
     const payee = await prisma.payee.create({
       data: {
         id: id('payee'),
-        code: id('PAY').toUpperCase(),
         payeeType: PayeeType.COMPANY,
         name: 'Test Filling Station',
       },

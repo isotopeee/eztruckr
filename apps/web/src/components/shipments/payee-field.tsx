@@ -71,7 +71,13 @@ export function PayeeField({
         value={value === '' ? (required ? '' : NONE) : value}
         onValueChange={(next) => onChange(next === NONE ? '' : next)}
       >
-        <SelectTrigger id={id}>
+        {/*
+          `aria-required` because the asterisk beside the label is
+          `aria-hidden`, and requiredness is now the ONLY thing that differs
+          between the two states — the field itself is always present. Without
+          this a screen-reader user gets no signal at all.
+        */}
+        <SelectTrigger id={id} aria-required={required}>
           <SelectValue placeholder={required ? 'Choose who was paid' : 'Not recorded'} />
         </SelectTrigger>
         <SelectContent>

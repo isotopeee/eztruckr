@@ -1,16 +1,9 @@
 import { z } from 'zod';
-import {
-  auditFieldsSchema,
-  naturalCodeSchema,
-  optionalText,
-  rateStringSchema,
-  requiredText,
-} from './common';
+import { auditFieldsSchema, optionalText, rateStringSchema, requiredText } from './common';
 
 /** A broker or agent who brings freight and takes a cut off the gross rate. */
 export const thirdPartySchema = auditFieldsSchema.extend({
   id: z.string(),
-  code: z.string(),
   name: z.string(),
   contactName: z.string().nullable(),
   phone: z.string().nullable(),
@@ -22,7 +15,6 @@ export const thirdPartySchema = auditFieldsSchema.extend({
 export type ThirdParty = z.infer<typeof thirdPartySchema>;
 
 export const createThirdPartySchema = z.object({
-  code: naturalCodeSchema,
   name: requiredText(200),
   contactName: optionalText(120),
   phone: optionalText(40),

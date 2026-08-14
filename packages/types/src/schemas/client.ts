@@ -1,9 +1,8 @@
 import { z } from 'zod';
-import { auditFieldsSchema, naturalCodeSchema, optionalText, requiredText } from './common';
+import { auditFieldsSchema, optionalText, requiredText } from './common';
 
 export const clientSchema = auditFieldsSchema.extend({
   id: z.string(),
-  code: z.string(),
   name: z.string(),
   contactName: z.string().nullable(),
   phone: z.string().nullable(),
@@ -16,7 +15,6 @@ export const clientSchema = auditFieldsSchema.extend({
 export type Client = z.infer<typeof clientSchema>;
 
 export const createClientSchema = z.object({
-  code: naturalCodeSchema,
   name: requiredText(200),
   contactName: optionalText(120),
   phone: optionalText(40),

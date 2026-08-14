@@ -29,7 +29,6 @@ export class PayeesService {
       ...(query.search
         ? {
             OR: [
-              { code: { contains: query.search, mode: 'insensitive' } },
               { name: { contains: query.search, mode: 'insensitive' } },
               { contactName: { contains: query.search, mode: 'insensitive' } },
               // Searchable because reconciling a supplier statement starts
@@ -99,7 +98,6 @@ export class PayeesService {
 function toPayee(row: PayeeRow): Payee {
   return {
     id: row.id,
-    code: row.code,
     // SMALLINT widens to `number` in the generated client; the CHECK
     // constraint and the Zod schema on the way in are what make it a code.
     payeeType: row.payeeType as PayeeType,

@@ -473,7 +473,8 @@ function Lines({
   canEdit: boolean;
   onChanged: () => void;
 }) {
-  const { user } = useCurrentUser();
+  // No `useCurrentUser()` here any more: this form asked for the role solely to
+  // decide whether to show Paid To, and it no longer varies by who is looking.
   const [draft, setDraft] = useState({
     expenseCategoryId: '',
     description: '',
@@ -497,19 +498,21 @@ function Lines({
       ?.requiresPayee ?? false;
 
   /**
-   * Crew are asked for a payee only when the category actually demands one.
+   * PAID TO IS ALWAYS SHOWN, to everyone. Only whether it is REQUIRED varies,
+   * and `ExpenseCategory.requiresPayee` is the only thing that varies it.
    *
-   * A driver filing a toll or a meal has no vendor to name, and a picker
-   * offering "Not recorded" above a list of fuel stations is a question with no
-   * right answer — the sort of field that gets an arbitrary pick just to make it
-   * go away, which is worse than an empty column because it looks like evidence.
+   * It used to be hidden from crew on optional categories, on the reasoning
+   * that a driver filing a toll has no vendor to name. That produced a field
+   * which appeared and disappeared as the category changed, and which the
+   * office saw and the crew did not — two people looking at the same form and
+   * disagreeing about what it contains. The company-expenses card never did
+   * this, so the two disbursement forms behaved differently for no reason a
+   * user could infer.
    *
-   * The office keeps the optional field: accounting reconciling a supplier
-   * statement may well want to attach a payee to a line that did not require
-   * one, and they are the people the vendor directory exists for.
+   * The original concern is handled by the field itself rather than by hiding
+   * it: when optional, `PayeeField` offers "Not recorded" and marks nothing
+   * required, so there is an honest answer for the toll booth.
    */
-  const showPayee = payeeRequired || user?.role !== UserRole.CREW;
-
   const reportFailure = (error: unknown) =>
     toast.error('Could not save that line', {
       description: error instanceof ApiError ? error.displayMessage : String(error),
@@ -524,13 +527,13 @@ function Lines({
         // A date-only input means midnight local; sent as an instant because
         // storage is UTC and the display layer renders Asia/Manila.
         spentAt: new Date(draft.spentAt).toISOString(),
-        // '' is "nothing chosen"; the wire wants null. Gated on `showPayee`
-        // rather than read straight off the draft, because the draft keeps the
-        // last payee on purpose — so a crew member who files a fuel line and
-        // then switches to a toll would otherwise submit the filling station
-        // against the toll, from a field they can no longer see. What is not
-        // shown is not sent.
-        payeeId: showPayee ? draft.payeeId || null : null,
+        // '' is "nothing chosen"; the wire wants null. Read straight off the
+        // draft now that the field is always visible — the gate that used to
+        // sit here existed because the draft keeps the last payee on purpose,
+        // so switching from a fuel line to a toll would have submitted the
+        // filling station from a field the person could no longer see. It is
+        // on screen now, so a stale value is theirs to notice and clear.
+        payeeId: draft.payeeId || null,
         receiptId: draft.receiptId,
       }),
     onSuccess: () => {
@@ -685,14 +688,12 @@ function Lines({
             </div>
           </div>
 
-          {showPayee ? (
-            <PayeeField
-              id={`line-payee-${liquidation.id}`}
-              value={draft.payeeId}
-              required={payeeRequired}
-              onChange={(payeeId) => setDraft((current) => ({ ...current, payeeId }))}
-            />
-          ) : null}
+          <PayeeField
+            id={`line-payee-${liquidation.id}`}
+            value={draft.payeeId}
+            required={payeeRequired}
+            onChange={(payeeId) => setDraft((current) => ({ ...current, payeeId }))}
+          />
 
           <ReceiptField
             value={draft.receiptId}

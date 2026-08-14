@@ -76,9 +76,15 @@ beforeAll(async () => {
   }
 
   const admin = await prisma.user.findFirst({ where: { email: 'admin@eztruckr.ph' } });
-  const driver = await prisma.staff.findFirst({ where: { staffCode: 'CRW-001' } });
-  const helper = await prisma.staff.findFirst({ where: { staffCode: 'CRW-003' } });
-  const stranger = await prisma.staff.findFirst({ where: { staffCode: 'CRW-004' } });
+  const driver = await prisma.staff.findFirst({
+    where: { firstName: 'Ricardo', lastName: 'Dela Cruz' },
+  });
+  const helper = await prisma.staff.findFirst({
+    where: { firstName: 'Joel', lastName: 'Bautista' },
+  });
+  const stranger = await prisma.staff.findFirst({
+    where: { firstName: 'Michael', lastName: 'Santos' },
+  });
 
   if (!admin || !driver || !helper || !stranger) {
     throw new Error('Seed the database first: pnpm db:seed');
@@ -106,7 +112,7 @@ beforeEach(async () => {
 
   await withActor({ userId: adminId }, async () => {
     await prisma.client.create({
-      data: { id: id('client'), code: id('CLT').toUpperCase(), name: 'Adjustment Test Client' },
+      data: { id: id('client'), name: 'Adjustment Test Client' },
     });
 
     await prisma.shipment.create({

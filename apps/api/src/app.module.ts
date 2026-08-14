@@ -7,9 +7,11 @@ import { SessionContextMiddleware } from './common/session-context.middleware';
 import { AppConfigModule } from './config/app-config.module';
 import { HealthModule } from './health/health.module';
 import { LiquidationModule } from './liquidation/liquidation.module';
+import { MailModule } from './mail/mail.module';
 import { MasterDataModule } from './master-data/master-data.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { SettingsModule } from './settings/settings.module';
+import { SystemModule } from './system/system.module';
 import { ShipmentsModule } from './shipments/shipments.module';
 import { StorageModule } from './storage/storage.module';
 import { UsersModule } from './users/users.module';
@@ -20,10 +22,12 @@ import { UsersModule } from './users/users.module';
     PrismaModule,
     AuthModule,
     StorageModule,
+    MailModule,
     HealthModule,
     UsersModule,
     MasterDataModule,
     SettingsModule,
+    SystemModule,
     ShipmentsModule,
     LiquidationModule,
   ],

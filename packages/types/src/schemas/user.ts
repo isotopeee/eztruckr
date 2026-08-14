@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { roleRequiresStaffLink, userRoleSchema, type UserRole } from '../codes/user-role';
-import { auditFieldsSchema, optionalText, requiredText } from './common';
+import { auditFieldsSchema, optionalText, passwordSchema, requiredText } from './common';
+import { staffInvitationSchema } from './invitation';
 
 /**
  * A login as returned by the API.
@@ -17,17 +18,16 @@ export const userSchema = auditFieldsSchema.extend({
   emailVerified: z.boolean(),
   staffId: z.string().nullable(),
   lastLoginAt: z.string().nullable(),
+  /**
+   * The most recent invitation, or null for a login that predates the invite
+   * flow. Carried on the user because "has this person actually taken up their
+   * account" is part of what an administrator is looking at when they read the
+   * list — fetching it separately would be one request per row.
+   */
+  invitation: staffInvitationSchema.nullable(),
 });
 
 export type User = z.infer<typeof userSchema>;
-
-/** Matches Better Auth's configured `minPasswordLength`. */
-export const PASSWORD_MIN_LENGTH = 12;
-
-export const passwordSchema = z
-  .string()
-  .min(PASSWORD_MIN_LENGTH, `must be at least ${PASSWORD_MIN_LENGTH} characters`)
-  .max(128);
 
 const userFields = z.object({
   email: z.string().trim().toLowerCase().email(),
@@ -62,12 +62,20 @@ export function hasStaffLinkMatchingRole(value: {
 export const STAFF_LINK_MESSAGE =
   'a crew or dispatch-manager login must name the staff member it belongs to, and no other role may';
 
-export const createUserSchema = userFields
-  .extend({ password: passwordSchema })
-  .refine(hasStaffLinkMatchingRole, {
-    message: STAFF_LINK_MESSAGE,
-    path: ['staffId'],
-  });
+/**
+ * NO PASSWORD FIELD. A login is provisioned empty and its owner sets the
+ * password by following an emailed invite, so there is no moment at which an
+ * administrator knows a credential that still works. Removing the field is
+ * what makes that true — an optional password would be a supported way back to
+ * the old flow, and the one caller that forgot to leave it out would be
+ * creating accounts nobody ever had to accept.
+ *
+ * `POST /users` therefore also sends mail. See `InvitationsService`.
+ */
+export const createUserSchema = userFields.refine(hasStaffLinkMatchingRole, {
+  message: STAFF_LINK_MESSAGE,
+  path: ['staffId'],
+});
 
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 

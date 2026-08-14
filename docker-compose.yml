@@ -82,7 +82,7 @@ services:
       NODE_ENV: production
       PORT: 4000
       DATABASE_URL: postgresql://eztruckr:eztruckr@postgres:5432/eztruckr?schema=public
-      CORS_ORIGINS: http://localhost:3000
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${WEB_PORT:-3000}}
       S3_ENDPOINT: http://minio:9000
       S3_REGION: us-east-1
       S3_BUCKET: eztruckr
@@ -96,20 +96,43 @@ services:
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env - generate one by running 'openssl rand -base64 32'}"
       # The browser reaches the API on the host port, so callback URLs must be
       # built from that and not from the container's internal name.
-      BETTER_AUTH_URL: http://localhost:${API_PORT:-4000}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:${API_PORT:-4000}}
+      # Where invite links point. The WEB origin, not the API's — a link built
+      # from BETTER_AUTH_URL would land the invitee on a JSON 404.
+      #
+      # OVERRIDABLE FROM .env, and it has to be: the default below is correct
+      # only while the sole reader of an invite is sitting at this machine.
+      # Emailing one to anybody else sends them a link to THEIR OWN localhost,
+      # which resolves, loads nothing, and explains nothing.
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:${WEB_PORT:-3000}}
+      # Outbound mail (Resend). Set RESEND_API_KEY in .env to send for real.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      MAIL_FROM: ${MAIL_FROM:-EZTruckr <onboarding@resend.dev>}
+      # With no key, log invite emails (link included) instead of sending, so
+      # the flow works on a laptop with no Resend account. THIS IS A DEV-ONLY
+      # SETTING — an invite link in a log file is a credential in a log file.
+      # Note it cannot be derived from NODE_ENV: this stack runs
+      # NODE_ENV=production because it builds the production images.
+      MAIL_LOG_INSTEAD_OF_SENDING: ${MAIL_LOG_INSTEAD_OF_SENDING:-true}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-eztruckr-dev-admin}
     ports:
       - "${API_PORT:-4000}:4000"
-    # Migrations and the seed both run on boot so `docker compose up` gives a
-    # system you can actually sign in to. The seed is idempotent and never
-    # resets an existing password, so repeated boots are harmless.
+    # Migrations run on boot; THE SEED DOES NOT. A fresh stack comes up with an
+    # empty database and no accounts at all, and the first administrator is
+    # created through the initialisation flow at /setup — which emails them an
+    # invite rather than handing anyone a password from a committed default.
+    #
+    # The seed still exists, and is now the TEST fixture: `prepareTestDatabase`
+    # runs it against `eztruckr_test`. Run it here by hand if you want demo
+    # data (`pnpm db:seed`), knowing it creates a login whose password is in
+    # the repository.
+    #
     # Invokes the binaries directly rather than via pnpm, so the runtime image
     # never has to resolve a package manager.
     command: >
       /bin/sh -c "
       cd /app/packages/db &&
       ./node_modules/.bin/prisma migrate deploy &&
-      ./node_modules/.bin/tsx prisma/seed.ts &&
       cd /app &&
       node apps/api/dist/main.js
       "
@@ -133,7 +156,10 @@ services:
       args:
         # Baked in at build time — Next.js inlines NEXT_PUBLIC_* into the
         # client bundle. This is the URL the BROWSER uses, not the container.
-        NEXT_PUBLIC_API_URL: http://localhost:4000/api
+        #
+        # CHANGING THIS NEEDS A REBUILD, not just a restart: the value is
+        # compiled into the JavaScript, so `up -d` alone re-serves the old one.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:${API_PORT:-4000}/api}
     container_name: eztruckr-web
     restart: unless-stopped
     depends_on:

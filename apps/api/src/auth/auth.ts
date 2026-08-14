@@ -3,6 +3,7 @@ import { uuidv7, type ExtendedPrismaClient } from '@eztruckr/db';
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
+import { hasUnacceptedInvitation, UNACCEPTED_INVITATION_MESSAGE } from '../users/invitation-gate';
 
 /**
  * Better Auth, configured against the tables Phase 2 already modelled.
@@ -148,16 +149,58 @@ export function createAuth(prisma: ExtendedPrismaClient, options: AuthOptions) {
        * route does not. `auth.test.ts` asserts both halves, because this is
        * the single thing standing between a stranger and an account.
        */
-      before: createAuthMiddleware((ctx) => {
+      before: createAuthMiddleware(async (ctx) => {
         if (ctx.path === '/sign-up/email' && ctx.request) {
           throw new APIError('FORBIDDEN', {
             message: 'Accounts are created by an administrator, not by signing up.',
           });
         }
-        return Promise.resolve();
+
+        /**
+         * A provisioned login cannot be signed into until its invite is
+         * accepted.
+         *
+         * BELT AND BRACES, and worth saying why both exist. `UsersService`
+         * gives a new account 32 random bytes as its password and discards
+         * them, so there is nothing to type even without this check — but that
+         * is an argument from "nobody knows the secret", and a system that
+         * moves money should not rest a login on one. This is the check that
+         * says no on purpose, and it is the one that keeps a REVOKED invite
+         * meaning something: revocation would otherwise withdraw a link while
+         * leaving the account it pointed at exactly as reachable.
+         *
+         * Runs before the password is verified, so a wrong password on an
+         * un-activated account gets the same "not activated yet" answer as a
+         * right one. That is deliberate: the alternative tells a stranger
+         * which of the two they got wrong.
+         */
+        if (ctx.path === '/sign-in/email') {
+          const email = readEmail(ctx.body);
+
+          if (email && (await hasUnacceptedInvitation(prisma, email))) {
+            throw new APIError('FORBIDDEN', { message: UNACCEPTED_INVITATION_MESSAGE });
+          }
+        }
       }),
     },
   });
 }
 
 export type Auth = ReturnType<typeof createAuth>;
+
+/**
+ * The sign-in body as it actually arrives, which is `unknown` to us.
+ *
+ * Narrowed rather than cast: a malformed body must yield "no email" and fall
+ * through to Better Auth's own validation, not throw inside a security check
+ * and turn a bad request into a 500 that skips the gate.
+ */
+function readEmail(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+
+  const email = (body as { email?: unknown }).email;
+
+  return typeof email === 'string' && email.length > 0 ? email : null;
+}

@@ -1,15 +1,8 @@
 import { z } from 'zod';
-import {
-  auditFieldsSchema,
-  moneyStringSchema,
-  naturalCodeSchema,
-  quantityStringSchema,
-  requiredText,
-} from './common';
+import { auditFieldsSchema, moneyStringSchema, quantityStringSchema, requiredText } from './common';
 
 export const routeSchema = auditFieldsSchema.extend({
   id: z.string(),
-  code: z.string(),
   name: z.string(),
   origin: z.string(),
   destination: z.string(),
@@ -22,7 +15,6 @@ export const routeSchema = auditFieldsSchema.extend({
 export type Route = z.infer<typeof routeSchema>;
 
 export const createRouteSchema = z.object({
-  code: naturalCodeSchema,
   name: requiredText(200),
   origin: requiredText(200),
   destination: requiredText(200),
