@@ -28,7 +28,6 @@ export class ThirdPartiesService {
       ...(query.search
         ? {
             OR: [
-              { code: { contains: query.search, mode: 'insensitive' } },
               { name: { contains: query.search, mode: 'insensitive' } },
               { contactName: { contains: query.search, mode: 'insensitive' } },
             ],
@@ -87,7 +86,6 @@ export class ThirdPartiesService {
 function toThirdParty(row: ThirdPartyRow): ThirdParty {
   return {
     id: row.id,
-    code: row.code,
     name: row.name,
     contactName: row.contactName,
     phone: row.phone,

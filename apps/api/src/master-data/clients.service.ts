@@ -28,7 +28,6 @@ export class ClientsService {
       ...(query.search
         ? {
             OR: [
-              { code: { contains: query.search, mode: 'insensitive' } },
               { name: { contains: query.search, mode: 'insensitive' } },
               { contactName: { contains: query.search, mode: 'insensitive' } },
             ],
@@ -91,7 +90,6 @@ export class ClientsService {
 function toClient(row: ClientRow): Client {
   return {
     id: row.id,
-    code: row.code,
     name: row.name,
     contactName: row.contactName,
     phone: row.phone,

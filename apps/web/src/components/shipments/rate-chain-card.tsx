@@ -1,8 +1,9 @@
 'use client';
 
-import { SHIPMENT_STATUS_LABELS, formatRate, type Shipment } from '@eztruckr/types';
+import { SHIPMENT_STATUS_LABELS, UserRole, formatRate, type Shipment } from '@eztruckr/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatMoney } from '@/lib/format';
+import { useCurrentUser } from '@/lib/use-current-user';
 
 /**
  * The rate chain and the commission chain, shown as arithmetic.
@@ -47,7 +48,26 @@ function Row({
 }
 
 export function RateChainCard({ shipment }: { shipment: Shipment }) {
+  const { user } = useCurrentUser();
   const computed = shipment.commissionsComputedAt !== null;
+
+  /**
+   * NOTHING here is for a crew session — not the rate chain, and not the
+   * commission base either.
+   *
+   * This card briefly showed crew the base alone. That was narrowed again by
+   * explicit decision: a crew member sees what they earned, on the commissions
+   * card, and none of the figures it was computed from. The API nulls every one
+   * of them (`redactRevenueForCrew`), so rendering anything here would be a
+   * column of "—" that still announces the figures exist and are withheld.
+   *
+   * Returning null rather than being omitted by the page keeps the rule with
+   * the card that would otherwise leak it — a caller who adds this component to
+   * a new screen cannot forget the check.
+   */
+  if (user?.role === UserRole.CREW) {
+    return null;
+  }
 
   return (
     <Card>

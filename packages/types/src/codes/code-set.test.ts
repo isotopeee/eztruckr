@@ -7,6 +7,7 @@ import {
   LIQUIDATION_STATUS_SEQUENCE,
   LiquidationHistoryAction,
   LiquidationStatus,
+  PayeeType,
   PayoutRunStatus,
   SettlementStatus,
   ShipmentStatus,
@@ -135,6 +136,16 @@ describe('code sets are permanent', () => {
     expect(PayoutRunStatus).toEqual({ DRAFT: 1, APPROVED: 2, PAID: 3, VOIDED: 4 });
   });
 
+  /**
+   * Deliberately has no STAFF member. A payee is external by definition —
+   * cash to a crew member is an `Allowance` pointing at `staff`, not a
+   * disbursement to a payee — and adding one here would reopen the merge this
+   * set exists to prevent.
+   */
+  it('pins every PayeeType code', () => {
+    expect(PayeeType).toEqual({ COMPANY: 1, INDIVIDUAL: 2 });
+  });
+
   it('never reuses a code within a set', () => {
     for (const set of [
       ShipmentStatus,
@@ -148,6 +159,7 @@ describe('code sets are permanent', () => {
       UserRole,
       CommissionMethod,
       PayoutRunStatus,
+      PayeeType,
     ]) {
       const values = Object.values(set);
       expect(new Set(values).size).toBe(values.length);

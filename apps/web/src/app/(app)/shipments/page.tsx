@@ -58,6 +58,15 @@ export default function Page() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<string>(ALL);
 
+  /**
+   * The net rate column is dropped for crew rather than shown empty.
+   *
+   * The API serves them nulls there (`redactRevenueForCrew`), so keeping the
+   * column would print a heading about freight revenue over a column of "—",
+   * which reads as a broken screen and still tells them the figure exists.
+   */
+  const showNetRate = user?.role !== UserRole.CREW;
+
   const filters = {
     page: 1,
     search,
@@ -134,7 +143,7 @@ export default function Page() {
                   <TableHead>Route</TableHead>
                   <TableHead>Crew</TableHead>
                   <TableHead>Truck</TableHead>
-                  <TableHead className="text-right">Net rate</TableHead>
+                  {showNetRate ? <TableHead className="text-right">Net rate</TableHead> : null}
                   <TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
@@ -160,9 +169,11 @@ export default function Page() {
                     <TableCell className="text-muted-foreground text-xs">
                       {shipment.truckPlateNumber ?? 'no truck'}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatMoney(shipment.netRate)}
-                    </TableCell>
+                    {showNetRate ? (
+                      <TableCell className="text-right tabular-nums">
+                        {shipment.netRate === null ? '—' : formatMoney(shipment.netRate)}
+                      </TableCell>
+                    ) : null}
                     <TableCell>
                       <Badge
                         variant={

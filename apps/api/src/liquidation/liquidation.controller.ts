@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
-import type { Liquidation, LiquidationLine } from '@eztruckr/types';
+import { UserRole, type Liquidation, type LiquidationLine } from '@eztruckr/types';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
 import {
@@ -48,6 +48,22 @@ export class LiquidationController {
 
   // --- through the trip ------------------------------------------------
 
+  /**
+   * Every account on the trip — except to a crew member, who sees only their
+   * own.
+   *
+   * A LIQUIDATION IS ONE PERSON'S ACCOUNT OF CASH THEY HELD, and a crew member
+   * has no more claim to a colleague's than to their commission: it names what
+   * they were advanced, what they spent it on, and whether they came up short.
+   * The same filter the commissions and crew-pay lists already apply, for the
+   * same reason.
+   *
+   * Filtered on CUSTODIAN, not on who received the cash. A helper handed ferry
+   * money out of the driver's float appears on an `Allowance` inside the
+   * driver's account, and that account is still the driver's to answer for —
+   * scoping by recipient would hand the helper a liquidation they cannot
+   * submit and cannot be short on.
+   */
   @Get('shipments/:shipmentId/liquidations')
   @Roles(...CAN_SUBMIT_LIQUIDATION, ...CAN_READ_SHIPMENTS)
   async listForShipment(
@@ -56,7 +72,17 @@ export class LiquidationController {
   ): Promise<Liquidation[]> {
     await this.access.assertMayRead(shipmentId, user);
 
-    return this.liquidations.listForShipment(shipmentId);
+    const accounts = await this.liquidations.listForShipment(shipmentId);
+
+    if (user.role !== UserRole.CREW) {
+      return accounts;
+    }
+
+    // The account created at BOOKING has no custodian yet. It is deliberately
+    // NOT shown to crew: it is nobody's account until the office names one, and
+    // offering it would let a crew member claim expenses against a float they
+    // were never given.
+    return accounts.filter((account) => account.custodianId === user.staffId);
   }
 
   /**

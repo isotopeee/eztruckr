@@ -3,6 +3,7 @@ import {
   createCommissionRuleSchema,
   createStaffSchema,
   createExpenseCategorySchema,
+  createPayeeSchema,
   createRouteSchema,
   createThirdPartySchema,
   createTruckSchema,
@@ -11,6 +12,7 @@ import {
   updateCommissionRuleSchema,
   updateStaffSchema,
   updateExpenseCategorySchema,
+  updatePayeeSchema,
   updateRouteSchema,
   updateThirdPartySchema,
   updateTruckSchema,
@@ -40,6 +42,9 @@ export class UpdateClientDto extends createZodDto(updateClientSchema) {}
 
 export class CreateThirdPartyDto extends createZodDto(createThirdPartySchema) {}
 export class UpdateThirdPartyDto extends createZodDto(updateThirdPartySchema) {}
+
+export class CreatePayeeDto extends createZodDto(createPayeeSchema) {}
+export class UpdatePayeeDto extends createZodDto(updatePayeeSchema) {}
 
 export class CreateRouteDto extends createZodDto(createRouteSchema) {}
 export class UpdateRouteDto extends createZodDto(updateRouteSchema) {}

@@ -1,9 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@eztruckr/db';
 import {
-  hasLicenceIfDriver,
   isStaffRole,
-  LICENCE_REQUIRED_MESSAGE,
+  LICENCE_REQUIRED_MESSAGES,
+  missingLicenceField,
   type CreateStaffInput,
   type Staff,
   type StaffRole,
@@ -32,10 +32,10 @@ export class StaffService {
       ...(query.search
         ? {
             OR: [
-              { staffCode: { contains: query.search, mode: 'insensitive' } },
               { firstName: { contains: query.search, mode: 'insensitive' } },
               { lastName: { contains: query.search, mode: 'insensitive' } },
               { phone: { contains: query.search, mode: 'insensitive' } },
+              { email: { contains: query.search, mode: 'insensitive' } },
             ],
           }
         : {}),
@@ -67,10 +67,10 @@ export class StaffService {
   async create(input: CreateStaffInput): Promise<Staff> {
     const row = await this.staff.create({
       data: {
-        staffCode: input.staffCode,
         firstName: input.firstName,
         lastName: input.lastName,
         phone: input.phone,
+        email: input.email,
         address: input.address,
         dateHired: input.dateHired,
         eligibleRoles: [...input.eligibleRoles],
@@ -90,6 +90,10 @@ export class StaffService {
    * stored row first is the only way to ask the question honestly — otherwise
    * adding DRIVER eligibility to an existing helper would slip through with no
    * licence on file.
+   *
+   * BOTH HALVES are required of a driver now, number and expiry. The merge has
+   * to carry the expiry for the same reason it carries the number: a PATCH that
+   * only adds DRIVER eligibility must be judged against what is already stored.
    */
   async update(id: string, input: UpdateStaffInput): Promise<Staff> {
     const current = await this.get(id);
@@ -98,12 +102,19 @@ export class StaffService {
       eligibleRoles: input.eligibleRoles ?? current.eligibleRoles,
       licenseNumber:
         input.licenseNumber === undefined ? current.licenseNumber : input.licenseNumber,
+      licenseExpiry:
+        input.licenseExpiry === undefined ? current.licenseExpiry : input.licenseExpiry,
     };
 
-    if (!hasLicenceIfDriver(merged)) {
+    const missing = missingLicenceField(merged);
+
+    if (missing) {
       throw new BadRequestException({
         message: 'Validation failed',
-        errors: [{ path: 'licenseNumber', message: LICENCE_REQUIRED_MESSAGE }],
+        // Named field, not always `licenseNumber`: a record with a number and
+        // no expiry has to point at the expiry, or the office looks at a value
+        // that was already right.
+        errors: [{ path: missing, message: LICENCE_REQUIRED_MESSAGES[missing] }],
       });
     }
 
@@ -178,10 +189,10 @@ export class StaffService {
 function toStaff(row: StaffRow): Staff {
   return {
     id: row.id,
-    staffCode: row.staffCode,
     firstName: row.firstName,
     lastName: row.lastName,
     phone: row.phone,
+    email: row.email,
     address: row.address,
     dateHired: dateToIso(row.dateHired),
     isActive: row.isActive,

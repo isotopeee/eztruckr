@@ -1,7 +1,10 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import type { ExpenseCategory, Page, RemovalResult } from '@eztruckr/types';
 import { Roles } from '../auth/auth.decorators';
-import { CAN_READ_MASTER_DATA, CAN_WRITE_FINANCIAL_MASTER_DATA } from '../auth/role-policy';
+import {
+  CAN_READ_LIQUIDATION_REFERENCE_DATA,
+  CAN_WRITE_FINANCIAL_MASTER_DATA,
+} from '../auth/role-policy';
 import { ExpenseCategoriesService } from './expense-categories.service';
 import {
   CreateExpenseCategoryDto,
@@ -19,13 +22,13 @@ export class ExpenseCategoriesController {
    * classified and whether it is commissionable.
    */
   @Get()
-  @Roles(...CAN_READ_MASTER_DATA)
+  @Roles(...CAN_READ_LIQUIDATION_REFERENCE_DATA)
   list(@Query() query: ListQueryDto): Promise<Page<ExpenseCategory>> {
     return this.categories.list(query);
   }
 
   @Get(':id')
-  @Roles(...CAN_READ_MASTER_DATA)
+  @Roles(...CAN_READ_LIQUIDATION_REFERENCE_DATA)
   get(@Param('id') id: string): Promise<ExpenseCategory> {
     return this.categories.get(id);
   }

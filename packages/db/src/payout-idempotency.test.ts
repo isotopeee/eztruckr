@@ -44,14 +44,13 @@ beforeAll(async () => {
 
   await withActor({ userId: adminId }, async () => {
     const client = await prisma.client.create({
-      data: { id: testId('client'), code: testId('CLT'), name: 'Integration Test Client' },
+      data: { id: testId('client'), name: 'Integration Test Client' },
     });
     clientId = client.id;
 
     const crew = await prisma.staff.create({
       data: {
         id: testId('crew'),
-        staffCode: testId('CRW'),
         firstName: 'Test',
         lastName: 'Driver',
         eligibleRoles: [CrewRole.DRIVER],

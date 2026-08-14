@@ -33,7 +33,7 @@ beforeAll(async () => {
 
   await withActor({ userId: adminId }, async () => {
     const client = await prisma.client.create({
-      data: { id: testId('sd-client'), code: testId('SD-CLT'), name: 'Soft Delete Test Client' },
+      data: { id: testId('sd-client'), name: 'Soft Delete Test Client' },
     });
     clientId = client.id;
   });
@@ -213,37 +213,39 @@ describe('soft delete filtering', () => {
 describe('partial unique constraints', () => {
   it('frees a natural key once the row is deleted, so it can be reused', async () => {
     if (!available) return;
-    const code = testId('REUSE-CLT');
+    // The natural key is `name` now that `code` has been dropped from every
+    // master-data table; the index it exercises is `client_name_live_key`.
+    const name = 'Soft Delete Reuse Client';
 
     const first = await withActor({ userId: adminId }, async () =>
-      prisma.client.create({ data: { id: testId('reuse-1'), code, name: 'First' } }),
+      prisma.client.create({ data: { id: testId('reuse-1'), name } }),
     );
 
-    // A full unique would reserve this code forever.
+    // A full unique would reserve this name forever.
     await withActor({ userId: adminId }, async () => prisma.client.softDelete({ id: first.id }));
 
     const second = await withActor({ userId: adminId }, async () =>
-      prisma.client.create({ data: { id: testId('reuse-2'), code, name: 'Second' } }),
+      prisma.client.create({ data: { id: testId('reuse-2'), name } }),
     );
 
     expect(second.id).not.toBe(first.id);
-    expect(await prisma.client.findMany({ where: { code } })).toHaveLength(1);
-    expect(await withDeleted(async () => prisma.client.findMany({ where: { code } }))).toHaveLength(
+    expect(await prisma.client.findMany({ where: { name } })).toHaveLength(1);
+    expect(await withDeleted(async () => prisma.client.findMany({ where: { name } }))).toHaveLength(
       2,
     );
   });
 
   it('still rejects two live rows sharing a natural key', async () => {
     if (!available) return;
-    const code = testId('DUP-CLT');
+    const name = 'Soft Delete Duplicate Client';
 
     await withActor({ userId: adminId }, async () =>
-      prisma.client.create({ data: { id: testId('dup-1'), code, name: 'First' } }),
+      prisma.client.create({ data: { id: testId('dup-1'), name } }),
     );
 
     await expect(
       withActor({ userId: adminId }, async () =>
-        prisma.client.create({ data: { id: testId('dup-2'), code, name: 'Second' } }),
+        prisma.client.create({ data: { id: testId('dup-2'), name } }),
       ),
     ).rejects.toThrow();
   });
@@ -384,7 +386,6 @@ describe('code CHECK constraints', () => {
         prisma.staff.create({
           data: {
             id: testId('sd-badrole'),
-            staffCode: testId('SD-BADROLE'),
             firstName: 'Bad',
             lastName: 'Role',
             eligibleRoles: [CrewRole.DRIVER, 42],

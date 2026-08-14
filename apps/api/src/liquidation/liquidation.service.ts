@@ -39,6 +39,7 @@ import {
 import type { RequestUser } from '../auth/request-user';
 import { auditFields, dateToIso } from '../master-data/serialize';
 import { PrismaService } from '../prisma/prisma.service';
+import { resolvePayeeRequirement } from '../master-data/payee-requirement';
 import { assertMayHoldTripCash } from './trip-cash-participants';
 import { ReceiptsService } from './receipts.service';
 
@@ -71,6 +72,18 @@ import { ReceiptsService } from './receipts.service';
  * can be called liquidated.
  */
 
+/**
+ * What a line needs to serialise. Named because three reads want exactly the
+ * same joins — the liquidation itself, `addLine` and `updateLine` — and when
+ * the payee join was added, spelling it out three times is how one of them
+ * would have been missed and started returning a null vendor name.
+ */
+const LINE_INCLUDE = {
+  expenseCategory: { select: { name: true, requiresReceipt: true } },
+  payee: { select: { name: true } },
+  receipt: { select: { fileName: true } },
+} satisfies Prisma.LiquidationLineInclude;
+
 /** Exported alongside `toLiquidation`, which cannot be called without it. */
 export const LIQUIDATION_INCLUDE = {
   shipment: {
@@ -88,10 +101,7 @@ export const LIQUIDATION_INCLUDE = {
   custodian: { select: { firstName: true, lastName: true } },
   approvedByUser: { select: { name: true } },
   lines: {
-    include: {
-      expenseCategory: { select: { name: true, requiresReceipt: true } },
-      receipt: { select: { fileName: true } },
-    },
+    include: LINE_INCLUDE,
     orderBy: { spentAt: 'asc' },
   },
   history: {
@@ -291,6 +301,14 @@ export class LiquidationService {
     const liquidation = await this.loadEditable(liquidationId, user);
 
     await this.receipts.assertExists(input.receiptId);
+    await this.assertPayeeExists(input.payeeId);
+
+    // Also the category's existence check — see `resolvePayeeRequirement`.
+    const payeeRequired = await resolvePayeeRequirement(
+      this.prisma.client.expenseCategory,
+      input.expenseCategoryId,
+      input.payeeId,
+    );
 
     const row = await this.prisma.client.liquidationLine.create({
       data: {
@@ -299,12 +317,11 @@ export class LiquidationService {
         description: input.description,
         amount: input.amount,
         spentAt: new Date(input.spentAt),
+        payeeId: input.payeeId,
+        payeeRequired,
         receiptId: input.receiptId,
       },
-      include: {
-        expenseCategory: { select: { name: true, requiresReceipt: true } },
-        receipt: { select: { fileName: true } },
-      },
+      include: LINE_INCLUDE,
     });
 
     await this.refreshTotals(liquidationId);
@@ -322,6 +339,12 @@ export class LiquidationService {
 
     await this.assertLineBelongs(liquidation.id, lineId);
     await this.receipts.assertExists(input.receiptId);
+    await this.assertPayeeExists(input.payeeId);
+
+    // Resolved against the row as the patch will leave it, not against the
+    // request: changing only the category, or clearing only the payee, are the
+    // same failure approached from opposite sides.
+    const payeeRequired = await this.resolveRequirementAfterPatch(lineId, input);
 
     const row = await this.prisma.client.liquidationLine.update({
       where: { id: lineId },
@@ -332,12 +355,12 @@ export class LiquidationService {
         ...(input.description === undefined ? {} : { description: input.description }),
         ...(input.amount === undefined ? {} : { amount: input.amount }),
         ...(input.spentAt === undefined ? {} : { spentAt: new Date(input.spentAt) }),
+        ...(input.payeeId === undefined ? {} : { payeeId: input.payeeId }),
         ...(input.receiptId === undefined ? {} : { receiptId: input.receiptId }),
+        // Re-stamped: the row's frozen rule follows its category.
+        payeeRequired,
       },
-      include: {
-        expenseCategory: { select: { name: true, requiresReceipt: true } },
-        receipt: { select: { fileName: true } },
-      },
+      include: LINE_INCLUDE,
     });
 
     await this.refreshTotals(liquidationId);
@@ -872,6 +895,58 @@ export class LiquidationService {
       throw new NotFoundException(`No liquidation line ${lineId} on this liquidation`);
     }
   }
+
+  /**
+   * The category rule applied to the line as the patch will leave it.
+   *
+   * `undefined` means "this PATCH did not mention the field", so the current
+   * value stands; an explicit `null` payee means "clear it", which the rule may
+   * refuse.
+   */
+  private async resolveRequirementAfterPatch(
+    lineId: string,
+    input: UpdateLiquidationLineInput,
+  ): Promise<boolean> {
+    const current = await this.prisma.client.liquidationLine.findFirst({
+      where: { id: lineId },
+      select: { expenseCategoryId: true, payeeId: true },
+    });
+
+    if (!current) {
+      throw new NotFoundException(`No liquidation line ${lineId}`);
+    }
+
+    return resolvePayeeRequirement(
+      this.prisma.client.expenseCategory,
+      input.expenseCategoryId ?? current.expenseCategoryId,
+      input.payeeId === undefined ? current.payeeId : input.payeeId,
+    );
+  }
+
+  /**
+   * Existence only, deliberately — not `isActive`, matching every other
+   * reference check in the system. A deactivated payee is one no longer
+   * OFFERED for new work, and refusing it here would block a crew member
+   * correcting a returned liquidation whose vendor was retired in between.
+   *
+   * Absence is not this function's business either way: `null` is a line with
+   * no payee and `undefined` is a PATCH that did not mention one. Whether
+   * absence is ALLOWED is `resolvePayeeRequirement`'s question, asked against
+   * the expense category — checking it here as well would put half the rule in
+   * two places.
+   */
+  private async assertPayeeExists(payeeId: string | null | undefined): Promise<void> {
+    if (!payeeId) return;
+
+    const found = await this.prisma.client.payee.findFirst({
+      where: { id: payeeId },
+      select: { id: true },
+    });
+
+    if (!found) {
+      throw badRequest('payeeId', `No payee with id ${payeeId}`);
+    }
+  }
 }
 
 /**
@@ -909,6 +984,9 @@ function toLine(row: LineRow): LiquidationLine {
     description: row.description,
     amount: row.amount.toString(),
     spentAt: row.spentAt.toISOString(),
+    payeeId: row.payeeId,
+    payeeName: row.payee?.name ?? null,
+    payeeRequired: row.payeeRequired,
     receiptId: row.receiptId,
     receiptFileName: row.receipt?.fileName ?? null,
     requiresReceipt: row.expenseCategory?.requiresReceipt ?? false,

@@ -65,6 +65,24 @@ export class PrismaExceptionFilter implements ExceptionFilter {
       case 'P2025':
         return new NotFoundException('Record not found');
 
+      case 'P2023':
+        /**
+         * "Inconsistent column data" — in this schema, always a value that
+         * cannot be a `uuid`.
+         *
+         * Primary keys are `uuid` rather than text, so an id of the wrong shape
+         * no longer matches nothing; it fails the cast. Request BODIES never
+         * reach here, because `idSchema` refuses them with a field-level 400
+         * first. What does reach here is a PATH PARAMETER — `/payees/banana` —
+         * which no pipe validates.
+         *
+         * 404 rather than 400, and deliberately the same answer as an id that
+         * is well-formed and absent: both mean "no such record", and
+         * distinguishing them would tell an unauthenticated prober which of
+         * their guesses were at least shaped like real ids.
+         */
+        return new NotFoundException('Record not found');
+
       default:
         return new InternalServerErrorException('Database error');
     }

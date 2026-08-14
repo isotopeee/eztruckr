@@ -1,4 +1,4 @@
-import { CommissionMethod, CrewRole, StaffRole, UserRole } from '@eztruckr/types';
+import { CommissionMethod, CrewRole, PayeeType, StaffRole, UserRole } from '@eztruckr/types';
 import { hashPassword } from 'better-auth/crypto';
 import { withActor } from '../src/actor-context';
 import { createPrismaClient } from '../src/prisma-client';
@@ -34,7 +34,7 @@ const ADMIN_EMAIL = 'admin@eztruckr.ph';
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'eztruckr-dev-admin';
 
 /**
- * The staff who get a login, by staff code.
+ * The staff who get a login, matched by name.
  *
  * ONE CREW MEMBER, not all four, and that is the point of the fixture: the crew
  * portal's whole job is showing a signed-in person their own records and
@@ -50,14 +50,16 @@ const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'eztruckr-dev-admin';
  */
 const STAFF_LOGINS = [
   {
-    staffCode: 'CRW-003',
+    firstName: 'Joel',
+    lastName: 'Bautista',
     email: 'joel.bautista@eztruckr.ph',
     password: process.env.SEED_CREW_PASSWORD ?? 'eztruckr-dev-crew',
     role: UserRole.CREW,
     label: 'crew',
   },
   {
-    staffCode: 'OPS-001',
+    firstName: 'Marites',
+    lastName: 'Reyes',
     email: 'marites.reyes@eztruckr.ph',
     password: process.env.SEED_DISPATCH_PASSWORD ?? 'eztruckr-dev-dispatch',
     role: UserRole.DISPATCH_MANAGER,
@@ -114,14 +116,44 @@ async function seedAdministrator() {
 }
 
 /** fuel, toll, food, parking, ferry, gate pass, miscellaneous */
+/**
+ * `requiresPayee` is a STARTING POSITION, not a rule the code depends on — the
+ * office moves it per category on the Expense categories screen.
+ *
+ * Split the way the argument for the toggle ran: a filling station, a ferry
+ * operator and a port each issue something with a name on it, while a toll
+ * booth, a roadside carinderia and a parking attendant do not, and demanding a
+ * master record for those gets answered with an invented one. Miscellaneous is
+ * off because a category that means "something else" cannot promise a vendor.
+ *
+ * The column defaults to true, so an omission here would be the strict setting
+ * rather than the lax one. They are stated anyway: which side a category falls
+ * on is the point of the feature, and inferring it from silence is how it ends
+ * up wrong.
+ */
 const EXPENSE_CATEGORIES = [
-  { code: 'FUEL', name: 'Fuel', requiresReceipt: true, sortOrder: 10 },
-  { code: 'TOLL', name: 'Toll', requiresReceipt: true, sortOrder: 20 },
-  { code: 'FOOD', name: 'Food', requiresReceipt: false, sortOrder: 30 },
-  { code: 'PARKING', name: 'Parking', requiresReceipt: true, sortOrder: 40 },
-  { code: 'FERRY', name: 'Ferry', requiresReceipt: true, sortOrder: 50 },
-  { code: 'GATE_PASS', name: 'Gate pass', requiresReceipt: true, sortOrder: 60 },
-  { code: 'MISC', name: 'Miscellaneous', requiresReceipt: false, sortOrder: 70 },
+  { name: 'Fuel', requiresReceipt: true, requiresPayee: true, sortOrder: 10 },
+  { name: 'Toll', requiresReceipt: true, requiresPayee: false, sortOrder: 20 },
+  { name: 'Food', requiresReceipt: false, requiresPayee: false, sortOrder: 30 },
+  {
+    name: 'Parking',
+    requiresReceipt: true,
+    requiresPayee: false,
+    sortOrder: 40,
+  },
+  { name: 'Ferry', requiresReceipt: true, requiresPayee: true, sortOrder: 50 },
+  {
+    name: 'Gate pass',
+    requiresReceipt: true,
+    requiresPayee: true,
+    sortOrder: 60,
+  },
+  {
+    name: 'Miscellaneous',
+    requiresReceipt: false,
+    requiresPayee: false,
+    sortOrder: 70,
+  },
 ];
 
 const TRUCKS = [
@@ -153,38 +185,43 @@ const TRUCKS = [
 
 const STAFF = [
   {
-    staffCode: 'CRW-001',
     firstName: 'Ricardo',
     lastName: 'Dela Cruz',
     phone: '+63 917 555 0101',
+    email: 'ricardo.delacruz@eztruckr.ph',
     eligibleRoles: [CrewRole.DRIVER, CrewRole.HELPER],
     licenseNumber: 'N01-23-456789',
     licenseExpiry: new Date('2028-04-30T00:00:00Z'),
   },
   {
-    staffCode: 'CRW-002',
     firstName: 'Ernesto',
     lastName: 'Ramos',
     phone: '+63 918 555 0102',
+    email: 'ernesto.ramos@eztruckr.ph',
     eligibleRoles: [CrewRole.DRIVER],
     licenseNumber: 'N02-19-334455',
     licenseExpiry: new Date('2027-11-15T00:00:00Z'),
   },
   {
-    staffCode: 'CRW-003',
     firstName: 'Joel',
     lastName: 'Bautista',
     phone: '+63 919 555 0103',
+    // Matches this person's login address, because it is the same person — but
+    // the two columns stay independent: `seedStaffLogin` reads STAFF_LOGINS,
+    // never this field, so correcting one here cannot move an account.
+    email: 'joel.bautista@eztruckr.ph',
     // Helper-only: no licence on file, which the schema allows.
     eligibleRoles: [CrewRole.HELPER],
     licenseNumber: null,
     licenseExpiry: null,
   },
   {
-    staffCode: 'CRW-004',
     firstName: 'Michael',
     lastName: 'Santos',
     phone: '+63 920 555 0104',
+    // Deliberately no email: the column is optional, and dev data that filled
+    // every row would never exercise the empty case the screens have to render.
+    email: null,
     eligibleRoles: [CrewRole.HELPER],
     licenseNumber: null,
     licenseExpiry: null,
@@ -193,10 +230,10 @@ const STAFF = [
     // Office, not crew: never in a shipment slot, never on a commission, and
     // deliberately without a licence. She is here so a trip's float can be
     // handed to somebody who is answerable for it without driving it.
-    staffCode: 'OPS-001',
     firstName: 'Marites',
     lastName: 'Reyes',
     phone: '+63 921 555 0105',
+    email: 'marites.reyes@eztruckr.ph',
     eligibleRoles: [StaffRole.DISPATCH_MANAGER],
     licenseNumber: null,
     licenseExpiry: null,
@@ -205,21 +242,18 @@ const STAFF = [
 
 const CLIENTS = [
   {
-    code: 'CLT-SMT',
     name: 'San Mateo Trading Corp.',
     contactName: 'Grace Lim',
     phone: '+63 2 8555 0111',
     address: 'Brgy. Bagong Silang, San Mateo, Rizal',
   },
   {
-    code: 'CLT-NPL',
     name: 'Northport Logistics Inc.',
     contactName: 'Arnel Reyes',
     phone: '+63 2 8555 0122',
     address: 'Pier 4, North Harbor, Tondo, Manila',
   },
   {
-    code: 'CLT-VMD',
     name: 'Visayas Merchandising',
     contactName: 'Dolores Uy',
     phone: '+63 32 555 0133',
@@ -229,7 +263,6 @@ const CLIENTS = [
 
 const THIRD_PARTIES = [
   {
-    code: 'TPB-001',
     name: 'Metro Freight Brokerage',
     contactName: 'Ramon Aguilar',
     phone: '+63 917 555 0900',
@@ -237,9 +270,37 @@ const THIRD_PARTIES = [
   },
 ];
 
+/**
+ * A company and an individual, so both `PayeeType` codes are exercised the
+ * first time anybody opens the screen — and so the distinction that justifies
+ * the column is visible rather than asserted.
+ */
+const PAYEES = [
+  {
+    payeeType: PayeeType.COMPANY,
+    name: 'Petron Calamba',
+    contactName: 'Station manager',
+    phone: '+63 49 545 1180',
+    address: 'National Highway, Calamba, Laguna',
+    tin: '000-123-456-000',
+  },
+  {
+    payeeType: PayeeType.COMPANY,
+    name: 'Starlite Ferries',
+    contactName: 'Terminal booking office',
+    address: 'Batangas Port, Batangas City',
+    tin: '004-567-890-000',
+  },
+  {
+    payeeType: PayeeType.INDIVIDUAL,
+    name: 'Rodel Santos',
+    phone: '+63 918 555 0142',
+    address: 'Brgy. Halang, Calamba, Laguna',
+  },
+];
+
 const ROUTES = [
   {
-    code: 'RTE-MNL-BTG',
     name: 'Manila to Batangas Port',
     origin: 'Manila',
     destination: 'Batangas Port',
@@ -247,7 +308,6 @@ const ROUTES = [
     standardRate: '18000.0000',
   },
   {
-    code: 'RTE-MNL-CLK',
     name: 'Manila to Clark',
     origin: 'Manila',
     destination: 'Clark, Pampanga',
@@ -255,7 +315,6 @@ const ROUTES = [
     standardRate: '15000.0000',
   },
   {
-    code: 'RTE-MNL-NAG',
     name: 'Manila to Naga',
     origin: 'Manila',
     destination: 'Naga City',
@@ -263,7 +322,6 @@ const ROUTES = [
     standardRate: '42000.0000',
   },
   {
-    code: 'RTE-MNL-SFD',
     name: 'Manila to San Fernando',
     origin: 'Manila',
     destination: 'San Fernando, La Union',
@@ -300,7 +358,7 @@ const COMMISSION_RULES = [
 
 async function seedMasterData() {
   for (const category of EXPENSE_CATEGORIES) {
-    const existing = await prisma.expenseCategory.findFirst({ where: { code: category.code } });
+    const existing = await prisma.expenseCategory.findFirst({ where: { name: category.name } });
     if (!existing) await prisma.expenseCategory.create({ data: category });
   }
 
@@ -310,24 +368,33 @@ async function seedMasterData() {
   }
 
   for (const crew of STAFF) {
+    // Keyed on the name, since `staffCode` was dropped and staff carry no
+    // natural key at all now. The database will NOT refuse a duplicate here —
+    // two employees may legitimately share a name — so this guard is the only
+    // thing keeping a second seed run from inserting everybody twice.
     const existing = await prisma.staff.findFirst({
-      where: { staffCode: crew.staffCode },
+      where: { firstName: crew.firstName, lastName: crew.lastName },
     });
     if (!existing) await prisma.staff.create({ data: crew });
   }
 
   for (const client of CLIENTS) {
-    const existing = await prisma.client.findFirst({ where: { code: client.code } });
+    const existing = await prisma.client.findFirst({ where: { name: client.name } });
     if (!existing) await prisma.client.create({ data: client });
   }
 
   for (const thirdParty of THIRD_PARTIES) {
-    const existing = await prisma.thirdParty.findFirst({ where: { code: thirdParty.code } });
+    const existing = await prisma.thirdParty.findFirst({ where: { name: thirdParty.name } });
     if (!existing) await prisma.thirdParty.create({ data: thirdParty });
   }
 
+  for (const payee of PAYEES) {
+    const existing = await prisma.payee.findFirst({ where: { name: payee.name } });
+    if (!existing) await prisma.payee.create({ data: payee });
+  }
+
   for (const route of ROUTES) {
-    const existing = await prisma.route.findFirst({ where: { code: route.code } });
+    const existing = await prisma.route.findFirst({ where: { name: route.name } });
     if (!existing) await prisma.route.create({ data: route });
   }
 
@@ -362,11 +429,13 @@ async function seedMasterData() {
  */
 async function seedStaffLogin(spec: (typeof STAFF_LOGINS)[number]) {
   const staffMember = await prisma.staff.findFirst({
-    where: { staffCode: spec.staffCode },
+    where: { firstName: spec.firstName, lastName: spec.lastName },
   });
 
   if (!staffMember) {
-    throw new Error(`Staff member ${spec.staffCode} is missing; cannot seed its login`);
+    throw new Error(
+      `Staff member ${spec.firstName} ${spec.lastName} is missing; cannot seed its login`,
+    );
   }
 
   const name = `${staffMember.firstName} ${staffMember.lastName}`;
@@ -453,6 +522,7 @@ async function main() {
       staff: await prisma.staff.count(),
       clients: await prisma.client.count(),
       thirdParties: await prisma.thirdParty.count(),
+      payees: await prisma.payee.count(),
       routes: await prisma.route.count(),
       expenseCategories: await prisma.expenseCategory.count(),
       commissionRules: await prisma.commissionRule.count(),

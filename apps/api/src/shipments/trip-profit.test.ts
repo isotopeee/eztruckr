@@ -1,4 +1,5 @@
-import { createPrismaClient, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
+import { BadRequestException } from '@nestjs/common';
+import { createPrismaClient, withActor, type ExtendedPrismaClient, testUuid } from '@eztruckr/db';
 import { CrewRole, LiquidationStatus, ShipmentStatus } from '@eztruckr/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { LIQUIDATION_INCLUDE, toLiquidation } from '../liquidation/liquidation.service';
@@ -30,10 +31,32 @@ let adminId: string;
 let clientId: string;
 let staffId: string;
 let fuelCategoryId: string;
+let payeeId: string;
+
+/**
+ * This suite's OWN category, because the payee-requirement tests flip
+ * `requiresPayee` back and forth.
+ *
+ * The seeded FUEL category is global master data that other suites read while
+ * turbo runs them concurrently, and mutating shared master data mid-run is the
+ * suspected cause of the one known flake in this repo. Owning the row removes
+ * the question.
+ */
+let toggleCategoryId: string;
 
 /** Not `itest-`: see the note in liquidation-lifecycle.test.ts. */
-const PREFIX = 'profittest-';
-const id = (name: string) => `${PREFIX}${name}`;
+const PREFIX = '00000005-';
+const id = (name: string) => testUuid('00000005', name);
+
+/**
+ * Well-formed, and belonging to no row.
+ *
+ * Ids are `uuid` columns now, so a placeholder like 'no-such-truck' no longer
+ * means "matches nothing" — it fails the cast before any row is compared, and
+ * the service's own not-found message never runs. A reserved block keeps this
+ * distinguishable from every suite's fixtures.
+ */
+const ABSENT_ID = 'ffffffff-0000-7000-8000-000000000000';
 
 const SHIPMENT_ID = id('shipment');
 
@@ -64,7 +87,10 @@ async function cleanup(): Promise<void> {
     }
 
     await prisma.$executeRawUnsafe(`DELETE FROM "shipment" WHERE id = '${SHIPMENT_ID}'`);
-    await prisma.$executeRawUnsafe(`DELETE FROM "client" WHERE id LIKE '${PREFIX}%'`);
+    await prisma.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM "expense_category" WHERE id::text LIKE '${PREFIX}%'`,
+    );
   } finally {
     await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
   }
@@ -85,11 +111,18 @@ beforeAll(async () => {
   if (!admin) throw new Error('Seed the database first: pnpm db:seed');
   adminId = admin.id;
 
-  const crew = await prisma.staff.findFirst({ where: { staffCode: 'CRW-001' } });
-  const fuel = await prisma.expenseCategory.findFirst({ where: { code: 'FUEL' } });
-  if (!crew || !fuel) throw new Error('Seed the database first: pnpm db:seed');
+  const crew = await prisma.staff.findFirst({
+    where: { firstName: 'Ricardo', lastName: 'Dela Cruz' },
+  });
+  const fuel = await prisma.expenseCategory.findFirst({ where: { name: 'Fuel' } });
+  // Seeded, like the crew and the FUEL category: nothing here mutates a payee,
+  // so there is no reason to own one. Contrast `toggleCategoryId`, which these
+  // tests do mutate and therefore create per test.
+  const payee = await prisma.payee.findFirst({ where: { name: 'Petron Calamba' } });
+  if (!crew || !fuel || !payee) throw new Error('Seed the database first: pnpm db:seed');
   staffId = crew.id;
   fuelCategoryId = fuel.id;
+  payeeId = payee.id;
 
   const service = { client: prisma } as unknown as PrismaService;
   shipments = new ShipmentsService(service);
@@ -110,9 +143,19 @@ beforeEach(async () => {
 
   await withActor({ userId: adminId }, async () => {
     await prisma.client.create({
-      data: { id: id('client'), code: id('CLT').toUpperCase(), name: 'Profit Test Client' },
+      data: { id: id('client'), name: 'Profit Test Client' },
     });
     clientId = id('client');
+
+    // Recreated per test, so a flipped toggle never leaks into the next one.
+    const toggleCategory = await prisma.expenseCategory.create({
+      data: {
+        id: id('toggle-category'),
+        name: 'Toggle (profit suite)',
+        requiresReceipt: false,
+      },
+    });
+    toggleCategoryId = toggleCategory.id;
 
     await prisma.shipment.create({
       data: {
@@ -134,6 +177,34 @@ beforeEach(async () => {
 
 const act = <T>(fn: () => Promise<T>): Promise<T> => withActor({ userId: adminId }, fn);
 
+/**
+ * The FIELD-LEVEL complaints inside a validation failure.
+ *
+ * `badRequest()` leaves `error.message` as the generic 'Validation failed' and
+ * puts the detail in the response body, so a plain `rejects.toThrow(/…/)`
+ * matches the wrapper and passes no matter which field was actually wrong.
+ * `liquidation-lifecycle.test.ts` carries the same helper for the same reason.
+ */
+async function validationErrors(
+  fn: () => Promise<unknown>,
+): Promise<{ path: string; message: string }[]> {
+  try {
+    await fn();
+  } catch (error) {
+    if (!(error instanceof BadRequestException)) throw error;
+    return (error.getResponse() as { errors?: { path: string; message: string }[] }).errors ?? [];
+  }
+
+  throw new Error('expected the call to be refused, and it was not');
+}
+
+/** Moves the toggle on the category this suite owns. Never a seeded one. */
+async function setCategoryRequiresPayee(categoryId: string, requiresPayee: boolean) {
+  await act(() =>
+    prisma.expenseCategory.update({ where: { id: categoryId }, data: { requiresPayee } }),
+  );
+}
+
 async function setStatus(status: ShipmentStatus): Promise<void> {
   await prisma.shipment.update({ where: { id: SHIPMENT_ID }, data: { status } });
 }
@@ -148,6 +219,7 @@ describe('recording a cost the company paid itself', () => {
         description: 'Fleet card, Petron Calamba',
         amount: '6200.00',
         spentAt: '2026-08-11T00:00:00.000Z',
+        payeeId,
         receiptId: null,
       }),
     );
@@ -163,14 +235,151 @@ describe('recording a cost the company paid itself', () => {
     await expect(
       act(() =>
         companyExpenses.add(SHIPMENT_ID, {
-          expenseCategoryId: 'no-such-category',
+          expenseCategoryId: ABSENT_ID,
           description: null,
           amount: '100.00',
           spentAt: '2026-08-11T00:00:00.000Z',
+          payeeId,
           receiptId: null,
         }),
       ),
     ).rejects.toThrow(/Validation failed/);
+  });
+
+  it('refuses a payee that does not exist', async () => {
+    if (!available) return;
+
+    const errors = await validationErrors(() =>
+      act(() =>
+        companyExpenses.add(SHIPMENT_ID, {
+          expenseCategoryId: fuelCategoryId,
+          description: null,
+          amount: '100.00',
+          spentAt: '2026-08-11T00:00:00.000Z',
+          payeeId: ABSENT_ID,
+          receiptId: null,
+        }),
+      ),
+    );
+
+    expect(errors).toEqual([{ path: 'payeeId', message: `No payee with id ${ABSENT_ID}` }]);
+  });
+
+  it('refuses a missing payee when the category demands one', async () => {
+    if (!available) return;
+
+    await setCategoryRequiresPayee(toggleCategoryId, true);
+
+    const errors = await validationErrors(() =>
+      act(() =>
+        companyExpenses.add(SHIPMENT_ID, {
+          expenseCategoryId: toggleCategoryId,
+          description: null,
+          amount: '100.00',
+          spentAt: '2026-08-11T00:00:00.000Z',
+          payeeId: null,
+          receiptId: null,
+        }),
+      ),
+    );
+
+    // Names the category, so the person filling the form knows why THIS line
+    // demands a payee when the previous one did not.
+    expect(errors).toEqual([
+      {
+        path: 'payeeId',
+        message: expect.stringMatching(
+          /^Toggle \(profit suite\) expenses must record who was paid/,
+        ),
+      },
+    ]);
+  });
+
+  it('accepts a missing payee when the category does not', async () => {
+    if (!available) return;
+
+    // The toll-booth case the toggle exists for.
+    await setCategoryRequiresPayee(toggleCategoryId, false);
+
+    const expense = await act(() =>
+      companyExpenses.add(SHIPMENT_ID, {
+        expenseCategoryId: toggleCategoryId,
+        description: 'Toll, no vendor worth recording',
+        amount: '20.00',
+        spentAt: '2026-08-11T00:00:00.000Z',
+        payeeId: null,
+        receiptId: null,
+      }),
+    );
+
+    expect(expense.payeeId).toBeNull();
+    expect(expense.payeeRequired).toBe(false);
+  });
+
+  /**
+   * THE REASON THE FLAG IS COPIED ONTO THE ROW rather than read from the
+   * category.
+   *
+   * Flipping a category to required must not reach backwards and invalidate
+   * rows recorded when it was optional — otherwise correcting a typo on a
+   * year-old expense fails on a rule that did not exist when it was written.
+   * The same freezing `appliedTpcRate` and `appliedMethod` do.
+   */
+  it('keeps the rule the row was written under when the category later changes', async () => {
+    if (!available) return;
+
+    await setCategoryRequiresPayee(toggleCategoryId, false);
+
+    const expense = await act(() =>
+      companyExpenses.add(SHIPMENT_ID, {
+        expenseCategoryId: toggleCategoryId,
+        description: 'Recorded while optional',
+        amount: '20.00',
+        spentAt: '2026-08-11T00:00:00.000Z',
+        payeeId: null,
+        receiptId: null,
+      }),
+    );
+
+    await setCategoryRequiresPayee(toggleCategoryId, true);
+
+    // Still readable, still says what governed it.
+    const rows = await act(() => companyExpenses.list(SHIPMENT_ID));
+    expect(rows).toEqual([
+      expect.objectContaining({ id: expense.id, payeeRequired: false, payeeId: null }),
+    ]);
+
+    // And an edit that does not touch the payee is refused, because the row
+    // would now be re-stamped under the category's current rule. That is the
+    // honest outcome: the office changed the rule, and this row cannot meet it
+    // without somebody saying who was paid.
+    const errors = await validationErrors(() =>
+      act(() => companyExpenses.update(SHIPMENT_ID, expense.id, { amount: '25.00' })),
+    );
+
+    expect(errors).toEqual([
+      { path: 'payeeId', message: expect.stringContaining('must record who was paid') },
+    ]);
+  });
+
+  /**
+   * The pairing is a CHECK, not merely a service rule.
+   *
+   * Asserted with raw SQL because every TypeScript path already refuses it —
+   * which is exactly why the database is worth checking. A rule enforced only
+   * in the service layer is one import script away from a cost in somebody's
+   * P&L that nobody can reconcile.
+   */
+  it('cannot store a required-but-missing payee, even bypassing the service', async () => {
+    if (!available) return;
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO "company_paid_expense"
+          (id, "shipmentId", "expenseCategoryId", amount, "spentAt", "payeeRequired", "createdAt", "updatedAt", "createdBy")
+        VALUES ('${id('no-payee')}', '${SHIPMENT_ID}', '${fuelCategoryId}', 100, now(), true, now(), now(), '${adminId}')
+      `),
+    ).rejects.toThrow(/company_paid_expense_payee_required/);
   });
 
   /**
@@ -203,6 +412,7 @@ describe('recording a cost the company paid itself', () => {
         description: 'Invoice that arrived late',
         amount: '3000.00',
         spentAt: '2026-08-11T00:00:00.000Z',
+        payeeId,
         receiptId: null,
       }),
     );
@@ -222,6 +432,7 @@ describe('recording a cost the company paid itself', () => {
           description: null,
           amount: '500.00',
           spentAt: '2026-08-11T00:00:00.000Z',
+          payeeId,
           receiptId: null,
         }),
       ),
@@ -237,6 +448,7 @@ describe('gross profit', () => {
         description: null,
         amount,
         spentAt: '2026-08-11T00:00:00.000Z',
+        payeeId,
         receiptId: null,
       }),
     );
@@ -307,6 +519,7 @@ describe('gross profit', () => {
         data: {
           liquidationId: liquidation.id,
           expenseCategoryId: fuelCategoryId,
+          payeeId,
           amount: '9000.0000',
           spentAt: new Date('2026-08-11T00:00:00.000Z'),
         },

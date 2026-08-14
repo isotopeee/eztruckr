@@ -23,6 +23,25 @@ export const CAN_READ_MASTER_DATA = [
 ] as const;
 
 /**
+ * The two reference lists a CREW session needs to file a liquidation, and
+ * nothing else.
+ *
+ * A crew member picks an expense category and a payee for every line they
+ * claim. Both endpoints sat behind `CAN_READ_MASTER_DATA`, which deliberately
+ * excludes CREW — so the pickers came back empty and the crew portal could not
+ * record an expense at all. It looked like a disabled dropdown; it was a 403.
+ *
+ * Widening `CAN_READ_MASTER_DATA` would have fixed it by also handing crew the
+ * truck list, the client list, the broker list and every colleague's staff
+ * record. This bundle is the narrow answer: exactly the two lists the form
+ * needs, still read-only, and named so that adding a third is a decision.
+ */
+export const CAN_READ_LIQUIDATION_REFERENCE_DATA = [
+  ...CAN_READ_MASTER_DATA,
+  UserRole.CREW,
+] as const;
+
+/**
  * Trucks, crew, clients, brokers, routes — the things dispatch needs to keep
  * current, so operations owns them.
  */
@@ -37,6 +56,25 @@ export const CAN_WRITE_OPERATIONAL_MASTER_DATA = [
  */
 export const CAN_WRITE_FINANCIAL_MASTER_DATA = [
   UserRole.ADMINISTRATOR,
+  UserRole.ACCOUNTING,
+] as const;
+
+/**
+ * Payees, which fit neither bundle above and so get their own.
+ *
+ * Operations must be able to add one mid-task: a driver fuels at a station
+ * nobody has recorded before, and whoever types that liquidation line cannot
+ * be sent to find an accountant first — a directory you may not extend while
+ * using it gets worked around with a blank field. Accounting must be able to
+ * edit one because the address and TIN are what a voucher and a BIR form are
+ * built from, and those are not dispatch's to get right.
+ *
+ * So both, rather than picking one and accepting a wall. Management and
+ * dispatch managers stay out: neither records a disbursement.
+ */
+export const CAN_WRITE_PAYEES = [
+  UserRole.ADMINISTRATOR,
+  UserRole.OPERATIONS,
   UserRole.ACCOUNTING,
 ] as const;
 

@@ -60,7 +60,6 @@ export function CommissionsCard({ shipment }: { shipment: Shipment }) {
   const queryClient = useQueryClient();
 
   const canCompute = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
-  const isCrew = user?.role === UserRole.CREW;
 
   const crewPay = useQuery({
     queryKey: shipmentKeys.crewPay(shipment.id),
@@ -145,7 +144,6 @@ export function CommissionsCard({ shipment }: { shipment: Shipment }) {
                 shipmentId={shipment.id}
                 line={line}
                 canAdjust={canCompute}
-                isCrew={isCrew}
               />
             ))}
           </div>
@@ -159,12 +157,10 @@ function CrewPayRow({
   shipmentId,
   line,
   canAdjust,
-  isCrew,
 }: {
   shipmentId: string;
   line: CrewPayLine;
   canAdjust: boolean;
-  isCrew: boolean;
 }) {
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
@@ -248,12 +244,6 @@ function CrewPayRow({
             Adjust {line.staffName.split(' ')[0]}&apos;s pay
           </Button>
         )
-      ) : null}
-
-      {isCrew && hasAdjustments ? (
-        <p className="text-muted-foreground mt-2 text-xs">
-          Adjustments to your pay are shown here with the reason recorded for each.
-        </p>
       ) : null}
     </div>
   );
@@ -424,6 +414,8 @@ function AdjustmentForm({
 function CommissionDetail({ commission }: { commission: Commission }) {
   const isFormula = commission.appliedMethod === CommissionMethod.FORMULA;
 
+  const base = commission.commissionableBase;
+
   return (
     <div className="text-muted-foreground mt-2 space-y-1 text-xs">
       <p>
@@ -440,7 +432,7 @@ function CommissionDetail({ commission }: { commission: Commission }) {
         ) : null}
       </p>
       <p className="tabular-nums">
-        {formatMoney(commission.commissionableBase)} base
+        {formatMoney(base)} base
         {commission.appliedRate === null ? (
           <span className="ml-2">
             — no meaningful rate for this method on this shipment (the amount is authoritative)

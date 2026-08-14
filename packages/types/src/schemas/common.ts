@@ -15,9 +15,44 @@ export const rateStringSchema = z
   .regex(/^\d(\.\d{1,4})?$/, 'must be a decimal string such as "0.2500"')
   .refine((value) => Number(value) >= 0 && Number(value) <= 1, 'must be between 0 and 1');
 
-export const cuidSchema = z.string().min(1);
+/**
+ * A primary key: UUIDv7, as every table in this schema generates.
+ *
+ * VALIDATED FOR SHAPE, not merely for non-emptiness, and that is load-bearing
+ * now that the columns are Postgres `uuid` rather than text. A malformed id no
+ * longer reaches the database as a value that simply matches nothing — it
+ * reaches it as a cast error, which surfaces as a 500 and reads as a broken
+ * server rather than as "there is no such record". Refusing it here turns that
+ * into an ordinary field-level 400 before any query runs.
+ *
+ * Deliberately accepts ANY uuid version, not only 7. The version nibble
+ * describes how an id was minted, and refusing a v4 would mean a row imported
+ * or backfilled by some other tool could never be addressed through the API.
+ * What matters at this boundary is that the value can be a uuid at all.
+ */
+export const idSchema = z
+  .string()
+  .trim()
+  .regex(
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/,
+    'must be a uuid',
+  );
 
 /** A required piece of free text, trimmed. */
+/**
+ * Matches Better Auth's configured `minPasswordLength`.
+ *
+ * Lives here rather than beside the user schema because two unrelated schemas
+ * need it — setting a password, and accepting an invitation — and a user row
+ * carries its invitation. Importing it from `user.ts` would make that a cycle.
+ */
+export const PASSWORD_MIN_LENGTH = 12;
+
+export const passwordSchema = z
+  .string()
+  .min(PASSWORD_MIN_LENGTH, `must be at least ${PASSWORD_MIN_LENGTH} characters`)
+  .max(128);
+
 export const requiredText = (max = 200) => z.string().trim().min(1).max(max);
 
 /**
@@ -34,9 +69,17 @@ export const optionalText = (max = 200) =>
     .transform((value) => (value ? value : null));
 
 /**
- * A natural key such as `CLT-SMT` or `FUEL`. Uppercase so lookups and imports
- * never turn on case, and constrained because these appear in exports and
- * printed vouchers.
+ * An identifier that exists OUTSIDE this system and is transcribed into it —
+ * today, exactly one: a truck's plate number.
+ *
+ * Uppercase so lookups and imports never turn on case.
+ *
+ * It used to cover a `code` on all six master-data tables (`CLT-SMT`, `FUEL`,
+ * `CRW-003`), and the justification written here was that codes "appear in
+ * exports and printed vouchers" — neither of which the system has. They were
+ * dropped; `name` carries the natural key instead. The test for using this
+ * again is whether somebody outside the office would recognise the value: a
+ * plate number passes, an invented `PAY-001` does not.
  */
 export const naturalCodeSchema = z
   .string()

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { disbursementModeSchema } from '../codes/disbursement-mode';
 import { settlementStatusSchema } from '../codes/settlement-status';
-import { auditFieldsSchema, cuidSchema, optionalText } from './common';
+import { auditFieldsSchema, idSchema, optionalText } from './common';
 
 /**
  * What happened to the cash left over after ONE CUSTODIAN liquidated.
@@ -64,7 +64,7 @@ export type Settlement = z.infer<typeof settlementSchema>;
 export const recordSettlementSchema = z.object({
   disbursementMode: disbursementModeSchema,
   referenceNumber: optionalText(80),
-  receiptId: cuidSchema.nullish().transform((value) => value ?? null),
+  receiptId: idSchema.nullish().transform((value) => value ?? null),
   remarks: optionalText(400),
 });
 
@@ -80,7 +80,7 @@ export type RecordSettlementInput = z.infer<typeof recordSettlementSchema>;
  * Asking is the only answer that is not an invention.
  */
 export const carrySettlementToPayoutSchema = z.object({
-  staffId: cuidSchema,
+  staffId: idSchema,
   /** Defaults to naming the shipment. Becomes the crew deduction's reason. */
   reason: optionalText(200),
 });

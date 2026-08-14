@@ -7,6 +7,8 @@ import { StaffController } from './staff.controller';
 import { StaffService } from './staff.service';
 import { ExpenseCategoriesController } from './expense-categories.controller';
 import { ExpenseCategoriesService } from './expense-categories.service';
+import { PayeesController } from './payees.controller';
+import { PayeesService } from './payees.service';
 import { RoutesController } from './routes.controller';
 import { RoutesService } from './routes.service';
 import { ThirdPartiesController } from './third-parties.controller';
@@ -16,7 +18,12 @@ import { TrucksService } from './trucks.service';
 
 /**
  * The reference tables everything else points at: trucks, crew, clients,
- * brokers, routes, expense categories and commission rules.
+ * brokers, payees, routes, expense categories and commission rules.
+ *
+ * Brokers and payees are both counterparties and are deliberately separate
+ * tables — see the docblock on `Payee` in the schema. A broker's cut is netted
+ * off the gross rate and never disbursed; a payee is who money actually went
+ * to.
  *
  * PrismaService comes from the global PrismaModule, so nothing is imported
  * here.
@@ -27,6 +34,7 @@ import { TrucksService } from './trucks.service';
     StaffController,
     ClientsController,
     ThirdPartiesController,
+    PayeesController,
     RoutesController,
     ExpenseCategoriesController,
     CommissionRulesController,
@@ -36,6 +44,7 @@ import { TrucksService } from './trucks.service';
     StaffService,
     ClientsService,
     ThirdPartiesService,
+    PayeesService,
     RoutesService,
     ExpenseCategoriesService,
     CommissionRulesService,

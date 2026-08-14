@@ -3,15 +3,19 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  INVITATION_STATUS_LABELS,
+  InvitationStatus,
   PASSWORD_MIN_LENGTH,
   USER_ROLE_LABELS,
   UserRole,
+  invitationStatus,
   type Staff,
   type Page,
   type RemovalResult,
+  type StaffInvitation,
   type User,
 } from '@eztruckr/types';
-import { KeyRound, Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Ban, KeyRound, Loader2, Pencil, Plus, Send, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ResourceForm } from '@/components/master-data/resource-form';
 import { Badge } from '@/components/ui/badge';
@@ -42,9 +46,16 @@ import { formatDateTime } from '@/lib/format';
  * Logins.
  *
  * Not built on `ResourcePage` because users are not master data: creating one
- * takes a password, changing one takes a separate endpoint, and the crew link
- * is conditional on the role. Forcing it into the generic screen would mean
- * bending the generic screen out of shape for the one case that differs.
+ * sends an invitation, changing a password takes a separate endpoint, and the
+ * crew link is conditional on the role. Forcing it into the generic screen
+ * would mean bending the generic screen out of shape for the one case that
+ * differs.
+ *
+ * NO PASSWORD FIELD ON CREATE. The account is provisioned empty and its owner
+ * sets the password from an emailed link, so nobody here ever knows a working
+ * credential. `Set password` remains as break-glass recovery for someone locked
+ * out whose mailbox is also gone — deliberately a separate, deliberate act
+ * rather than the way accounts begin.
  */
 export default function UsersPage() {
   const queryClient = useQueryClient();
@@ -80,14 +91,6 @@ export default function UsersPage() {
     { name: 'email', label: 'Email', type: 'email', required: true },
     { name: 'name', label: 'Name', type: 'text', required: true },
     {
-      name: 'password',
-      label: 'Initial password',
-      type: 'password',
-      required: true,
-      createOnly: true,
-      help: `At least ${PASSWORD_MIN_LENGTH} characters. Hand it over directly; there is no email flow.`,
-    },
-    {
       name: 'role',
       label: 'Role',
       type: 'select',
@@ -105,7 +108,12 @@ export default function UsersPage() {
         .filter((member) => !linkedStaffIds.has(member.id))
         .map((member) => ({
           value: member.id,
-          label: `${member.staffCode} — ${member.lastName}, ${member.firstName}`,
+          // Phone disambiguates where a staff code used to. Two people here can
+          // genuinely share a name and the database no longer refuses it, so
+          // the picker has to offer something to tell them apart.
+          label: [`${member.lastName}, ${member.firstName}`, member.phone ?? member.email ?? null]
+            .filter(Boolean)
+            .join(' — '),
         })),
       help: 'Required for a crew or dispatch-manager login, and forbidden for any other role.',
     },
@@ -134,8 +142,22 @@ export default function UsersPage() {
         ? apiFetch<User>(`/users/${editing.id}`, { method: 'PATCH', body })
         : apiFetch<User>('/users', { method: 'POST', body });
     },
-    onSuccess: async () => {
-      toast.success(editing ? 'Login updated' : 'Login created');
+    onSuccess: async (user) => {
+      if (editing) {
+        toast.success('Login updated');
+      } else if (user.invitation?.deliveryError) {
+        // The account exists and the invite is valid; only the send failed.
+        // Reporting success here would leave somebody waiting for an email
+        // that was never accepted by the transport.
+        toast.error(
+          `Login created, but the invite email failed: ${user.invitation.deliveryError}`,
+          {
+            duration: 10000,
+          },
+        );
+      } else {
+        toast.success(`Login created. An invite has been emailed to ${user.email}.`);
+      }
       closeForm();
       await queryClient.invalidateQueries({ queryKey: ['users'] });
     },
@@ -146,6 +168,40 @@ export default function UsersPage() {
         return;
       }
       toast.error('Something went wrong');
+    },
+  });
+
+  const resendInvite = useMutation({
+    mutationFn: (user: User) =>
+      apiFetch<StaffInvitation>(`/users/${user.id}/invitation`, { method: 'POST' }),
+    onSuccess: async (invitation) => {
+      // The API records a failed send rather than throwing, so a 200 here is
+      // not the same thing as "the email went out". Saying "sent" when the
+      // transport refused is how somebody ends up waiting for a mail that will
+      // never arrive.
+      if (invitation.deliveryError) {
+        toast.error(`Invite created, but sending failed: ${invitation.deliveryError}`, {
+          duration: 8000,
+        });
+      } else {
+        toast.success('Invite email sent. The previous link no longer works.');
+      }
+      await queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+    onError: (error) => {
+      toast.error(error instanceof ApiError ? error.displayMessage : 'Something went wrong');
+    },
+  });
+
+  const revokeInvite = useMutation({
+    mutationFn: (user: User) =>
+      apiFetch<StaffInvitation>(`/users/${user.id}/invitation`, { method: 'DELETE' }),
+    onSuccess: async () => {
+      toast.success('Invite withdrawn. The link no longer works and the account cannot sign in.');
+      await queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+    onError: (error) => {
+      toast.error(error instanceof ApiError ? error.displayMessage : 'Something went wrong');
     },
   });
 
@@ -189,7 +245,8 @@ export default function UsersPage() {
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
           <p className="text-muted-foreground text-sm">
-            Logins and roles. There is no public sign-up — every account is created here.
+            Logins and roles. There is no public sign-up — every account is created here, and its
+            owner activates it from an emailed invite.
           </p>
         </div>
         <Button
@@ -213,7 +270,7 @@ export default function UsersPage() {
               <TableHead>Staff link</TableHead>
               <TableHead>Last signed in</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="w-32 text-right">Actions</TableHead>
+              <TableHead className="w-44 text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -237,11 +294,36 @@ export default function UsersPage() {
                     {user.lastLoginAt ? formatDateTime(user.lastLoginAt) : 'Never'}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={user.isActive ? 'secondary' : 'outline'}>
-                      {user.isActive ? 'Active' : 'Inactive'}
-                    </Badge>
+                    <UserStatus user={user} />
                   </TableCell>
                   <TableCell className="text-right">
+                    {/* Resend is offered for anything short of accepted —
+                        including expired and revoked, which are the two states
+                        an administrator is most likely to be fixing. */}
+                    {user.invitation && !user.invitation.acceptedAt ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Resend invite"
+                          disabled={resendInvite.isPending}
+                          onClick={() => resendInvite.mutate(user)}
+                        >
+                          <Send className="size-4" />
+                        </Button>
+                        {!user.invitation.revokedAt ? (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Withdraw invite"
+                            disabled={revokeInvite.isPending}
+                            onClick={() => revokeInvite.mutate(user)}
+                          >
+                            <Ban className="size-4" />
+                          </Button>
+                        ) : null}
+                      </>
+                    ) : null}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -395,5 +477,46 @@ export default function UsersPage() {
 
 function staffLabel(members: Staff[], id: string): string {
   const member = members.find((entry) => entry.id === id);
-  return member ? member.staffCode : id.slice(0, 8);
+  return member ? `${member.lastName}, ${member.firstName}` : id.slice(0, 8);
+}
+
+/**
+ * Deactivation and invite state are two different things and get two different
+ * badges. A deactivated account whose invite also expired is deactivated first
+ * — that is the one an administrator has to undo before anything else matters.
+ *
+ * A login with no invitation at all predates the invite flow (or is the seeded
+ * administrator); it shows plain Active, because "never invited" is not a
+ * problem to be fixed for those.
+ */
+function UserStatus({ user }: { user: User }) {
+  if (!user.isActive) {
+    return <Badge variant="outline">Inactive</Badge>;
+  }
+
+  if (!user.invitation) {
+    return <Badge variant="secondary">Active</Badge>;
+  }
+
+  const status = invitationStatus(user.invitation);
+
+  if (status === InvitationStatus.ACCEPTED) {
+    return <Badge variant="secondary">Active</Badge>;
+  }
+
+  // A pending invite that never left the building is not the same as one
+  // waiting to be opened, and only one of the two is the administrator's to fix.
+  if (status === InvitationStatus.PENDING && user.invitation.deliveryError) {
+    return (
+      <Badge variant="destructive" title={user.invitation.deliveryError}>
+        Invite not sent
+      </Badge>
+    );
+  }
+
+  return (
+    <Badge variant={status === InvitationStatus.PENDING ? 'outline' : 'destructive'}>
+      {INVITATION_STATUS_LABELS[status]}
+    </Badge>
+  );
 }

@@ -5,6 +5,7 @@ import {
   DisbursementMode,
   LiquidationHistoryAction,
   LiquidationStatus,
+  PayeeType,
   PayoutRunStatus,
   SettlementStatus,
   ShipmentStatus,
@@ -13,7 +14,13 @@ import {
 } from '@eztruckr/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ExtendedPrismaClient } from './prisma-client';
-import { createTestClient, databaseIsReachable } from './test-support';
+import {
+  cleanupTestRows,
+  createTestClient,
+  databaseIsReachable,
+  TEST_PREFIX,
+  testId,
+} from './test-support';
 
 /**
  * Drift guard for the one unavoidable duplication in the system.
@@ -61,6 +68,7 @@ const EXPECTED: ReadonlyArray<{ constraint: string; codes: readonly number[] }> 
   { constraint: 'commission_role_is_a_crew_role', codes: Object.values(CrewRole) },
   { constraint: 'commission_applied_method_code_valid', codes: Object.values(CommissionMethod) },
   { constraint: 'payout_run_status_code_valid', codes: Object.values(PayoutRunStatus) },
+  { constraint: 'payee_type_code_valid', codes: Object.values(PayeeType) },
 ];
 
 interface ConstraintRow {
@@ -69,6 +77,8 @@ interface ConstraintRow {
 }
 
 let definitions = new Map<string, string>();
+/** A real user, because `createdBy` is a foreign key as well as a CHECK. */
+let actorId: string;
 
 beforeAll(async () => {
   prisma = createTestClient();
@@ -77,6 +87,10 @@ beforeAll(async () => {
     console.warn('[code-constraints] database unreachable — skipping integration tests');
     return;
   }
+
+  const admin = await prisma.user.findFirst({ where: { email: 'admin@eztruckr.ph' } });
+  if (!admin) throw new Error('The test database is not seeded — see prepareTestDatabase()');
+  actorId = admin.id;
 
   const rows = await prisma.$queryRaw<ConstraintRow[]>`
     SELECT conname, pg_get_constraintdef(oid) AS definition
@@ -89,6 +103,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // This file used to create nothing and so needed no teardown. The liquidation
+  // status fixtures below are real rows, and suites run sequentially, so
+  // clearing the block here keeps the next run starting from the same place.
+  if (available) await cleanupTestRows(prisma);
   await prisma.$disconnect();
 });
 
@@ -142,6 +160,7 @@ describe('database CHECK constraints match the TypeScript code sets', () => {
       'commission.role',
       'commission.appliedMethod',
       'payout_run.status',
+      'payee.payeeType',
     ]) {
       expect(documented.has(column), `${column} has no code-set comment`).toBe(true);
     }
@@ -158,7 +177,7 @@ describe('createdBy stays mandatory in the database', () => {
     await expect(
       prisma.$executeRawUnsafe(`
         INSERT INTO "truck" (id, "plateNumber", "isActive", "createdAt", "updatedAt", "createdBy")
-        VALUES ('itest-nullcreator', 'itest-NULLPLT', true, now(), now(), NULL)
+        VALUES ('${testId('nullcreator')}', 'itest-NULLPLT', true, now(), now(), NULL)
       `),
     ).rejects.toThrow(/created_by_required/i);
   });
@@ -173,14 +192,51 @@ describe('createdBy stays mandatory in the database', () => {
          AND conname LIKE '%_created_by_required'
     `;
 
-    // 27 business tables, minus user and user_profile. The most recent is
-    // company_paid_expense; before it, liquidation_history and settlement.
-    expect(rows).toHaveLength(25);
+    // 29 business tables, minus user and user_profile. The most recent is
+    // staff_invitation; before it, payee.
+    //
+    // Bumping this number is the intended way to add a table — the assertion
+    // exists so that forgetting the CHECK fails here rather than surfacing
+    // years later as a row nobody can attribute.
+    expect(rows).toHaveLength(27);
     expect(rows.some((row) => row.conname.startsWith('user_'))).toBe(false);
   });
 });
 
 describe('an unallocated code stays out of the database as well as the type', () => {
+  /**
+   * The liquidation needs a shipment to hang off, and this MAKES ONE rather
+   * than borrowing whichever row happens to exist.
+   *
+   * It used to read `SELECT id FROM "shipment" LIMIT 1`, which quietly inserted
+   * nothing — and therefore asserted nothing — in any database with no
+   * shipments in it. That went unnoticed while the suites ran against the
+   * development database, where somebody's hand-made trips were always lying
+   * around. Against a dedicated test database it failed on the first run, which
+   * is the whole argument for having one.
+   */
+  async function shipmentToHangOff(): Promise<string> {
+    const clientId = testId('bad-status-client');
+    const shipmentId = testId('bad-status-shipment');
+
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO "client" (id, name, "isActive", "createdAt", "updatedAt", "createdBy")
+      VALUES ('${clientId}', 'Code constraint fixture', true, now(), now(), '${actorId}')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO "shipment"
+        (id, "shipmentNumber", status, "clientId", origin, destination,
+         "grossRate", "createdAt", "updatedAt", "createdBy")
+      VALUES ('${shipmentId}', '${TEST_PREFIX}BADSTATUS', ${ShipmentStatus.DRAFT},
+              '${clientId}', 'Manila', 'Batangas', 0, now(), now(), '${actorId}')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    return shipmentId;
+  }
+
   it('rejects a liquidation written with a code the set does not define', async () => {
     if (!available) return;
 
@@ -190,13 +246,33 @@ describe('an unallocated code stays out of the database as well as the type', ()
     // TypeScript guard in the system.
     expect(Object.values(LiquidationStatus)).not.toContain(4);
 
+    const shipmentId = await shipmentToHangOff();
+
     await expect(
       prisma.$executeRawUnsafe(`
         INSERT INTO "liquidation" (id, "shipmentId", status, "createdAt", "updatedAt", "createdBy")
-        SELECT 'itest-bad-status', id, 4, now(), now(), 'itest'
-          FROM "shipment" LIMIT 1
+        VALUES ('${testId('bad-status')}', '${shipmentId}', 4, now(), now(), '${actorId}')
       `),
     ).rejects.toThrow(/liquidation_status_code_valid/i);
+  });
+
+  /**
+   * The companion the old form could not have: an ALLOCATED code goes in.
+   * Without this, a constraint that rejected everything would pass the test
+   * above for entirely the wrong reason.
+   */
+  it('accepts one written with a code the set does define', async () => {
+    if (!available) return;
+
+    const shipmentId = await shipmentToHangOff();
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO "liquidation" (id, "shipmentId", status, "createdAt", "updatedAt", "createdBy")
+        VALUES ('${testId('good-status')}', '${shipmentId}', ${LiquidationStatus.PENDING},
+                now(), now(), '${actorId}')
+      `),
+    ).resolves.toBe(1);
   });
 });
 

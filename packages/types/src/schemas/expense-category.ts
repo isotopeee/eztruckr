@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { auditFieldsSchema, naturalCodeSchema, requiredText } from './common';
+import { auditFieldsSchema, requiredText } from './common';
 
 /**
  * Where an unordered category lands. Matches the column default in Postgres,
@@ -9,9 +9,9 @@ export const DEFAULT_EXPENSE_CATEGORY_SORT_ORDER = 10;
 
 export const expenseCategorySchema = auditFieldsSchema.extend({
   id: z.string(),
-  code: z.string(),
   name: z.string(),
   requiresReceipt: z.boolean(),
+  requiresPayee: z.boolean(),
   defaultCommissionable: z.boolean(),
   sortOrder: z.number().int(),
   isActive: z.boolean(),
@@ -20,9 +20,20 @@ export const expenseCategorySchema = auditFieldsSchema.extend({
 export type ExpenseCategory = z.infer<typeof expenseCategorySchema>;
 
 export const createExpenseCategorySchema = z.object({
-  code: naturalCodeSchema,
   name: requiredText(120),
   requiresReceipt: z.boolean().default(true),
+  /**
+   * Whether a disbursement in this category must name who was paid.
+   *
+   * Unlike `requiresReceipt`, this one is ENFORCED rather than stated — a
+   * missing receipt is a judgement call for the approver, a missing payee is a
+   * cost nobody can reconcile against a supplier statement.
+   *
+   * Defaults to true so relaxing a category is deliberate. The value is copied
+   * onto each row it governs at write time and never read back live, so
+   * changing it here affects new rows only.
+   */
+  requiresPayee: z.boolean().default(true),
   /**
    * Default for the commissionable flag when this category is used as a
    * billable expense. The per-row flag on the expense still wins.

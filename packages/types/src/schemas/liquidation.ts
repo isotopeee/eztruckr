@@ -4,7 +4,7 @@ import { liquidationStatusSchema, LiquidationStatus } from '../codes/liquidation
 import { ShipmentStatus } from '../codes/shipment-status';
 import {
   auditFieldsSchema,
-  cuidSchema,
+  idSchema,
   isoDateTimeSchema,
   optionalText,
   requiredText,
@@ -23,6 +23,14 @@ export const liquidationLineSchema = auditFieldsSchema.extend({
   description: z.string().nullable(),
   amount: z.string(),
   spentAt: z.string(),
+  payeeId: z.string().nullable(),
+  payeeName: z.string().nullable(),
+  /**
+   * The rule that applied to THIS line, frozen when it was written — not the
+   * category's current setting. A line recorded when tolls needed no payee
+   * keeps saying so after somebody flips the category.
+   */
+  payeeRequired: z.boolean(),
   receiptId: z.string().nullable(),
   receiptFileName: z.string().nullable(),
   /** From the category: whether this line is expected to have one attached. */
@@ -32,11 +40,21 @@ export const liquidationLineSchema = auditFieldsSchema.extend({
 export type LiquidationLine = z.infer<typeof liquidationLineSchema>;
 
 export const createLiquidationLineSchema = z.object({
-  expenseCategoryId: cuidSchema,
+  expenseCategoryId: idSchema,
   description: optionalText(200),
   amount: releasedMoneySchema,
   spentAt: isoDateTimeSchema,
-  receiptId: cuidSchema.nullish().transform((value) => value ?? null),
+  /**
+   * Who the crew paid.
+   *
+   * Optional HERE because whether it is required depends on the expense
+   * category, which this schema cannot see. The service resolves the category
+   * and refuses a missing payee when that category demands one; the database
+   * backs it up with `liquidation_line_payee_required`. Zod is the wrong layer
+   * for a rule whose input is another table.
+   */
+  payeeId: idSchema.nullish().transform((value) => value ?? null),
+  receiptId: idSchema.nullish().transform((value) => value ?? null),
 });
 
 export type CreateLiquidationLineInput = z.infer<typeof createLiquidationLineSchema>;
@@ -143,14 +161,14 @@ export type Liquidation = z.infer<typeof liquidationSchema>;
  * ambiguity the partial unique index refuses anyway.
  */
 export const createLiquidationSchema = z.object({
-  custodianId: cuidSchema,
+  custodianId: idSchema,
 });
 
 export type CreateLiquidationInput = z.infer<typeof createLiquidationSchema>;
 
 /** Naming, or renaming, who is answerable. Null hands it back to nobody. */
 export const setCustodianSchema = z.object({
-  custodianId: cuidSchema.nullish().transform((value) => value ?? null),
+  custodianId: idSchema.nullish().transform((value) => value ?? null),
 });
 
 export type SetCustodianInput = z.infer<typeof setCustodianSchema>;

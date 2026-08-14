@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { auditFieldsSchema, cuidSchema, isoDateTimeSchema, optionalText } from './common';
+import { auditFieldsSchema, idSchema, isoDateTimeSchema, optionalText } from './common';
 import { positiveMoneyStringSchema } from './shipment';
 
 /**
@@ -36,6 +36,10 @@ export const companyPaidExpenseSchema = auditFieldsSchema.extend({
   description: z.string().nullable(),
   amount: z.string(),
   spentAt: z.string(),
+  payeeId: z.string().nullable(),
+  payeeName: z.string().nullable(),
+  /** The rule that applied to THIS row, frozen when it was written. */
+  payeeRequired: z.boolean(),
   receiptId: z.string().nullable(),
   receiptFileName: z.string().nullable(),
 });
@@ -49,12 +53,17 @@ export const createCompanyPaidExpenseSchema = z.object({
    * billable expense is primarily a thing to invoice, and its category is a
    * convenience.
    */
-  expenseCategoryId: cuidSchema,
+  expenseCategoryId: idSchema,
   description: optionalText(200),
   amount: positiveMoneyStringSchema,
   /** When the money actually left, which is not when somebody typed it in. */
   spentAt: isoDateTimeSchema,
-  receiptId: cuidSchema.nullish().transform((value) => value ?? null),
+  /**
+   * Who the company paid. Optional here, required by the expense category —
+   * see the note on `createLiquidationLineSchema.payeeId`.
+   */
+  payeeId: idSchema.nullish().transform((value) => value ?? null),
+  receiptId: idSchema.nullish().transform((value) => value ?? null),
 });
 
 export type CreateCompanyPaidExpenseInput = z.infer<typeof createCompanyPaidExpenseSchema>;

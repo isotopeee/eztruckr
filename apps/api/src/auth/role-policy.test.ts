@@ -4,9 +4,11 @@ import {
   ANY_SIGNED_IN_ROLE,
   CAN_ADMINISTER,
   CAN_DECIDE_LIQUIDATION,
+  CAN_READ_LIQUIDATION_REFERENCE_DATA,
   CAN_READ_MASTER_DATA,
   CAN_READ_SHIPMENTS,
   CAN_SUBMIT_LIQUIDATION,
+  CAN_WRITE_PAYEES,
   CAN_TRANSITION_SHIPMENTS,
   CAN_WRITE_FINANCIAL_MASTER_DATA,
   CAN_WRITE_OPERATIONAL_MASTER_DATA,
@@ -79,6 +81,55 @@ describe('a dispatch manager dispatches trips and accounts for their own float',
     expect(may(CAN_WRITE_OPERATIONAL_MASTER_DATA, UserRole.DISPATCH_MANAGER)).toBe(false);
     expect(may(CAN_WRITE_FINANCIAL_MASTER_DATA, UserRole.DISPATCH_MANAGER)).toBe(false);
     expect(may(CAN_ADMINISTER, UserRole.DISPATCH_MANAGER)).toBe(false);
+  });
+});
+
+/**
+ * What a CREW session may reach, pinned as data.
+ *
+ * This moved four times in one session — the base only, then the amount
+ * without its arithmetic, then nothing — and each move was a role list or a
+ * redactor changing with nothing asserting the result. These are the two facts
+ * the whole crew portal rests on, and both are one careless import away from
+ * silently widening.
+ */
+describe('a crew session sees their trips and their cash, and no money figures', () => {
+  /**
+   * `CAN_READ_SHIPMENTS` is what gates `/commissions` and `/crew-pay` now that
+   * `UserRole.CREW` was removed from both routes. If CREW appears in this
+   * bundle, those routes open up again — and they return EVERY crew member's
+   * pay on the trip, not just the caller's, because the filters that used to
+   * narrow them were deleted along with the role.
+   */
+  it('is not in CAN_READ_SHIPMENTS, which is what closes the pay routes', () => {
+    expect(may(CAN_READ_SHIPMENTS, UserRole.CREW)).toBe(false);
+  });
+
+  /**
+   * Crew reach their own trips through an explicit `UserRole.CREW` on the
+   * shipment routes plus `scopeToCaller`, never through this bundle. Adding
+   * CREW here to "fix" a 403 would hand them every trip in the table.
+   */
+  it('reads master data only through the narrow liquidation bundle', () => {
+    expect(may(CAN_READ_MASTER_DATA, UserRole.CREW)).toBe(false);
+    expect(may(CAN_READ_LIQUIDATION_REFERENCE_DATA, UserRole.CREW)).toBe(true);
+
+    // The narrow bundle is the wide one plus CREW, and nothing else — so a role
+    // added to CAN_READ_MASTER_DATA cannot be quietly dropped from this one.
+    expect([...CAN_READ_LIQUIDATION_REFERENCE_DATA]).toEqual([
+      ...CAN_READ_MASTER_DATA,
+      UserRole.CREW,
+    ]);
+  });
+
+  it('may still account for the cash it holds', () => {
+    expect(may(CAN_SUBMIT_LIQUIDATION, UserRole.CREW)).toBe(true);
+    // But never decide on it — a custodian approving their own float.
+    expect(may(CAN_DECIDE_LIQUIDATION, UserRole.CREW)).toBe(false);
+  });
+
+  it('may not write payees, only read them', () => {
+    expect(may(CAN_WRITE_PAYEES, UserRole.CREW)).toBe(false);
   });
 });
 

@@ -3,12 +3,15 @@ import {
   CREW_ROLE_CODES,
   CREW_ROLE_LABELS,
   IMPLEMENTED_COMMISSION_METHODS,
+  PAYEE_TYPE_CODES,
+  PAYEE_TYPE_LABELS,
   STAFF_ROLE_CODES,
   STAFF_ROLE_LABELS,
   UserRole,
   type Client,
   type CommissionRule,
   type ExpenseCategory,
+  type Payee,
   type Route,
   type Staff,
   type ThirdParty,
@@ -18,7 +21,7 @@ import type { ResourceSpec } from '@/lib/resource-spec';
 import { formatDate } from '@/lib/format';
 
 /**
- * The seven master data screens, as data.
+ * The eight master data screens, as data.
  *
  * Every label for an enumerated value is imported from `@eztruckr/types`, not
  * written here — the code sets own their labels, and a second copy in the UI
@@ -27,6 +30,14 @@ import { formatDate } from '@/lib/format';
 
 const WRITE_OPERATIONAL = [UserRole.ADMINISTRATOR, UserRole.OPERATIONS] as const;
 const WRITE_FINANCIAL = [UserRole.ADMINISTRATOR, UserRole.ACCOUNTING] as const;
+
+/**
+ * Payees are neither, so they get both. Mirrors `CAN_WRITE_PAYEES` in the API,
+ * which is the constant that actually enforces it — this list only decides
+ * whether the button is drawn. Operations add a vendor mid-task while typing a
+ * liquidation; accounting own the address and TIN a voucher is built from.
+ */
+const WRITE_PAYEES = [UserRole.ADMINISTRATOR, UserRole.OPERATIONS, UserRole.ACCOUNTING] as const;
 
 /** Renders a nullable cell without printing "null" at anyone. */
 const text = (value: string | null | undefined) => value ?? '—';
@@ -108,21 +119,20 @@ export const staffResource: ResourceSpec<Staff> = {
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
-      key: 'staffCode',
-      label: 'Code',
-      render: (row) => <span className="font-medium">{row.staffCode}</span>,
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{`${row.lastName}, ${row.firstName}`}</span>,
     },
-    { key: 'name', label: 'Name', render: (row) => `${row.lastName}, ${row.firstName}` },
     {
       key: 'eligibleRoles',
       label: 'Eligible as',
       render: (row) => row.eligibleRoles.map((role) => STAFF_ROLE_LABELS[role]).join(', ') || '—',
     },
     { key: 'phone', label: 'Phone', render: (row) => text(row.phone) },
+    { key: 'email', label: 'Email', render: (row) => text(row.email) },
     { key: 'licenseNumber', label: 'Licence', render: (row) => text(row.licenseNumber) },
   ],
   fields: [
-    { name: 'staffCode', label: 'Staff code', type: 'text', required: true },
     { name: 'firstName', label: 'First name', type: 'text', required: true },
     { name: 'lastName', label: 'Last name', type: 'text', required: true },
     {
@@ -139,18 +149,32 @@ export const staffResource: ResourceSpec<Staff> = {
       help: 'Anyone eligible to drive needs a licence number on file. A dispatch manager may hold a trip’s cash without being assigned to it, and earns no commission.',
     },
     { name: 'phone', label: 'Phone', type: 'text' },
+    {
+      name: 'email',
+      label: 'Email',
+      type: 'email',
+      help: 'Contact address for this person. Separate from their login — changing it here does not move an account.',
+    },
     { name: 'address', label: 'Address', type: 'text' },
     { name: 'dateHired', label: 'Date hired', type: 'date' },
     { name: 'licenseNumber', label: 'Licence number', type: 'text' },
-    { name: 'licenseExpiry', label: 'Licence expiry', type: 'date' },
+    {
+      name: 'licenseExpiry',
+      label: 'Licence expiry',
+      type: 'date',
+      // Not marked `required`: it is required only for the driver-eligible,
+      // and the form has no way to express "required when another field says
+      // so". The API names whichever half is missing.
+      help: 'Required for anyone eligible to drive. A past date is accepted here — it is the driver slot that refuses to dispatch against a lapsed licence.',
+    },
     { name: 'isActive', label: 'Offered for new assignments', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    staffCode: row.staffCode,
     firstName: row.firstName,
     lastName: row.lastName,
     eligibleRoles: row.eligibleRoles.map(String),
     phone: row.phone,
+    email: row.email,
     address: row.address,
     dateHired: dateInput(row.dateHired),
     licenseNumber: row.licenseNumber,
@@ -168,17 +192,15 @@ export const clientResource: ResourceSpec<Client> = {
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
-      key: 'code',
-      label: 'Code',
-      render: (row) => <span className="font-medium">{row.code}</span>,
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{row.name}</span>,
     },
-    { key: 'name', label: 'Name', render: (row) => row.name },
     { key: 'contactName', label: 'Contact', render: (row) => text(row.contactName) },
     { key: 'phone', label: 'Phone', render: (row) => text(row.phone) },
     { key: 'tin', label: 'TIN', render: (row) => text(row.tin) },
   ],
   fields: [
-    { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'CLT-SMT' },
     { name: 'name', label: 'Name', type: 'text', required: true },
     { name: 'contactName', label: 'Contact person', type: 'text' },
     { name: 'phone', label: 'Phone', type: 'text' },
@@ -193,7 +215,6 @@ export const clientResource: ResourceSpec<Client> = {
     { name: 'isActive', label: 'Offered for new shipments', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    code: row.code,
     name: row.name,
     contactName: row.contactName,
     phone: row.phone,
@@ -213,11 +234,10 @@ export const thirdPartyResource: ResourceSpec<ThirdParty> = {
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
-      key: 'code',
-      label: 'Code',
-      render: (row) => <span className="font-medium">{row.code}</span>,
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{row.name}</span>,
     },
-    { key: 'name', label: 'Name', render: (row) => row.name },
     { key: 'contactName', label: 'Contact', render: (row) => text(row.contactName) },
     {
       key: 'defaultCommissionRate',
@@ -230,7 +250,6 @@ export const thirdPartyResource: ResourceSpec<ThirdParty> = {
     },
   ],
   fields: [
-    { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'TPB-001' },
     { name: 'name', label: 'Name', type: 'text', required: true },
     { name: 'contactName', label: 'Contact person', type: 'text' },
     { name: 'phone', label: 'Phone', type: 'text' },
@@ -245,7 +264,6 @@ export const thirdPartyResource: ResourceSpec<ThirdParty> = {
     { name: 'isActive', label: 'Offered for new shipments', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    code: row.code,
     name: row.name,
     contactName: row.contactName,
     phone: row.phone,
@@ -253,6 +271,73 @@ export const thirdPartyResource: ResourceSpec<ThirdParty> = {
     defaultCommissionRate: row.defaultCommissionRate,
     isActive: row.isActive,
   }),
+};
+
+/**
+ * Sits next to `thirdPartyResource` because the two are constantly confused.
+ * A third party BRINGS freight and its cut is netted off the gross rate; a
+ * payee RECEIVES money the company disburses. The descriptions say so on
+ * screen, since that is where somebody about to pick the wrong one is looking.
+ */
+export const payeeResource: ResourceSpec<Payee> = {
+  key: 'payees',
+  apiPath: '/payees',
+  title: 'Payees',
+  singular: 'Payee',
+  description:
+    'Outside suppliers money is disbursed to — fuel stations, ferry operators, repair shops. Not brokers, whose cut comes off the gross rate instead.',
+  writeRoles: WRITE_PAYEES,
+  columns: [
+    {
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{row.name}</span>,
+    },
+    {
+      key: 'payeeType',
+      label: 'Type',
+      render: (row) => PAYEE_TYPE_LABELS[row.payeeType],
+    },
+    { key: 'contactName', label: 'Contact', render: (row) => text(row.contactName) },
+    { key: 'tin', label: 'TIN', render: (row) => text(row.tin) },
+  ],
+  fields: [
+    {
+      name: 'payeeType',
+      label: 'Type',
+      type: 'select',
+      required: true,
+      options: PAYEE_TYPE_CODES.map((code) => ({
+        value: code,
+        label: PAYEE_TYPE_LABELS[code],
+      })),
+      help: 'A company and an individual produce different vouchers, and the name alone does not tell them apart.',
+    },
+    { name: 'name', label: 'Name', type: 'text', required: true },
+    {
+      name: 'contactName',
+      label: 'Contact person',
+      type: 'text',
+      help: 'For a company. An individual payee is their own contact.',
+    },
+    { name: 'phone', label: 'Phone', type: 'text' },
+    { name: 'email', label: 'Email', type: 'email' },
+    { name: 'address', label: 'Address', type: 'text' },
+    { name: 'tin', label: 'TIN', type: 'text', help: 'As it should print on a voucher.' },
+    { name: 'isActive', label: 'Offered on new expenses', type: 'boolean' },
+  ],
+  toFormValues: (row) => ({
+    payeeType: row.payeeType,
+    name: row.name,
+    contactName: row.contactName,
+    phone: row.phone,
+    email: row.email,
+    address: row.address,
+    tin: row.tin,
+    isActive: row.isActive,
+  }),
+  removalNote:
+    'A payee named on any liquidation line or company-paid expense is deactivated rather than deleted, so past vouchers keep reading correctly.',
 };
 
 export const routeResource: ResourceSpec<Route> = {
@@ -264,11 +349,10 @@ export const routeResource: ResourceSpec<Route> = {
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
-      key: 'code',
-      label: 'Code',
-      render: (row) => <span className="font-medium">{row.code}</span>,
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{row.name}</span>,
     },
-    { key: 'name', label: 'Name', render: (row) => row.name },
     { key: 'lane', label: 'Lane', render: (row) => `${row.origin} → ${row.destination}` },
     {
       key: 'distanceKm',
@@ -290,7 +374,6 @@ export const routeResource: ResourceSpec<Route> = {
     },
   ],
   fields: [
-    { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'RTE-MNL-BTG' },
     { name: 'name', label: 'Name', type: 'text', required: true },
     { name: 'origin', label: 'Origin', type: 'text', required: true },
     { name: 'destination', label: 'Destination', type: 'text', required: true },
@@ -310,7 +393,6 @@ export const routeResource: ResourceSpec<Route> = {
     { name: 'isActive', label: 'Offered for new shipments', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    code: row.code,
     name: row.name,
     origin: row.origin,
     destination: row.destination,
@@ -332,15 +414,19 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
     'A category nothing has been filed under is deleted outright. Once a liquidation line or billable expense uses it, it is deactivated instead so those records keep reading correctly.',
   columns: [
     {
-      key: 'code',
-      label: 'Code',
-      render: (row) => <span className="font-medium">{row.code}</span>,
+      key: 'name',
+      label: 'Name',
+      render: (row) => <span className="font-medium">{row.name}</span>,
     },
-    { key: 'name', label: 'Name', render: (row) => row.name },
     {
       key: 'requiresReceipt',
       label: 'Receipt required',
       render: (row) => (row.requiresReceipt ? 'Yes' : 'No'),
+    },
+    {
+      key: 'requiresPayee',
+      label: 'Payee required',
+      render: (row) => (row.requiresPayee ? 'Yes' : 'No'),
     },
     {
       key: 'defaultCommissionable',
@@ -350,9 +436,19 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
     { key: 'sortOrder', label: 'Order', numeric: true, render: (row) => row.sortOrder },
   ],
   fields: [
-    { name: 'code', label: 'Code', type: 'text', required: true, placeholder: 'FUEL' },
     { name: 'name', label: 'Name', type: 'text', required: true },
-    { name: 'requiresReceipt', label: 'Requires a receipt', type: 'boolean' },
+    {
+      name: 'requiresReceipt',
+      label: 'Requires a receipt',
+      type: 'boolean',
+      help: 'Stated, not enforced — the approver judges a lost ferry ticket.',
+    },
+    {
+      name: 'requiresPayee',
+      label: 'Requires a payee',
+      type: 'boolean',
+      help: 'Enforced, unlike the receipt rule: an expense in this category cannot be saved without naming who was paid. Turn it off for tolls and roadside meals. Applies to new expenses only — those already recorded keep the rule they were saved under.',
+    },
     {
       name: 'defaultCommissionable',
       label: 'Commissionable by default',
@@ -368,9 +464,9 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
     { name: 'isActive', label: 'Offered on new liquidations', type: 'boolean' },
   ],
   toFormValues: (row) => ({
-    code: row.code,
     name: row.name,
     requiresReceipt: row.requiresReceipt,
+    requiresPayee: row.requiresPayee,
     defaultCommissionable: row.defaultCommissionable,
     sortOrder: row.sortOrder,
     isActive: row.isActive,

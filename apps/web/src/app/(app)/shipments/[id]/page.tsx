@@ -73,7 +73,11 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
               they spent it on. Both are theirs to see and one is theirs to
               fill in, so neither is hidden from a crew session. */}
           <LiquidationCard shipment={data} />
-          <CommissionsCard shipment={data} />
+          {/* Office-only. A crew member's pay is not shown in the portal at
+              all — see the crew-visibility table in HANDOFF.md, including what
+              that costs them. The API refuses the routes behind this card too,
+              so removing it is presentation following the control. */}
+          {isCrew ? null : <CommissionsCard shipment={data} />}
         </div>
         <div className="space-y-6">
           {/* A crew member sees their own pay and the trip, not the levers

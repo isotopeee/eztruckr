@@ -1,4 +1,4 @@
-import { createPrismaClient, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
+import { createPrismaClient, withActor, type ExtendedPrismaClient, testUuid } from '@eztruckr/db';
 import {
   AdjustmentDirection,
   CrewRole,
@@ -38,8 +38,8 @@ let helperId: string;
 let strangerId: string;
 
 /** Not `itest-`: see the note in liquidation-lifecycle.test.ts. */
-const PREFIX = 'adjtest-';
-const id = (name: string) => `${PREFIX}${name}`;
+const PREFIX = '00000006-';
+const id = (name: string) => testUuid('00000006', name);
 
 const SHIPMENT_ID = id('shipment');
 
@@ -58,7 +58,7 @@ async function cleanup(): Promise<void> {
       `DELETE FROM "liquidation" WHERE "shipmentId" = '${SHIPMENT_ID}'`,
     );
     await prisma.$executeRawUnsafe(`DELETE FROM "shipment" WHERE id = '${SHIPMENT_ID}'`);
-    await prisma.$executeRawUnsafe(`DELETE FROM "client" WHERE id LIKE '${PREFIX}%'`);
+    await prisma.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
   } finally {
     await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
   }
@@ -76,9 +76,15 @@ beforeAll(async () => {
   }
 
   const admin = await prisma.user.findFirst({ where: { email: 'admin@eztruckr.ph' } });
-  const driver = await prisma.staff.findFirst({ where: { staffCode: 'CRW-001' } });
-  const helper = await prisma.staff.findFirst({ where: { staffCode: 'CRW-003' } });
-  const stranger = await prisma.staff.findFirst({ where: { staffCode: 'CRW-004' } });
+  const driver = await prisma.staff.findFirst({
+    where: { firstName: 'Ricardo', lastName: 'Dela Cruz' },
+  });
+  const helper = await prisma.staff.findFirst({
+    where: { firstName: 'Joel', lastName: 'Bautista' },
+  });
+  const stranger = await prisma.staff.findFirst({
+    where: { firstName: 'Michael', lastName: 'Santos' },
+  });
 
   if (!admin || !driver || !helper || !stranger) {
     throw new Error('Seed the database first: pnpm db:seed');
@@ -106,7 +112,7 @@ beforeEach(async () => {
 
   await withActor({ userId: adminId }, async () => {
     await prisma.client.create({
-      data: { id: id('client'), code: id('CLT').toUpperCase(), name: 'Adjustment Test Client' },
+      data: { id: id('client'), name: 'Adjustment Test Client' },
     });
 
     await prisma.shipment.create({

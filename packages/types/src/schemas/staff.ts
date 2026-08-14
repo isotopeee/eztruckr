@@ -1,12 +1,6 @@
 import { z } from 'zod';
 import { staffRoleSchema, StaffRole } from '../codes/staff-role';
-import {
-  auditFieldsSchema,
-  isoDateTimeSchema,
-  naturalCodeSchema,
-  optionalText,
-  requiredText,
-} from './common';
+import { auditFieldsSchema, isoDateTimeSchema, optionalText, requiredText } from './common';
 
 /**
  * Everyone who works here — drivers, helpers, and the office staff who handle
@@ -23,10 +17,10 @@ import {
  */
 export const staffSchema = auditFieldsSchema.extend({
   id: z.string(),
-  staffCode: z.string(),
   firstName: z.string(),
   lastName: z.string(),
   phone: z.string().nullable(),
+  email: z.string().nullable(),
   address: z.string().nullable(),
   dateHired: z.string().nullable(),
   isActive: z.boolean(),
@@ -45,10 +39,19 @@ export type Staff = z.infer<typeof staffSchema>;
  * the note on `updateStaffSchema`.
  */
 const staffFields = z.object({
-  staffCode: naturalCodeSchema,
   firstName: requiredText(80),
   lastName: requiredText(80),
   phone: optionalText(40),
+  /**
+   * Contact address, not a login. Nullish before the email check, so "clear
+   * this field" stays expressible — the same shape `Client` and `Payee` use.
+   */
+  email: z
+    .string()
+    .trim()
+    .email()
+    .nullish()
+    .transform((value) => value ?? null),
   address: optionalText(300),
   dateHired: isoDateTimeSchema.nullish().transform((value) => value ?? null),
   // Deduplicated so a caller sending [DRIVER, DRIVER] cannot make the array
@@ -62,24 +65,74 @@ const staffFields = z.object({
   isActive: z.boolean().default(true),
 });
 
+/** The licence halves, both required of anyone eligible to drive. */
+export const LICENCE_FIELDS = ['licenseNumber', 'licenseExpiry'] as const;
+
+export type LicenceField = (typeof LICENCE_FIELDS)[number];
+
+export const LICENCE_REQUIRED_MESSAGES: Record<LicenceField, string> = {
+  licenseNumber: 'a licence number is required for anyone eligible to drive',
+  licenseExpiry: 'a licence expiry date is required for anyone eligible to drive',
+};
+
 /**
- * True when the record as a whole is internally consistent.
+ * Which half of the licence a driver-eligible record is missing, or null when
+ * it is complete.
+ *
+ * BOTH HALVES, not just the number. A record with a number and no expiry looks
+ * filled in on the staff screen and is then refused at the moment somebody is
+ * put in a driver slot — which is a worse place to find out, because by then a
+ * trip is being dispatched and the fix is on another screen. Requiring the pair
+ * here moves the complaint to where the data is entered.
+ *
+ * RETURNS THE FIELD rather than a boolean, so the error can name the one that
+ * is actually missing. Pointing at `licenseNumber` when the expiry is blank
+ * sends somebody to look at a value that is already correct.
  *
  * Tests `includes(DRIVER)` rather than "is not office staff", so a dispatch
  * manager needs no licence and somebody eligible for both still does.
+ *
+ * DELIBERATELY DOES NOT CHECK THE DATE. An expired licence is a fact worth
+ * recording — the office knows it lapsed and wants it on file — and it is the
+ * DRIVER SLOT that refuses to dispatch against one, in `assertMayDrive`.
+ * Refusing it here would leave nowhere to record the truth.
  */
+export function missingLicenceField(value: {
+  eligibleRoles: readonly number[];
+  licenseNumber: string | null;
+  licenseExpiry: string | null;
+}): LicenceField | null {
+  if (!value.eligibleRoles.includes(StaffRole.DRIVER)) {
+    return null;
+  }
+
+  if (!value.licenseNumber) return 'licenseNumber';
+  if (!value.licenseExpiry) return 'licenseExpiry';
+
+  return null;
+}
+
+/** True when the record as a whole is internally consistent. */
 export function hasLicenceIfDriver(value: {
   eligibleRoles: readonly number[];
   licenseNumber: string | null;
+  licenseExpiry: string | null;
 }): boolean {
-  return !value.eligibleRoles.includes(StaffRole.DRIVER) || !!value.licenseNumber;
+  return missingLicenceField(value) === null;
 }
 
-export const LICENCE_REQUIRED_MESSAGE = 'a licence number is required for anyone eligible to drive';
+export const createStaffSchema = staffFields.superRefine((value, ctx) => {
+  const missing = missingLicenceField(value);
 
-export const createStaffSchema = staffFields.refine(hasLicenceIfDriver, {
-  message: LICENCE_REQUIRED_MESSAGE,
-  path: ['licenseNumber'],
+  // `superRefine` rather than `refine`, so the issue lands on whichever half is
+  // absent instead of always on `licenseNumber`.
+  if (missing) {
+    ctx.addIssue({
+      code: 'custom',
+      message: LICENCE_REQUIRED_MESSAGES[missing],
+      path: [missing],
+    });
+  }
 });
 
 export type CreateStaffInput = z.infer<typeof createStaffSchema>;

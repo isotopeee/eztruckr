@@ -28,7 +28,6 @@ export class RoutesService {
       ...(query.search
         ? {
             OR: [
-              { code: { contains: query.search, mode: 'insensitive' } },
               { name: { contains: query.search, mode: 'insensitive' } },
               { origin: { contains: query.search, mode: 'insensitive' } },
               { destination: { contains: query.search, mode: 'insensitive' } },
@@ -92,7 +91,6 @@ export class RoutesService {
 function toRoute(row: RouteRow): Route {
   return {
     id: row.id,
-    code: row.code,
     name: row.name,
     origin: row.origin,
     destination: row.destination,

@@ -47,6 +47,7 @@ import {
 import { shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { useTripCashHolders } from './trip-cash-holders';
+import { PayeeField } from './payee-field';
 import { ReceiptField } from './receipt-field';
 
 /**
@@ -472,11 +473,14 @@ function Lines({
   canEdit: boolean;
   onChanged: () => void;
 }) {
+  // No `useCurrentUser()` here any more: this form asked for the role solely to
+  // decide whether to show Paid To, and it no longer varies by who is looking.
   const [draft, setDraft] = useState({
     expenseCategoryId: '',
     description: '',
     amount: '',
     spentAt: new Date().toISOString().slice(0, 10),
+    payeeId: '',
     receiptId: null as string | null,
     receiptFileName: null as string | null,
   });
@@ -487,6 +491,28 @@ function Lines({
     enabled: canEdit,
   });
 
+  // The chosen category decides whether a payee is required. Unknown until one
+  // is picked, and false rather than true then.
+  const payeeRequired =
+    categories.data?.items.find((category) => category.id === draft.expenseCategoryId)
+      ?.requiresPayee ?? false;
+
+  /**
+   * PAID TO IS ALWAYS SHOWN, to everyone. Only whether it is REQUIRED varies,
+   * and `ExpenseCategory.requiresPayee` is the only thing that varies it.
+   *
+   * It used to be hidden from crew on optional categories, on the reasoning
+   * that a driver filing a toll has no vendor to name. That produced a field
+   * which appeared and disappeared as the category changed, and which the
+   * office saw and the crew did not — two people looking at the same form and
+   * disagreeing about what it contains. The company-expenses card never did
+   * this, so the two disbursement forms behaved differently for no reason a
+   * user could infer.
+   *
+   * The original concern is handled by the field itself rather than by hiding
+   * it: when optional, `PayeeField` offers "Not recorded" and marks nothing
+   * required, so there is an honest answer for the toll booth.
+   */
   const reportFailure = (error: unknown) =>
     toast.error('Could not save that line', {
       description: error instanceof ApiError ? error.displayMessage : String(error),
@@ -501,9 +527,18 @@ function Lines({
         // A date-only input means midnight local; sent as an instant because
         // storage is UTC and the display layer renders Asia/Manila.
         spentAt: new Date(draft.spentAt).toISOString(),
+        // '' is "nothing chosen"; the wire wants null. Read straight off the
+        // draft now that the field is always visible — the gate that used to
+        // sit here existed because the draft keeps the last payee on purpose,
+        // so switching from a fuel line to a toll would have submitted the
+        // filling station from a field the person could no longer see. It is
+        // on screen now, so a stale value is theirs to notice and clear.
+        payeeId: draft.payeeId || null,
         receiptId: draft.receiptId,
       }),
     onSuccess: () => {
+      // The payee is deliberately kept: several lines against one station on
+      // the same stop is the common case, and re-picking invites a wrong one.
       setDraft((current) => ({
         ...current,
         description: '',
@@ -537,6 +572,7 @@ function Lines({
                 </p>
                 <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
                   <span>{formatDate(line.spentAt)}</span>
+                  {line.payeeName ? <span>· {line.payeeName}</span> : null}
                   {line.receiptId ? (
                     <a
                       className="underline underline-offset-4"
@@ -652,6 +688,13 @@ function Lines({
             </div>
           </div>
 
+          <PayeeField
+            id={`line-payee-${liquidation.id}`}
+            value={draft.payeeId}
+            required={payeeRequired}
+            onChange={(payeeId) => setDraft((current) => ({ ...current, payeeId }))}
+          />
+
           <ReceiptField
             value={draft.receiptId}
             fileName={draft.receiptFileName}
@@ -661,7 +704,13 @@ function Lines({
             }
           />
 
-          <Button type="submit" size="sm" disabled={add.isPending || !draft.expenseCategoryId}>
+          <Button
+            type="submit"
+            size="sm"
+            disabled={
+              add.isPending || !draft.expenseCategoryId || (payeeRequired && !draft.payeeId)
+            }
+          >
             {add.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             Add expense
           </Button>
