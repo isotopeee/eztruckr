@@ -2,9 +2,8 @@
 
 Trucking operations system. Turborepo monorepo, Philippine haulage domain (₱, Asia/Manila).
 
-**Last commit: `1cb8dd8`**, on branch `phase-7-payees-uuid-crew-portal` — not merged to `main`.
-**All of phase 8 below is uncommitted.** `pnpm run check` green (99 types + 215 api + 60 db),
-no schema drift.
+**Last commit: `565979a`**, merged to `main`. `pnpm run check` green (99 types + 215 api +
+60 db), no schema drift.
 
 **There are no default logins.** Development starts empty and is set up at `/setup`.
 
@@ -616,7 +615,7 @@ verification caught what the type change broke — the `lastLoginAt` raw update 
 guards silently stopped resolving), and `audit_log.entityId` stays **text** because it is
 polymorphic, so comparing it to an id needs a cast.
 
-**8**, uncommitted — everything that follows from "nobody's password should be in the repo":
+**8** `565979a` — everything that follows from "nobody's password should be in the repo":
 
 - **Invitations.** `POST /users` provisions an account with no usable password and emails a
   single-use link. New table `staff_invitation`, `MailService` on Resend over `fetch`, a public
