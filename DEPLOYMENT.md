@@ -84,7 +84,7 @@ DigitalOcean → **Create → Droplet**
 | Setting        | Value                                                 |
 | -------------- | ----------------------------------------------------- |
 | Region         | **Singapore (SGP1)** — closest to Manila              |
-| Image          | **Ubuntu 24.04 LTS x64**                              |
+| Image          | **Ubuntu 26.04 LTS x64**                              |
 | Size           | **Basic → Regular → 2 vCPU / 4 GB / 80 GB** (~$24/mo) |
 | Authentication | **SSH key** — upload your public key                  |
 | Hostname       | `eztruckr-prod`                                       |
@@ -93,6 +93,22 @@ DigitalOcean → **Create → Droplet**
 _can_ work — images are built in GitHub Actions, never on the droplet, so the memory-hungry part
 never happens here — but it leaves nothing for a traffic spike and a backup at the same time.
 `provision.sh` adds 2 GB of swap either way, as insurance rather than as memory.
+
+**On the release.** 24.04 works identically and is supported to 2029, so either is fine — pick
+26.04 only for the longer runway. The risk in a new LTS is unusually small here because the
+droplet runs nothing but Docker: Postgres 18, Node 22 and Caddy 2 all arrive as container images,
+and the host supplies only a kernel, Docker, `ufw` and `sshd`.
+
+The one thing that would actually break is Docker's apt repository, which `provision.sh` derives
+from the release codename — a new Ubuntu with no published repo fails at `apt-get update`.
+Confirmed present for 26.04 (`resolute`), carrying `docker-ce` 29.7.2, `containerd.io` 2.3.3 and
+`docker-compose-plugin` 5.4.0. Check it yourself before trusting any later release:
+
+```bash
+curl -s https://download.docker.com/linux/ubuntu/dists/ | grep -o 'href="[a-z]*/"'
+```
+
+If DigitalOcean has not published the image yet, take 24.04 — no file needs changing either way.
 
 Note the droplet's **public IPv4**; every step below calls it `<DROPLET_IP>`.
 

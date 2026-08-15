@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 #
 # EZTruckr — one-time droplet bootstrap. Run ONCE as root on a fresh Ubuntu
-# 24.04 droplet, then never again (though running it twice is harmless — every
-# step below checks before it acts).
+# 26.04 LTS droplet (24.04 works identically), then never again — though
+# running it twice is harmless, as every step below checks before it acts.
+#
+# NOTHING HERE IS PINNED TO A RELEASE. The only version-sensitive line is the
+# Docker apt source, which is built from $VERSION_CODENAME, so it follows
+# whatever the droplet is. That is also the step most likely to break on a
+# brand-new Ubuntu: Docker has historically taken months to publish a repo for
+# a fresh release, and until it does `apt-get update` fails outright. Verified
+# present for 26.04 (`resolute`) before recommending it.
 #
 #   ssh root@<droplet-ip> 'bash -s' < infra/provision.sh "ssh-ed25519 AAAA... deploy"
 #
