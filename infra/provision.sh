@@ -25,7 +25,20 @@ set -euo pipefail
 
 DEPLOY_USER=deploy
 APP_DIR=/opt/eztruckr
-DEPLOY_PUBKEY="${1:-}"
+
+# "$*", NOT "$1". An SSH public key is three words — type, base64, comment —
+# and `ssh host 'bash -s' "$(cat key.pub)"` does not deliver it as one
+# argument: ssh joins everything after the host into a single command string,
+# which the REMOTE shell then re-splits on whitespace. The script was handed
+# `ssh-ed25519` as $1 and the rest as $2 and $3, wrote that fragment into
+# authorized_keys, and every subsequent login was refused — while the file
+# looked non-empty enough to pass the hardening guard below, so password auth
+# was disabled on the strength of a key that could never work.
+#
+# Joining the positional parameters reassembles the key whatever the caller
+# quoted, and `validate` immediately below refuses anything that still is not
+# a key rather than writing it and hoping.
+DEPLOY_PUBKEY="${*:-}"
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
@@ -111,8 +124,40 @@ AUTH_KEYS="/home/$DEPLOY_USER/.ssh/authorized_keys"
 touch "$AUTH_KEYS"
 
 if [[ -n "$DEPLOY_PUBKEY" ]]; then
+	# REFUSE ANYTHING THAT IS NOT A KEY. Writing a malformed line is worse than
+	# writing nothing: sshd silently skips it, the file is non-empty so the
+	# hardening step below happily turns off password authentication, and the
+	# failure surfaces later as a bare "Permission denied (publickey)" with no
+	# indication that the key was mangled on the way in.
+	if ! printf '%s\n' "$DEPLOY_PUBKEY" | ssh-keygen -l -f - >/dev/null 2>&1; then
+		cat >&2 <<EOF
+
+ERROR: that is not a valid SSH public key.
+
+  got: ${DEPLOY_PUBKEY}
+
+An SSH public key is three words, and \`ssh host 'bash -s' < script "\$(cat
+key.pub)"\` splits it apart. Quote it inside the remote command instead:
+
+  ssh root@<ip> "bash -s -- '\$(cat ~/.ssh/mykey.pub)'" < infra/provision.sh
+
+Nothing has been changed. Fix the invocation and run this again.
+EOF
+		exit 1
+	fi
+
+	# Drop any previously-written malformed lines before adding the good one, so
+	# re-running this after a bad invocation leaves a clean file.
+	if [[ -s "$AUTH_KEYS" ]]; then
+		while IFS= read -r line; do
+			[[ -z "$line" ]] && continue
+			printf '%s\n' "$line" | ssh-keygen -l -f - >/dev/null 2>&1 && printf '%s\n' "$line"
+		done <"$AUTH_KEYS" >"${AUTH_KEYS}.clean"
+		mv "${AUTH_KEYS}.clean" "$AUTH_KEYS"
+	fi
+
 	grep -qxF "$DEPLOY_PUBKEY" "$AUTH_KEYS" || echo "$DEPLOY_PUBKEY" >>"$AUTH_KEYS"
-	echo "Deploy key installed."
+	echo "Deploy key installed and verified."
 elif [[ -s /root/.ssh/authorized_keys ]]; then
 	# No key given: fall back to whatever key you are currently logged in with,
 	# so you are never locked out of the account you just created.

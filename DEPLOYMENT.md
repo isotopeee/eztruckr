@@ -130,8 +130,16 @@ ssh-keygen -t ed25519 -f ~/.ssh/eztruckr-optimus-gh-actions-deploy-prod -N "" -C
 Then provision, passing the **public** half:
 
 ```bash
-ssh root@<DROPLET_IP> 'bash -s' < infra/provision.sh "$(cat ~/.ssh/eztruckr-optimus-gh-actions-deploy-prod.pub)"
+ssh root@<DROPLET_IP> "bash -s -- '$(cat ~/.ssh/eztruckr-optimus-gh-actions-deploy-prod.pub)'" < infra/provision.sh
 ```
+
+> **The quoting is load-bearing.** A public key is three words. Passing it _after_ the script
+> instead does not deliver it as one argument: ssh joins everything following the host into a
+> single command string, which the **remote** shell then re-splits — so the script receives
+> `ssh-ed25519` on its own, writes that into `authorized_keys` as a line sshd silently ignores,
+> and the next step fails with a bare permission denied. Quoting it inside the remote command
+> keeps it whole. `provision.sh` now also reassembles the parts and validates the result, so a
+> mis-quoted invocation aborts with an explanation rather than half-configuring the box.
 
 **Before closing that session**, confirm the deploy account works — the script disables password
 authentication, so a broken key means a droplet you cannot reach:
