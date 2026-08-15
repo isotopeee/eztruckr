@@ -259,10 +259,10 @@ Your `MAIL_FROM` is then `EZTruckr <no-reply@mail.optimuslogisticscorp.com>`.
 
 Cloudflare → **R2 → Create bucket**. Make **two**:
 
-| Bucket             | Holds                               |
-| ------------------ | ----------------------------------- |
-| `eztruckr`         | receipt uploads, written by the API |
-| `eztruckr-backups` | nightly `pg_dump`, written by cron  |
+| Bucket                              | Holds                               |
+| ----------------------------------- | ----------------------------------- |
+| `eztruckr-optimus-app-prod`         | receipt uploads, written by the API |
+| `eztruckr-optimus-app-prod-backups` | nightly `pg_dump`, written by cron  |
 
 **Separate on purpose.** The app writes to the first on every upload; backups must not live
 somewhere the application can overwrite them.
@@ -309,10 +309,10 @@ openssl rand -base64 32   # BETTER_AUTH_SECRET
 | `CF_ORIGIN_CERT`       | step 3c, `-----BEGIN CERTIFICATE-----` block                                            |
 | `CF_ORIGIN_KEY`        | step 3c, `-----BEGIN PRIVATE KEY-----` block                                            |
 | `S3_ENDPOINT`          | step 5                                                                                  |
-| `S3_BUCKET`            | `eztruckr`                                                                              |
+| `S3_BUCKET`            | `eztruckr-optimus-app-prod`                                                             |
 | `S3_ACCESS_KEY_ID`     | step 5                                                                                  |
 | `S3_SECRET_ACCESS_KEY` | step 5                                                                                  |
-| `BACKUP_BUCKET`        | `eztruckr-backups`                                                                      |
+| `BACKUP_BUCKET`        | `eztruckr-optimus-app-prod-backups`                                                     |
 | `RESEND_API_KEY`       | step 4                                                                                  |
 | `MAIL_FROM`            | `EZTruckr <no-reply@mail.optimuslogisticscorp.com>`                                     |
 
@@ -493,7 +493,7 @@ this goes through `exec` rather than a connection string.
 
 `infra/backup.sh` runs nightly at **02:10 Manila** (18:10 UTC) from cron, installed and re-asserted
 by every deploy. It takes a `pg_dump --format=custom`, refuses to upload anything implausibly
-small, ships it to `eztruckr-backups`, and prunes past 30 days.
+small, ships it to `eztruckr-optimus-app-prod-backups`, and prunes past 30 days.
 
 Run one by hand:
 
