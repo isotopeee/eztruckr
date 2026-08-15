@@ -1,7 +1,13 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { StaffRole, type Page, type Shipment, type Staff } from '@eztruckr/types';
+import {
+  mayHoldTripCashWithoutASlot,
+  StaffRole,
+  type Page,
+  type Shipment,
+  type Staff,
+} from '@eztruckr/types';
 import { apiFetch } from '@/lib/api-client';
 
 export interface TripPerson {
@@ -26,31 +32,32 @@ export function crewOnTrip(shipment: Shipment): TripPerson[] {
 /**
  * Everyone this trip's cash may be entrusted to.
  *
- * The crew in its slots, plus every active DISPATCH MANAGER — who hold a trip's
- * float without driving or helping, and are therefore not attached to the
- * shipment at all. That is why they are fetched rather than read off the
- * shipment: there is no slot to read them from, by design.
+ * The crew in its slots, plus every active member of staff who may hold a
+ * float WITHOUT one — a dispatcher or a dispatch manager. Neither is attached
+ * to the shipment at all, which is why they are fetched rather than read off
+ * it: there is no slot to read them from, by design.
  *
- * Three separate forms ask this — who may be made custodian of an account, who
- * a release may be handed to, and whose pay a carried balance may be charged to
- * — and the API refuses all three the same way, through
- * `assertMayHoldTripCash`. Built once here so the refusal is something the
- * screens avoid rather than something they discover.
+ * The predicate is `mayHoldTripCashWithoutASlot`, imported rather than written
+ * out, because three separate forms ask this — who may be made custodian of an
+ * account, who a release may be handed to, and whose pay a carried balance may
+ * be charged to — and the API refuses all three through the same function.
+ * Copying the role list here is how the picker would start offering somebody
+ * the server then refuses.
  */
 export function useTripCashHolders(shipment: Shipment): TripPerson[] {
   const staff = useQuery({
-    queryKey: ['staff', 'dispatch-managers'],
+    queryKey: ['staff', 'cash-holders'],
     queryFn: () => apiFetch<Page<Staff>>('/staff?pageSize=200'),
   });
 
   const crew = crewOnTrip(shipment);
   const inASlot = new Set(crew.map((person) => person.id));
 
-  const dispatchManagers = (staff.data?.items ?? [])
+  const fromTheOffice = (staff.data?.items ?? [])
     .filter(
       (person) =>
         person.isActive &&
-        person.eligibleRoles.includes(StaffRole.DISPATCH_MANAGER) &&
+        mayHoldTripCashWithoutASlot(person.eligibleRoles) &&
         // Somebody eligible to drive AND to dispatch, who is driving this trip,
         // is already in the list under the slot they are actually filling.
         !inASlot.has(person.id),
@@ -58,8 +65,10 @@ export function useTripCashHolders(shipment: Shipment): TripPerson[] {
     .map((person) => ({
       id: person.id,
       name: `${person.firstName} ${person.lastName}`,
-      note: 'dispatch manager',
+      note: person.eligibleRoles.includes(StaffRole.DISPATCH_MANAGER)
+        ? 'dispatch manager'
+        : 'dispatcher',
     }));
 
-  return [...crew, ...dispatchManagers];
+  return [...crew, ...fromTheOffice];
 }

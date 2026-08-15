@@ -1,7 +1,8 @@
-import { ConflictException, Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { getActorId, withActor } from '@eztruckr/db';
 import type { InitializeSystemInput, SystemStatus } from '@eztruckr/types';
 import { PrismaService } from '../prisma/prisma.service';
+import { InvitationsService } from '../users/invitations.service';
 import { UsersService } from '../users/users.service';
 
 /** The settings row's own id; there is exactly one. */
@@ -32,6 +33,7 @@ export class SystemService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly users: UsersService,
+    private readonly invitations: InvitationsService,
   ) {}
 
   async status(): Promise<SystemStatus> {
@@ -58,6 +60,8 @@ export class SystemService {
     }
 
     const admin = await this.users.createBootstrapAdministrator(input);
+
+    await this.assertTheInviteWasDelivered(admin.id);
 
     let claimed: boolean;
     try {
@@ -137,6 +141,47 @@ export class SystemService {
     }
 
     return id;
+  }
+
+  /**
+   * THE ONE INVITATION NOBODY CAN RESEND, which is why this is here and why it
+   * is here rather than in `InvitationsService`.
+   *
+   * A failed delivery is normally recorded rather than raised: `issue()` writes
+   * `deliveryError` to the row, the Users screen shows it, and an administrator
+   * clicks resend. That is right for every invitation except this one — the
+   * administrator who would do the resending is the account whose invite just
+   * failed, and there is no password anywhere to fall back on.
+   *
+   * Without this check the endpoint answered 204, stamped `initializedAt`, and
+   * left an installation with an administrator nobody could activate and a
+   * `/setup` that refuses to run twice. The token is stored hashed, so the link
+   * could not be recovered from the database either: the only way out was
+   * `psql`. Verified against a live stack with a deliberately invalid API key.
+   *
+   * Called BEFORE `claimInitialization`, so failing here leaves the flag
+   * unstamped and `/setup` open. The rollback soft-deletes the account, and
+   * `user_email_live_key` is partial (`WHERE "deletedAt" IS NULL`), so the same
+   * address is free for the retry.
+   *
+   * The likely trigger in practice is not a mistyped key but an unverified
+   * sending domain, which Resend refuses with a 403. The message repeats
+   * whatever it said, because that text is the only diagnosis the operator gets.
+   */
+  private async assertTheInviteWasDelivered(userId: string): Promise<void> {
+    const invitation = await this.invitations.latestFor(userId);
+
+    if (invitation?.sentAt) {
+      return;
+    }
+
+    const reason = invitation?.deliveryError ?? 'the invitation was never recorded as sent';
+    await this.undo(userId, `the invitation could not be delivered: ${reason}`);
+
+    throw new ServiceUnavailableException(
+      `The administrator account could not be invited, because the email could not be sent: ${reason}. ` +
+        'Nothing has been set up — fix the mail configuration and try again.',
+    );
   }
 
   private async undo(userId: string, reason: string): Promise<void> {

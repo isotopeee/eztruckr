@@ -50,11 +50,24 @@ export class AllowancesService {
     private readonly liquidations: LiquidationService,
   ) {}
 
-  async summary(shipmentId: string): Promise<AllowanceSummary> {
+  /**
+   * `custodianScope` is the session's, from `accountScopeFor`, and null for the
+   * office. A release says who was handed how much and against whose account,
+   * so an unscoped list tells a helper what the driver was carrying.
+   *
+   * THE TOTAL IS SCOPED WITH IT, and has to be: leaving `totalAdvanced` at the
+   * trip figure while filtering the rows beneath it would hand the same number
+   * back by subtraction, and would also be a lie on its own terms — the crew
+   * portal reads this as "what I was given".
+   */
+  async summary(shipmentId: string, custodianScope: string | null): Promise<AllowanceSummary> {
     const shipment = await this.loadShipment(shipmentId);
 
     const rows = await this.prisma.client.allowance.findMany({
-      where: { shipmentId },
+      where: {
+        shipmentId,
+        ...(custodianScope ? { liquidation: { custodianId: custodianScope } } : {}),
+      },
       include: ALLOWANCE_INCLUDE,
       orderBy: { issuedAt: 'asc' },
     });
@@ -260,7 +273,7 @@ export class AllowancesService {
   /**
    * Cash goes to somebody the trip's money could actually reach.
    *
-   * The crew who worked it, or a dispatch manager holding its float — the same
+   * The crew who worked it, or an office cash holder holding its float — the same
    * rule the custodian and the carried deduction obey, asked once in
    * `assertMayHoldTripCash`. A dispatch manager is a recipient and not only an
    * answerable party, because the float is physically handed to them.
@@ -275,7 +288,7 @@ export class AllowancesService {
       staffId,
       'staffId',
       (shipmentNumber) =>
-        `That person neither worked shipment ${shipmentNumber} nor is a dispatch manager, so cash cannot be released to them against it.`,
+        `That person neither worked shipment ${shipmentNumber} nor holds trip cash from the office, so cash cannot be released to them against it.`,
     );
   }
 

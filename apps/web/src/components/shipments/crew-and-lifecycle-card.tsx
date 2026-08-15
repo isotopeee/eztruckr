@@ -49,7 +49,21 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
   const [helperId, setHelperId] = useState(shipment.helperId ?? UNASSIGNED);
   const [truckId, setTruckId] = useState(shipment.truckId ?? UNASSIGNED);
 
-  const canDispatch = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.OPERATIONS;
+  /**
+   * Mirrors `CAN_WRITE_SHIPMENTS` and `ROLES_BY_TRANSITION` on the API, which
+   * are what actually decide.
+   *
+   * THE DISPATCH MANAGER WAS MISSING FROM BOTH LISTS HERE, and the API had
+   * allowed them all along — so the crew dropdowns, the truck picker and every
+   * transition button were disabled for the one role whose entire job is
+   * dispatch. A UI role list written out by hand next to a server one is how
+   * that happens; these two are now spelled the same way round as the policy
+   * they copy.
+   */
+  const canDispatch =
+    user?.role === UserRole.ADMINISTRATOR ||
+    user?.role === UserRole.OPERATIONS ||
+    user?.role === UserRole.DISPATCH_MANAGER;
   const canClose = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
 
   useEffect(() => {

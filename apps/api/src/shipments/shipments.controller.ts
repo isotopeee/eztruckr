@@ -21,6 +21,7 @@ import {
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
 import {
+  CAN_EDIT_RATE_CHAIN,
   CAN_READ_SHIPMENTS,
   CAN_TRANSITION_SHIPMENTS,
   CAN_WRITE_SHIPMENT_MONEY,
@@ -37,6 +38,7 @@ import {
   SetGasRateOverrideDto,
   ShipmentListQueryDto,
   TransitionShipmentDto,
+  UpdateRateChainDto,
   UpdateShipmentDto,
 } from './shipments.dto';
 import { ShipmentsService } from './shipments.service';
@@ -92,6 +94,23 @@ export class ShipmentsController {
   @Roles(...CAN_WRITE_SHIPMENTS)
   update(@Param('id') id: string, @Body() dto: UpdateShipmentDto): Promise<Shipment> {
     return this.shipments.update(id, dto);
+  }
+
+  /**
+   * Correcting an agreed figure after the trip has left DRAFT.
+   *
+   * A NARROWER ROLE LIST THAN THE BOOKING EDIT ABOVE, which is the whole
+   * reason it is a separate route: `PATCH :id` is every dispatcher's and shuts
+   * at DRAFT, and this one outlives dispatch and belongs to the two roles that
+   * answer for what was sold. Splitting them by route rather than by inspecting
+   * the body keeps the guard able to see the decision — `RolesGuard` cannot
+   * read a payload, so a single endpoint would have to admit the wider list and
+   * re-check the narrower one by hand.
+   */
+  @Patch(':id/rate-chain')
+  @Roles(...CAN_EDIT_RATE_CHAIN)
+  updateRateChain(@Param('id') id: string, @Body() dto: UpdateRateChainDto): Promise<Shipment> {
+    return this.shipments.updateRateChain(id, dto);
   }
 
   @Patch(':id/crew')
@@ -240,6 +259,12 @@ export class ShipmentsController {
    * courtesy and this is a control: the JSON is one devtools tab away, and the
    * same rule already governs the commissions and crew-pay lists on this
    * controller.
+   *
+   * `totalAdvanced` GOES TOO, and it is not a revenue figure — it is the trip's
+   * whole float, every custodian's releases summed. A helper reading it learns
+   * what the driver was carrying, which is the one thing the per-custodian
+   * accounts exist to keep separate. Their own is on the allowance summary,
+   * scoped to the account they answer for.
    */
   private redactRevenueForCrew(shipment: Shipment, user: RequestUser): Shipment {
     if (user.role !== UserRole.CREW) {
@@ -259,6 +284,7 @@ export class ShipmentsController {
       gasRateOverride: null,
       gasRateOverrideReason: null,
       commissionableBase: null,
+      totalAdvanced: '0.00',
     };
   }
 

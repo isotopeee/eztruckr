@@ -40,6 +40,9 @@ async function cleanup(): Promise<void> {
     await prisma.$executeRawUnsafe(
       `DELETE FROM "shipment" WHERE "clientId"::text LIKE '${PREFIX}%'`,
     );
+    // After the shipments, which name it. The rate-chain correction tests
+    // create one, and its id and its name are both unique.
+    await prisma.$executeRawUnsafe(`DELETE FROM "third_party" WHERE id::text LIKE '${PREFIX}%'`);
     await prisma.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
   } finally {
     await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
@@ -243,5 +246,151 @@ describe('the liquidation exists from the booking', () => {
     const count = await prisma.liquidation.count({ where: { shipmentId: shipment.id } });
 
     expect(count).toBe(1);
+  });
+});
+
+/**
+ * Correcting an agreed figure after the trip has left DRAFT.
+ *
+ * A SECOND ENDPOINT, not a relaxed lock, and these tests exist to keep the two
+ * apart. `update` is the booking form and still shuts at DRAFT; `updateRateChain`
+ * is for a rate that was agreed and recorded wrong, and outlives dispatch
+ * because refusing it would leave the trip's revenue knowingly false for ever.
+ * Merging them hands every dispatcher a lever on the commission base of work
+ * already done — the role split is `CAN_EDIT_RATE_CHAIN`, enforced at the route.
+ */
+describe('the rate chain stays correctable after dispatch', () => {
+  const dispatched = async (overrides?: Partial<CreateShipmentInput>) => {
+    const shipment = await book(overrides);
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { status: ShipmentStatus.IN_TRANSIT },
+      }),
+    );
+
+    return shipment;
+  };
+
+  it('re-derives the whole chain from the corrected gross', async () => {
+    if (!available) return;
+
+    const shipment = await dispatched();
+
+    const corrected = await withActor({ userId: adminId }, () =>
+      shipments.updateRateChain(shipment.id, { grossRate: '25000.00' }),
+    );
+
+    expect(corrected.grossRate).toBe('25000');
+    // Nothing is edited in isolation: the net follows the gross, every time.
+    expect(corrected.netRate).toBe('25000');
+  });
+
+  /**
+   * The booking edit is NOT what moved. A dispatcher correcting the cargo
+   * description of a trip on the road still gets the same refusal it always
+   * got, and the two rules stay legible only while this passes.
+   */
+  it('leaves the booking edit shut at DRAFT', async () => {
+    if (!available) return;
+
+    const shipment = await dispatched();
+
+    await expect(
+      withActor({ userId: adminId }, () =>
+        shipments.update(shipment.id, { cargoDescription: 'Rice' }),
+      ),
+    ).rejects.toThrow(/can only be changed while it is a draft/i);
+  });
+
+  /**
+   * A cut belongs to the broker it was agreed with. Carrying the previous
+   * broker's figure across to a new one would be inventing a number, and
+   * silently zeroing it would be inventing a different one — so the correction
+   * refuses until somebody says what was actually agreed.
+   */
+  it('refuses a new broker without the cut agreed with them', async () => {
+    if (!available) return;
+
+    // Awaited INSIDE the scope: the audit extension runs over
+    // AsyncLocalStorage and never sees a `PrismaPromise` awaited outside it,
+    // which surfaces as `third_party_created_by_required` rather than as
+    // anything about actors.
+    const broker = await withActor({ userId: adminId }, async () =>
+      prisma.thirdParty.create({ data: { id: id('broker'), name: 'Rate Chain Broker' } }),
+    );
+
+    const shipment = await dispatched();
+
+    await expect(
+      withActor({ userId: adminId }, () =>
+        shipments.updateRateChain(shipment.id, { thirdPartyId: broker.id }),
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        errors: [{ path: 'tpcRate', message: expect.stringContaining('name the cut agreed with') }],
+      },
+    });
+
+    // Stated, and it lands.
+    const corrected = await withActor({ userId: adminId }, () =>
+      shipments.updateRateChain(shipment.id, { thirdPartyId: broker.id, tpcRate: '0.1000' }),
+    );
+
+    expect(corrected.tpcAmount).toBe('2000');
+    expect(corrected.netRate).toBe('18000');
+    expect(corrected.appliedTpcRate).toBe('0.1');
+  });
+
+  /**
+   * LIQUIDATED means every account was approved against these figures. The
+   * harder bound is not a status at all — a PAID commission stops a correction
+   * through `assertNothingPaid`, the same line that governs a late charge.
+   */
+  it('is refused once the trip is liquidated', async () => {
+    if (!available) return;
+
+    const shipment = await book();
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { status: ShipmentStatus.LIQUIDATED },
+      }),
+    );
+
+    await expect(
+      withActor({ userId: adminId }, () =>
+        shipments.updateRateChain(shipment.id, { grossRate: '25000.00' }),
+      ),
+    ).rejects.toThrow(/part of the settled record/i);
+  });
+
+  /**
+   * THE REASON `rateChainUpdatedAt` EXISTS. Without it a correction after a
+   * computation leaves the stored commissions quietly disagreeing with the base
+   * they were derived from, and nothing on the screen says so — the shipment's
+   * own `updatedAt` cannot stand in, because swapping a truck moves it too.
+   */
+  it('reports the computed commissions stale afterwards', async () => {
+    if (!available) return;
+
+    const shipment = await dispatched();
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { commissionsComputedAt: new Date() },
+      }),
+    );
+
+    expect(await shipments.isComputationStale(shipment.id)).toBe(false);
+
+    await withActor({ userId: adminId }, () =>
+      shipments.updateRateChain(shipment.id, { grossRate: '25000.00' }),
+    );
+
+    expect(await shipments.isComputationStale(shipment.id)).toBe(true);
   });
 });

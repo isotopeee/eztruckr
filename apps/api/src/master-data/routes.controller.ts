@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import type { Page, RemovalResult, Route } from '@eztruckr/types';
 import { Roles } from '../auth/auth.decorators';
-import { CAN_READ_MASTER_DATA, CAN_WRITE_OPERATIONAL_MASTER_DATA } from '../auth/role-policy';
+import { CAN_READ_MASTER_DATA, CAN_WRITE_ROUTES } from '../auth/role-policy';
 import { CreateRouteDto, ListQueryDto, UpdateRouteDto } from './master-data.dto';
 import { RoutesService } from './routes.service';
 
@@ -22,19 +22,19 @@ export class RoutesController {
   }
 
   @Post()
-  @Roles(...CAN_WRITE_OPERATIONAL_MASTER_DATA)
+  @Roles(...CAN_WRITE_ROUTES)
   create(@Body() dto: CreateRouteDto): Promise<Route> {
     return this.routes.create(dto);
   }
 
   @Patch(':id')
-  @Roles(...CAN_WRITE_OPERATIONAL_MASTER_DATA)
+  @Roles(...CAN_WRITE_ROUTES)
   update(@Param('id') id: string, @Body() dto: UpdateRouteDto): Promise<Route> {
     return this.routes.update(id, dto);
   }
 
   @Delete(':id')
-  @Roles(...CAN_WRITE_OPERATIONAL_MASTER_DATA)
+  @Roles(...CAN_WRITE_ROUTES)
   remove(@Param('id') id: string): Promise<RemovalResult> {
     return this.routes.remove(id);
   }

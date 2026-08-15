@@ -39,7 +39,7 @@ export class AllowancesController {
   ): Promise<AllowanceSummary> {
     await this.access.assertMayRead(shipmentId, user);
 
-    return this.allowances.summary(shipmentId);
+    return this.allowances.summary(shipmentId, this.access.accountScopeFor(user));
   }
 
   @Post()

@@ -15,6 +15,7 @@ import {
   UserRole,
   isAllowedLiquidationTransition,
   isCommissionMethod,
+  mayHoldTripCashWithoutASlot,
   liquidationStatusAtLeast,
   isImplementedCommissionMethod,
   IMPLEMENTED_COMMISSION_METHODS,
@@ -92,12 +93,26 @@ describe('code sets are permanent', () => {
   /**
    * The superset CrewRole is carved out of. They share a numbering on purpose —
    * `CrewRole` is derived from this — so a value here is a value there, and 3
-   * is the one that deliberately has no crew meaning.
+   * and 4 are the ones that deliberately have no crew meaning.
    */
   it('pins every StaffRole code', () => {
-    expect(StaffRole).toEqual({ DRIVER: 1, HELPER: 2, DISPATCH_MANAGER: 3 });
+    expect(StaffRole).toEqual({ DRIVER: 1, HELPER: 2, DISPATCH_MANAGER: 3, DISPATCHER: 4 });
     expect(CrewRole.DRIVER).toBe(StaffRole.DRIVER);
     expect(CrewRole.HELPER).toBe(StaffRole.HELPER);
+  });
+
+  /**
+   * The two office roles hold a trip's cash without ever appearing in a slot on
+   * it, which is what `mayHoldTripCashWithoutASlot` exists to say. Pinned here
+   * because widening it is how somebody with no connection to a trip becomes
+   * answerable for its money, and the predicate reads as a formality until you
+   * know that.
+   */
+  it('lets exactly the two office roles hold cash without a crew slot', () => {
+    expect(mayHoldTripCashWithoutASlot([StaffRole.DISPATCH_MANAGER])).toBe(true);
+    expect(mayHoldTripCashWithoutASlot([StaffRole.DISPATCHER])).toBe(true);
+    expect(mayHoldTripCashWithoutASlot([StaffRole.DRIVER, StaffRole.HELPER])).toBe(false);
+    expect(mayHoldTripCashWithoutASlot([])).toBe(false);
   });
 
   it('pins every AdjustmentDirection code', () => {

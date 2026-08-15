@@ -10,15 +10,25 @@ import { defineCodeSet } from './code-set';
  */
 export const UserRole = {
   ADMINISTRATOR: 1,
+  /**
+   * The dispatcher. Books trips, assigns crew, moves them down the road, and
+   * carries a float of their own — so their login names a `staff` row and
+   * their liquidation work is confined to accounts they are custodian of.
+   *
+   * They keep no master data beyond routes: the fleet, the client and broker
+   * directories and the payee list belong to their manager. That is a
+   * deliberate narrowing of what this role used to be.
+   */
   OPERATIONS: 2,
   ACCOUNTING: 3,
   MANAGEMENT: 4,
   CREW: 5,
   /**
-   * Dispatches trips AND holds their cash floats, which is the combination no
-   * other role has. They are liquidation custodians, so they deliberately
-   * cannot approve a liquidation or release cash — either would let them sign
-   * off their own float. See `role-policy.ts`.
+   * The dispatcher's supervisor: everything OPERATIONS may do, plus the master
+   * data a dispatcher may not keep. They hold cash floats too, so they are
+   * liquidation custodians and deliberately cannot approve a liquidation or
+   * release cash — either would let them sign off their own float. See
+   * `role-policy.ts`.
    */
   DISPATCH_MANAGER: 6,
 } as const;
@@ -55,21 +65,50 @@ export function isPortalOnlyRole(role: UserRole): boolean {
  * Roles whose login must name the `staff` row it belongs to.
  *
  * NOT the same list as `PORTAL_ONLY_ROLES`, and the difference is the whole
- * point of having both. A crew login is linked BECAUSE it is scoped — the link
- * is the scope key, and every crew-facing query filters on it. A dispatch
- * manager is linked WITHOUT being scoped: they see every trip like any office
- * user, and the link exists so the system can tell which of the floats out
- * there are theirs to explain.
+ * point of having both. A crew login is linked BECAUSE it is confined to the
+ * portal — the link is the scope key, and every crew-facing query filters on
+ * it. A dispatcher and a dispatch manager see every trip like any office user;
+ * they are linked so the system can tell which of the floats out there are
+ * theirs to explain.
  *
- * Every other role must have none. An office login that resolved to a person
- * would be silently narrowed to that person's records by any query that
- * filtered on it.
+ * EVERY ROLE HERE HOLDS TRIP CASH, and that is the rule the list encodes.
+ * Accounting release it and management read about it, but neither is ever
+ * answerable for a float, so neither resolves to a person. An office login that
+ * resolved to a person without needing to would be silently narrowed to that
+ * person's records by any query that filtered on it.
  */
 export const ROLES_LINKED_TO_STAFF: readonly UserRole[] = [
   UserRole.CREW,
+  UserRole.OPERATIONS,
   UserRole.DISPATCH_MANAGER,
 ];
 
 export function roleRequiresStaffLink(role: UserRole): boolean {
   return ROLES_LINKED_TO_STAFF.includes(role);
+}
+
+/**
+ * Roles whose liquidation work is confined to the accounts they are custodian
+ * of.
+ *
+ * The same membership as `ROLES_LINKED_TO_STAFF` today, and deliberately a
+ * SEPARATE list rather than an alias: the two answer different questions and
+ * have already disagreed once. A dispatch manager was linked without being
+ * confined — they carried a staff row only so their floats could be told apart,
+ * and could edit anybody's account. Merging the lists then would have been
+ * correct by accident and wrong the moment either rule moved.
+ *
+ * The office roles that are absent — ADMINISTRATOR and ACCOUNTING — are the
+ * ones who may act on somebody else's account, because a crew calling figures
+ * in from the road has to reach someone who can type them, and
+ * `LiquidationHistory` names whoever actually did.
+ */
+export const ROLES_CONFINED_TO_THEIR_OWN_FLOAT: readonly UserRole[] = [
+  UserRole.CREW,
+  UserRole.OPERATIONS,
+  UserRole.DISPATCH_MANAGER,
+];
+
+export function isConfinedToTheirOwnFloat(role: UserRole): boolean {
+  return ROLES_CONFINED_TO_THEIR_OWN_FLOAT.includes(role);
 }

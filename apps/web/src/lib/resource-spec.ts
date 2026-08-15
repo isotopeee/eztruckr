@@ -63,6 +63,16 @@ export interface ResourceSpec<TRow> {
   description: string;
   columns: ColumnSpec<TRow>[];
   fields: FieldSpec[];
+  /**
+   * Roles permitted to OPEN the screen at all, from `PAGE_ROLES` in `nav.ts`.
+   *
+   * Separate from `writeRoles` and not implied by it, because the API's read
+   * guard is wider than either: master data has to be readable to be
+   * selectable, so a dispatcher who types /trucks would otherwise get the whole
+   * fleet screen with the buttons greyed out. This is what makes the missing
+   * navigation link mean something.
+   */
+  pageRoles: readonly UserRole[];
   /** Roles permitted to create, edit and remove. Reads are broader. */
   writeRoles: readonly UserRole[];
   /** Turns a row into form state for the edit dialog. */

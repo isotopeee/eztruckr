@@ -6,7 +6,22 @@ services:
     # to it, so the version is a hard requirement rather than a preference —
     # the function does not exist before 18 and the init migration will fail
     # outright on an older server, which is the failure we want.
-    image: postgres:18-alpine
+    #
+    # DEBIAN, NOT ALPINE, and this one is about COLLATION rather than size.
+    # Alpine is musl, whose strcoll is effectively strcmp: the database still
+    # reports `en_US.utf8`, but sorting is raw byte order. Filipino surnames
+    # come out as
+    #   De Leon | Dela Rosa | Zamora | abad | bautista | dela Cruz | Ángeles
+    # on musl, against glibc's
+    #   abad | Ángeles | bautista | dela Cruz | Dela Rosa | De Leon | Zamora
+    # — uppercase before lowercase, accents last, and the three dela/De names
+    # scattered. Every staff, client and payee picker in the app sorts by name.
+    #
+    # It is also load-bearing for correctness, not just presentation: 24 partial
+    # unique indexes are on text columns, and an index is ordered by the
+    # collation that built it. Matching prod exactly is the point — see
+    # DEPLOYMENT.md.
+    image: postgres:18
     container_name: eztruckr-postgres
     restart: unless-stopped
     environment:

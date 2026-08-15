@@ -1,9 +1,10 @@
-import { UserRole } from '@eztruckr/types';
+import { isConfinedToTheirOwnFloat, UserRole } from '@eztruckr/types';
 import { describe, expect, it } from 'vitest';
 import {
   ANY_SIGNED_IN_ROLE,
   CAN_ADMINISTER,
   CAN_DECIDE_LIQUIDATION,
+  CAN_EDIT_RATE_CHAIN,
   CAN_READ_LIQUIDATION_REFERENCE_DATA,
   CAN_READ_MASTER_DATA,
   CAN_READ_SHIPMENTS,
@@ -12,8 +13,10 @@ import {
   CAN_TRANSITION_SHIPMENTS,
   CAN_WRITE_FINANCIAL_MASTER_DATA,
   CAN_WRITE_OPERATIONAL_MASTER_DATA,
+  CAN_WRITE_ROUTES,
   CAN_WRITE_SHIPMENT_MONEY,
   CAN_WRITE_SHIPMENTS,
+  CAN_WRITE_STAFF,
   ROLES_BY_TRANSITION,
 } from './role-policy';
 import { ShipmentStatus } from '@eztruckr/types';
@@ -23,8 +26,8 @@ import { ShipmentStatus } from '@eztruckr/types';
  *
  * These are not tests of the guard — `guards.test.ts` covers that the guard
  * reads a list and fails closed. What is worth pinning here is the CONTENT of
- * two of those lists, because one of them encodes a segregation of duties that
- * is invisible unless you know a dispatch manager holds cash.
+ * these lists, because two of them encode a segregation of duties that is
+ * invisible unless you know both dispatch roles hold cash.
  */
 
 const may = (bundle: readonly UserRole[], role: UserRole) => bundle.includes(role);
@@ -77,10 +80,95 @@ describe('a dispatch manager dispatches trips and accounts for their own float',
     }
   });
 
-  it('may not edit master data, or administer', () => {
-    expect(may(CAN_WRITE_OPERATIONAL_MASTER_DATA, UserRole.DISPATCH_MANAGER)).toBe(false);
+  /**
+   * The dispatcher's supervisor keeps the directories dispatch works against —
+   * the fleet, the clients, the brokers, the payees — which is the whole reason
+   * those lists stopped being operations'. What they still may not touch is the
+   * money classification and the staff table.
+   */
+  it('keeps the operational directories and not the financial ones', () => {
+    expect(may(CAN_WRITE_OPERATIONAL_MASTER_DATA, UserRole.DISPATCH_MANAGER)).toBe(true);
+    expect(may(CAN_WRITE_ROUTES, UserRole.DISPATCH_MANAGER)).toBe(true);
+    expect(may(CAN_WRITE_PAYEES, UserRole.DISPATCH_MANAGER)).toBe(true);
+
     expect(may(CAN_WRITE_FINANCIAL_MASTER_DATA, UserRole.DISPATCH_MANAGER)).toBe(false);
     expect(may(CAN_ADMINISTER, UserRole.DISPATCH_MANAGER)).toBe(false);
+  });
+
+  /**
+   * `staff.eligibleRoles` is what decides who may be handed a trip's cash, so a
+   * cash holder who could edit it could make themselves a custodian — or
+   * promote a colleague into being one. The administrator alone, and this is
+   * the one master data list where that is the reason.
+   */
+  it('may NOT edit the staff table, which decides who may hold cash', () => {
+    expect([...CAN_WRITE_STAFF]).toEqual([UserRole.ADMINISTRATOR]);
+    expect(may(CAN_WRITE_STAFF, UserRole.DISPATCH_MANAGER)).toBe(false);
+    expect(may(CAN_WRITE_STAFF, UserRole.OPERATIONS)).toBe(false);
+  });
+});
+
+/**
+ * The dispatcher: everything about the trip, nothing about the lists it is
+ * booked against.
+ *
+ * This role was narrowed deliberately and the narrowing is easy to undo by
+ * accident — `CAN_WRITE_OPERATIONAL_MASTER_DATA` used to mean "administrator
+ * and operations", and re-adding OPERATIONS to it reads like restoring an
+ * oversight rather than reversing a decision.
+ */
+describe('a dispatcher works trips and keeps no directory but the routes', () => {
+  it('may run a trip end to end', () => {
+    expect(may(CAN_READ_SHIPMENTS, UserRole.OPERATIONS)).toBe(true);
+    expect(may(CAN_WRITE_SHIPMENTS, UserRole.OPERATIONS)).toBe(true);
+    expect(may(CAN_TRANSITION_SHIPMENTS, UserRole.OPERATIONS)).toBe(true);
+    // Every list it is booked against stays readable — a picker cannot offer
+    // what the session may not fetch.
+    expect(may(CAN_READ_MASTER_DATA, UserRole.OPERATIONS)).toBe(true);
+  });
+
+  it('keeps routes and nothing else', () => {
+    expect(may(CAN_WRITE_ROUTES, UserRole.OPERATIONS)).toBe(true);
+
+    for (const bundle of [
+      CAN_WRITE_OPERATIONAL_MASTER_DATA,
+      CAN_WRITE_STAFF,
+      CAN_WRITE_PAYEES,
+      CAN_WRITE_FINANCIAL_MASTER_DATA,
+      CAN_ADMINISTER,
+    ]) {
+      expect(may(bundle, UserRole.OPERATIONS)).toBe(false);
+    }
+  });
+
+  it('accounts for its own float and decides nothing', () => {
+    expect(may(CAN_SUBMIT_LIQUIDATION, UserRole.OPERATIONS)).toBe(true);
+    expect(isConfinedToTheirOwnFloat(UserRole.OPERATIONS)).toBe(true);
+    expect(may(CAN_DECIDE_LIQUIDATION, UserRole.OPERATIONS)).toBe(false);
+    expect(may(CAN_WRITE_SHIPMENT_MONEY, UserRole.OPERATIONS)).toBe(false);
+  });
+});
+
+/**
+ * Correcting an agreed rate after dispatch.
+ *
+ * The list is narrow because the figure moves the commission base for everyone
+ * on the trip. It is NOT `CAN_WRITE_SHIPMENT_MONEY` — a rate is negotiated by
+ * the people running dispatch, not decided by the people paying out against it
+ * — and it is NOT `CAN_WRITE_SHIPMENTS`, which is every dispatcher.
+ */
+describe('correcting the rate chain', () => {
+  it('is the administrator and the dispatch manager, and nobody else', () => {
+    expect([...CAN_EDIT_RATE_CHAIN]).toEqual([UserRole.ADMINISTRATOR, UserRole.DISPATCH_MANAGER]);
+
+    for (const role of [
+      UserRole.OPERATIONS,
+      UserRole.ACCOUNTING,
+      UserRole.MANAGEMENT,
+      UserRole.CREW,
+    ]) {
+      expect(may(CAN_EDIT_RATE_CHAIN, role)).toBe(false);
+    }
   });
 });
 
@@ -137,9 +225,13 @@ describe('the money lists stay accounting’s', () => {
   it('admits exactly ADMINISTRATOR and ACCOUNTING, and nobody who holds cash', () => {
     expect([...CAN_WRITE_SHIPMENT_MONEY]).toEqual([UserRole.ADMINISTRATOR, UserRole.ACCOUNTING]);
 
-    // Everybody who can be a custodian, and therefore must not decide.
-    for (const role of [UserRole.CREW, UserRole.DISPATCH_MANAGER]) {
+    // Everybody who can be a custodian, and therefore must not decide. Derived
+    // from the predicate rather than listed, so a role added to it cannot gain
+    // the power to approve its own float without this failing.
+    for (const role of Object.values(UserRole)) {
+      if (!isConfinedToTheirOwnFloat(role)) continue;
       expect(may(CAN_DECIDE_LIQUIDATION, role)).toBe(false);
+      expect(may(CAN_WRITE_SHIPMENT_MONEY, role)).toBe(false);
     }
   });
 });

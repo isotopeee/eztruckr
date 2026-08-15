@@ -11,6 +11,7 @@ import {
   updateAdditionalChargeSchema,
   updateBillableExpenseSchema,
   updateCompanyPaidExpenseSchema,
+  updateRateChainSchema,
   updateShipmentSchema,
 } from '@eztruckr/types';
 import { z } from 'zod';
@@ -27,6 +28,7 @@ import { createZodDto } from '../common/create-zod-dto';
 export class ShipmentListQueryDto extends createZodDto(shipmentListQuerySchema) {}
 export class CreateShipmentDto extends createZodDto(createShipmentSchema) {}
 export class UpdateShipmentDto extends createZodDto(updateShipmentSchema) {}
+export class UpdateRateChainDto extends createZodDto(updateRateChainSchema) {}
 export class AssignCrewDto extends createZodDto(assignCrewSchema) {}
 export class AssignTruckDto extends createZodDto(assignTruckSchema) {}
 export class TransitionShipmentDto extends createZodDto(transitionShipmentSchema) {}

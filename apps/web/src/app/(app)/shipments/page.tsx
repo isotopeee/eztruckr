@@ -78,7 +78,13 @@ export default function Page() {
     queryFn: () => listShipments(filters),
   });
 
-  const canCreate = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.OPERATIONS;
+  // `CAN_WRITE_SHIPMENTS` on the API, which has included the dispatch manager
+  // since they existed — this list had not, so booking was refused in the
+  // browser for a role the server was happy to accept.
+  const canCreate =
+    user?.role === UserRole.ADMINISTRATOR ||
+    user?.role === UserRole.OPERATIONS ||
+    user?.role === UserRole.DISPATCH_MANAGER;
   const rows = shipments.data?.items ?? [];
 
   return (

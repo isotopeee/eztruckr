@@ -984,6 +984,16 @@ model Shipment {
   commissionableBase    Decimal?  @db.Decimal(15, 4)
   commissionsComputedAt DateTime? @db.Timestamptz(6)
 
+  /// When the gross rate or the broker cut was last corrected AFTER booking.
+  /// Null while they still stand as they were booked.
+  ///
+  /// Exists only so `isComputationStale` has something to compare against. The
+  /// rate chain was frozen at dispatch when commissions were first built, so a
+  /// stored commission could not fall behind it; it is correctable now, and
+  /// `updatedAt` cannot stand in — it moves when the truck is swapped, which
+  /// says nothing about the base.
+  rateChainUpdatedAt DateTime? @db.Timestamptz(6)
+
   allowances          Allowance[]
   liquidations        Liquidation[]
   settlements         Settlement[]

@@ -1,0 +1,79 @@
+name: CI
+
+# Runs on every pull request, and is CALLED BY the deploy workflow so that a
+# push to main is checked exactly once, by exactly this job. Deliberately no
+# `push` trigger: main is covered through `workflow_call`, and adding one here
+# would double every run on main for no extra signal.
+on:
+  pull_request:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: format · lint · typecheck · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        # 18 IS A HARD REQUIREMENT, not a version bump waiting to happen. Every
+        # primary key defaults to uuidv7(), which does not exist before 18, so
+        # an older image fails at the first CREATE TABLE of the init migration.
+        #
+        # Debian, matching dev and prod. The alpine variant is musl, which sorts
+        # text by byte order regardless of the reported collation — so a suite
+        # asserting name order would pass here and fail in production, which is
+        # the one thing CI exists to prevent.
+        image: postgres:18
+        env:
+          POSTGRES_USER: eztruckr
+          POSTGRES_PASSWORD: eztruckr
+          POSTGRES_DB: eztruckr
+          TZ: UTC
+          PGTZ: UTC
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U eztruckr -d eztruckr"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # The suites do not use this database. They derive `eztruckr_test` from
+      # it and create it themselves on first run — see prepareTestDatabase,
+      # which refuses any name not ending in `_test`.
+      DATABASE_URL: postgresql://eztruckr:eztruckr@localhost:5432/eztruckr?schema=public
+      # Required by the API's env schema at 32 characters minimum. A throwaway
+      # value: this signs cookies for a database that exists for four minutes.
+      BETTER_AUTH_SECRET: ci-secret-not-used-anywhere-real-000000
+      APP_TIMEZONE: Asia/Manila
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        # No version pinned here on purpose — the action reads it from the
+        # `packageManager` field in package.json, so the lockfile, the
+        # Dockerfiles and CI can never disagree about which pnpm built this.
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          # Matches the node:22 base in both Dockerfiles. Testing on one major
+          # and shipping another is a bug waiting for a release to happen.
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check
+        # format:check, lint, typecheck and test, wired through turbo so the
+        # workspace build order is respected. The same command a developer runs.
+        run: pnpm run check

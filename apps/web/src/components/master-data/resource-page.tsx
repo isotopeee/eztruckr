@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Page, RemovalResult } from '@eztruckr/types';
+import { UserRole, type Page, type RemovalResult } from '@eztruckr/types';
 import { Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ResourceForm } from '@/components/master-data/resource-form';
@@ -46,7 +46,7 @@ interface WithIdAndActive {
  */
 export function ResourcePage<TRow extends WithIdAndActive>({ spec }: { spec: ResourceSpec<TRow> }) {
   const queryClient = useQueryClient();
-  const { user } = useCurrentUser();
+  const { user, isPending: userPending } = useCurrentUser();
 
   const [search, setSearch] = useState('');
   const [includeInactive, setIncludeInactive] = useState(false);
@@ -57,6 +57,7 @@ export function ResourcePage<TRow extends WithIdAndActive>({ spec }: { spec: Res
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const canWrite = !!user && spec.writeRoles.includes(user.role);
+  const mayOpen = !!user && spec.pageRoles.includes(user.role);
 
   const listKey = [spec.key, { search, includeInactive }] as const;
 
@@ -66,6 +67,9 @@ export function ResourcePage<TRow extends WithIdAndActive>({ spec }: { spec: Res
       apiFetch<Page<TRow>>(
         `${spec.apiPath}${queryString({ search, includeInactive, pageSize: 100 })}`,
       ),
+    // The API would serve this list — master data has to be readable to be
+    // selectable — so not asking is the point rather than an optimisation.
+    enabled: mayOpen,
   });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: [spec.key] });
@@ -125,6 +129,31 @@ export function ResourcePage<TRow extends WithIdAndActive>({ spec }: { spec: Res
 
   const rows = data?.items ?? [];
   const isFormOpen = creating || editing !== null;
+
+  /**
+   * A screen this role has no business on, reached by typing the URL.
+   *
+   * Unlike everywhere else in this app, the missing link IS the rule here:
+   * `CAN_READ_MASTER_DATA` is wide on purpose — a booking form cannot offer a
+   * client the session may not fetch — so the API would answer this list for a
+   * dispatcher. `PAGE_ROLES` is the decision, and rendering it as a sentence
+   * beats an empty table that looks like broken data. Nothing behind this
+   * refusal is a secret; what is behind it is somebody else's job.
+   */
+  if (!userPending && !mayOpen) {
+    return (
+      <div className="space-y-2">
+        <h1 className="text-2xl font-semibold tracking-tight">{spec.title}</h1>
+        <p className="text-muted-foreground text-sm">
+          {spec.title} are not yours to keep. Ask an administrator
+          {spec.writeRoles.includes(UserRole.DISPATCH_MANAGER)
+            ? ' or your dispatch manager'
+            : ''}{' '}
+          to change one.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

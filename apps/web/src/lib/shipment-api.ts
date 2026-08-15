@@ -17,6 +17,7 @@ import type {
   RuleCoverageReport,
   Shipment,
   ShipmentStatus,
+  UpdateRateChainInput,
 } from '@eztruckr/types';
 import { apiFetch, queryString } from './api-client';
 
@@ -66,6 +67,21 @@ export function getShipment(id: string): Promise<Shipment> {
 
 export function createShipment(input: CreateShipmentInput): Promise<Shipment> {
   return apiFetch<Shipment>('/shipments', { method: 'POST', body: JSON.stringify(input) });
+}
+
+/**
+ * Correcting the gross rate or the broker cut after booking.
+ *
+ * Its own endpoint rather than `PATCH /shipments/:id`, and the difference is
+ * who and when: the booking edit is every dispatcher's and closes at DRAFT,
+ * this belongs to the administrator and the dispatch manager and stays open
+ * until a commission has been paid. See `updateRateChainSchema`.
+ */
+export function updateRateChain(id: string, input: UpdateRateChainInput): Promise<Shipment> {
+  return apiFetch<Shipment>(`/shipments/${id}/rate-chain`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
 }
 
 export function assignCrew(

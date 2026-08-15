@@ -68,10 +68,21 @@ export class SettlementService {
     return toSettlement(await this.load(liquidationId));
   }
 
-  /** Every account's settlement on one trip, for the shipment screen. */
-  async listForShipment(shipmentId: string): Promise<Settlement[]> {
+  /**
+   * Every account's settlement on one trip, for the shipment screen.
+   *
+   * `custodianScope` comes from the session — `accountScopeFor` — and never
+   * from the request. Null is every account, which is what an office session
+   * gets; a crew session gets their own staff id, and the filter is applied in
+   * the QUERY rather than after it, so a settlement that is not theirs is
+   * never loaded, let alone serialised.
+   */
+  async listForShipment(shipmentId: string, custodianScope: string | null): Promise<Settlement[]> {
     const rows = await this.prisma.client.settlement.findMany({
-      where: { shipmentId },
+      where: {
+        shipmentId,
+        ...(custodianScope ? { liquidation: { custodianId: custodianScope } } : {}),
+      },
       include: SETTLEMENT_INCLUDE,
       orderBy: { createdAt: 'asc' },
     });
@@ -298,7 +309,7 @@ export class SettlementService {
   /**
    * The debt is charged to somebody the trip's cash was actually with.
    *
-   * The crew who worked it, or a dispatch manager who held its float — the same
+   * The crew who worked it, or an office cash holder who held its float — the same
    * rule the custodian and the allowance recipient obey, asked once in
    * `assertMayHoldTripCash`.
    *
@@ -316,7 +327,7 @@ export class SettlementService {
       staffId,
       'staffId',
       (shipmentNumber) =>
-        `That person neither worked shipment ${shipmentNumber} nor is a dispatch manager, so this trip's balance cannot be recovered from their pay.`,
+        `That person neither worked shipment ${shipmentNumber} nor holds trip cash from the office, so this trip's balance cannot be recovered from their pay.`,
     );
   }
 

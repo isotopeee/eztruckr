@@ -15,11 +15,18 @@ import type { PrismaService } from '../prisma/prisma.service';
  *
  *   - somebody in a slot on the shipment — the driver or the helper. They are
  *     on the truck, so the cash is in their hands by definition.
- *   - a DISPATCH MANAGER. They hold a trip's float without driving or helping,
- *     which is the whole reason `staff` stopped being `crew_member`. They are
- *     deliberately NOT matched against a slot: a dispatch manager is not
- *     assigned to a trip, they are assigned to the yard, and requiring a slot
- *     would mean inventing one on every shipment they touch.
+ *   - AN OFFICE CASH HOLDER: a dispatch manager, which is the whole reason
+ *     `staff` stopped being `crew_member`, or a dispatcher, added when the
+ *     people handing cash over started carrying it themselves. Both are
+ *     deliberately NOT matched against a slot: neither is assigned to a trip,
+ *     they are assigned to the yard, and requiring a slot would mean inventing
+ *     one on every shipment they touch.
+ *
+ * WHICH OFFICE ROLES COUNT is `mayHoldTripCashWithoutASlot`, asked of the
+ * PERSON's `eligibleRoles` and never of the caller's session. The two are
+ * different questions: a dispatcher may name a colleague custodian, and a
+ * dispatcher's own login being confined to their own account is
+ * `assertMayAccountForThisFloat`'s business, not this one's.
  *
  * What it is NOT is "any active staff member". An office clerk who never went
  * near the trip being made answerable for its cash is a typo, and this is the

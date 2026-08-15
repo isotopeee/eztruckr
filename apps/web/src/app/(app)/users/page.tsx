@@ -115,7 +115,7 @@ export default function UsersPage() {
             .filter(Boolean)
             .join(' — '),
         })),
-      help: 'Required for a crew or dispatch-manager login, and forbidden for any other role.',
+      help: 'Required for a crew, dispatcher or dispatch-manager login — the three roles that hold a trip’s cash — and forbidden for any other role.',
     },
     { name: 'isActive', label: 'Account active', type: 'boolean' },
   ];

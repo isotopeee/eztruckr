@@ -31,3 +31,8 @@ coverage/
 
 # docker volumes
 .docker-data/
+
+# Cloudflare origin cert + key, written by the deploy workflow and by local
+# prod-stack testing. A private key must never reach the repository.
+certs/
+.env.production

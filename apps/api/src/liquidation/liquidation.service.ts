@@ -8,6 +8,7 @@ import {
 import type { Prisma } from '@eztruckr/db';
 import {
   isAllowedLiquidationTransition,
+  isConfinedToTheirOwnFloat,
   isCostRecognised,
   isLiquidationEditable,
   isLiquidationHistoryAction,
@@ -22,7 +23,6 @@ import {
   shipmentStatusAfterLiquidationMilestone,
   sum,
   toDecimalString,
-  UserRole,
   wasReturnedForCorrection,
   type ApproveLiquidationInput,
   type CreateLiquidationInput,
@@ -147,7 +147,7 @@ export class LiquidationService {
   }
 
   /**
-   * The cross-shipment list: accounting's queue, or one crew member's own.
+   * The cross-shipment list: accounting's queue, or one cash holder's own.
    *
    * `returnedOnly` is PENDING with prior history, exactly as the code set
    * promises. There is no status to filter on, because a `RETURNED` state would
@@ -156,11 +156,11 @@ export class LiquidationService {
    *
    * `staffId` is passed by the controller from the session, never from the
    * query string, and when it is set it OVERWRITES rather than narrows — there
-   * is no parameter a crew login can send to widen its own list.
+   * is no parameter a scoped login can send to widen its own list.
    *
-   * THE CREW SCOPE IS CUSTODIANSHIP, NOT THE TRIP, and it mirrors
-   * `assertCrewMayAccount` deliberately. "Trips you worked" was the same thing
-   * while a trip held one account; now it is wider than what the crew member
+   * THE SCOPE IS CUSTODIANSHIP, NOT THE TRIP, and it mirrors
+   * `assertMayAccountForThisFloat` deliberately. "Trips you worked" was the same
+   * thing while a trip held one account; now it is wider than what the holder
    * may actually do, and this list is titled "waiting on you" — it would have
    * told a helper the driver's ₱10,000 was theirs to explain, offered them a
    * row, and had the write refused. A list that disagrees with the guard behind
@@ -400,7 +400,7 @@ export class LiquidationService {
     const current = await this.load(liquidationId);
 
     this.assertMove(current, LiquidationStatus.SUBMITTED);
-    this.assertCrewMayAccount(current, user);
+    this.assertMayAccountForThisFloat(current, user);
 
     const totals = await this.computeTotals(current.id);
 
@@ -680,7 +680,7 @@ export class LiquidationService {
       );
     }
 
-    this.assertCrewMayAccount(row, user);
+    this.assertMayAccountForThisFloat(row, user);
 
     return row;
   }
@@ -724,35 +724,45 @@ export class LiquidationService {
   }
 
   /**
-   * A crew session may only account for cash it is answerable for.
+   * A cash holder may only account for cash they are answerable for.
    *
-   * NARROWER THAN IT WAS, deliberately. The old rule was "did you work this
-   * trip", which was as tight as a single blended account allowed. Now that
-   * each account names a custodian, a helper who worked the trip has no
-   * business editing the driver's claims — that is somebody else's money to
-   * explain, and the two used to be one row precisely because there was no way
-   * to say so.
+   * NARROWER THAN IT WAS, twice over. It began as "did you work this trip",
+   * which was as tight as a single blended account allowed; naming a custodian
+   * on each account made it "is this yours", because a helper who worked the
+   * trip has no business editing the driver's claims. It then stopped being a
+   * crew rule at all: a dispatcher and a dispatch manager carry floats too, and
+   * an office role holding one is no more entitled to edit a colleague's
+   * account than a helper is.
    *
-   * An account with NO custodian yet is open to anyone who worked the trip: it
-   * is the one created with the shipment, before anybody was assigned, and
-   * refusing everybody would leave it unusable until an office user named
-   * somebody.
+   * WHO IS EXEMPT is the whole design — ADMINISTRATOR and ACCOUNTING, and
+   * nobody else. They hold no float, so acting on any account is somebody
+   * else's paperwork rather than their own, and `LiquidationHistory` names
+   * them. Every role that CAN be a custodian is in
+   * `ROLES_CONFINED_TO_THEIR_OWN_FLOAT`, which is what stops "I can hold cash"
+   * quietly becoming "I can edit cash".
    *
-   * Checked here rather than only in the controller because the crew portal and
-   * the office screens reach the same methods, and the scope is a property of
-   * the record, not of the route.
+   * THE UNNAMED ACCOUNT — the one created with the shipment, before anybody was
+   * assigned — is open to whoever is in a crew slot, and to nobody else.
+   * Refusing everybody would leave it unusable until an office user named a
+   * custodian, but an office cash holder is not on the trip and has no claim to
+   * a float nobody has handed them; naming one is `CAN_WRITE_SHIPMENT_MONEY`,
+   * deliberately.
+   *
+   * Checked here rather than only in the controller because the portal and the
+   * office screens reach the same methods, and the scope is a property of the
+   * record, not of the route.
    */
-  private assertCrewMayAccount(row: LiquidationRow, user: RequestUser): void {
-    if (user.role !== UserRole.CREW) return;
+  private assertMayAccountForThisFloat(row: LiquidationRow, user: RequestUser): void {
+    if (!isConfinedToTheirOwnFloat(user.role)) return;
 
     if (!user.staffId) {
-      throw new ForbiddenException('This crew account is not linked to a crew member.');
+      throw new ForbiddenException('This account is not linked to a staff member.');
     }
 
     if (row.custodianId !== null) {
       if (row.custodianId !== user.staffId) {
         throw new ForbiddenException(
-          'This cash is another crew member’s to account for. You can only liquidate what you were made custodian of.',
+          'This cash is another person’s to account for. You can only liquidate what you were made custodian of.',
         );
       }
 
@@ -762,7 +772,9 @@ export class LiquidationService {
     const worked = row.shipment.driverId === user.staffId || row.shipment.helperId === user.staffId;
 
     if (!worked) {
-      throw new ForbiddenException('You can only liquidate trips you worked on.');
+      throw new ForbiddenException(
+        'Nobody has been made custodian of this cash yet, and you are not on the trip. Ask for the account to be named to you.',
+      );
     }
   }
 
@@ -835,7 +847,8 @@ export class LiquidationService {
   /**
    * A custodian is somebody the trip's cash could actually be in the hands of.
    *
-   * The crew who worked it, or a dispatch manager holding its float — see
+   * The crew who worked it, or an office cash holder — a dispatcher or a dispatch
+   * manager — see
    * `assertMayHoldTripCash`, which the allowance recipient and the carried
    * deduction ask as well. Not merely an existing staff member: being
    * answerable for a trip's cash with no connection to it is a typo.
@@ -847,7 +860,7 @@ export class LiquidationService {
       custodianId,
       'custodianId',
       (shipmentNumber) =>
-        `That person neither worked shipment ${shipmentNumber} nor is a dispatch manager, so they cannot be made custodian of its cash.`,
+        `That person neither worked shipment ${shipmentNumber} nor holds trip cash from the office, so they cannot be made custodian of its cash.`,
     );
   }
 

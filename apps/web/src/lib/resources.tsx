@@ -19,6 +19,7 @@ import {
 } from '@eztruckr/types';
 import type { ResourceSpec } from '@/lib/resource-spec';
 import { formatDate } from '@/lib/format';
+import { PAGE_ROLES } from '@/lib/nav';
 
 /**
  * The eight master data screens, as data.
@@ -28,16 +29,24 @@ import { formatDate } from '@/lib/format';
  * would be the first thing to fall out of step with the database.
  */
 
-const WRITE_OPERATIONAL = [UserRole.ADMINISTRATOR, UserRole.OPERATIONS] as const;
+/**
+ * Each of these mirrors a bundle in the API's `role-policy.ts`, which is the
+ * constant that actually enforces it — these lists only decide whether the
+ * button is drawn. Who may OPEN each screen is `PAGE_ROLES`, and it is a
+ * different question: reading master data is wide, because a picker cannot
+ * offer what the session may not fetch.
+ */
+const WRITE_OPERATIONAL = [UserRole.ADMINISTRATOR, UserRole.DISPATCH_MANAGER] as const;
+const WRITE_ROUTES = [...WRITE_OPERATIONAL, UserRole.OPERATIONS] as const;
+const WRITE_STAFF = [UserRole.ADMINISTRATOR] as const;
 const WRITE_FINANCIAL = [UserRole.ADMINISTRATOR, UserRole.ACCOUNTING] as const;
 
-/**
- * Payees are neither, so they get both. Mirrors `CAN_WRITE_PAYEES` in the API,
- * which is the constant that actually enforces it — this list only decides
- * whether the button is drawn. Operations add a vendor mid-task while typing a
- * liquidation; accounting own the address and TIN a voucher is built from.
- */
-const WRITE_PAYEES = [UserRole.ADMINISTRATOR, UserRole.OPERATIONS, UserRole.ACCOUNTING] as const;
+/** Payees fit neither, so they get both sides: `CAN_WRITE_PAYEES`. */
+const WRITE_PAYEES = [
+  UserRole.ADMINISTRATOR,
+  UserRole.ACCOUNTING,
+  UserRole.DISPATCH_MANAGER,
+] as const;
 
 /** Renders a nullable cell without printing "null" at anyone. */
 const text = (value: string | null | undefined) => value ?? '—';
@@ -51,6 +60,7 @@ export const truckResource: ResourceSpec<Truck> = {
   title: 'Trucks',
   singular: 'Truck',
   description: 'The fleet. Deactivate a truck that has been sold rather than removing it.',
+  pageRoles: PAGE_ROLES.trucks,
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
@@ -115,8 +125,9 @@ export const staffResource: ResourceSpec<Staff> = {
   title: 'Staff',
   singular: 'Staff member',
   description:
-    'Everyone who works here. Eligibility says what someone may be engaged as; the role filled on a trip comes from the trip. A dispatch manager holds a trip’s cash without driving it.',
-  writeRoles: WRITE_OPERATIONAL,
+    'Everyone who works here. Eligibility says what someone may be engaged as; the role filled on a trip comes from the trip. A dispatcher or dispatch manager holds a trip’s cash without driving it.',
+  pageRoles: PAGE_ROLES.staff,
+  writeRoles: WRITE_STAFF,
   columns: [
     {
       key: 'name',
@@ -146,7 +157,7 @@ export const staffResource: ResourceSpec<Staff> = {
         value: role,
         label: STAFF_ROLE_LABELS[role],
       })),
-      help: 'Anyone eligible to drive needs a licence number on file. A dispatch manager may hold a trip’s cash without being assigned to it, and earns no commission.',
+      help: 'Anyone eligible to drive needs a licence number on file. A dispatcher or dispatch manager may hold a trip’s cash without being assigned to it, and earns no commission — only a driver or helper does.',
     },
     { name: 'phone', label: 'Phone', type: 'text' },
     {
@@ -189,6 +200,7 @@ export const clientResource: ResourceSpec<Client> = {
   title: 'Clients',
   singular: 'Client',
   description: 'Companies whose freight is hauled.',
+  pageRoles: PAGE_ROLES.clients,
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
@@ -231,6 +243,7 @@ export const thirdPartyResource: ResourceSpec<ThirdParty> = {
   title: 'Third parties',
   singular: 'Third party',
   description: 'Brokers and agents who bring freight and take a cut of the gross rate.',
+  pageRoles: PAGE_ROLES.thirdParties,
   writeRoles: WRITE_OPERATIONAL,
   columns: [
     {
@@ -286,6 +299,7 @@ export const payeeResource: ResourceSpec<Payee> = {
   singular: 'Payee',
   description:
     'Outside suppliers money is disbursed to — fuel stations, ferry operators, repair shops. Not brokers, whose cut comes off the gross rate instead.',
+  pageRoles: PAGE_ROLES.payees,
   writeRoles: WRITE_PAYEES,
   columns: [
     {
@@ -346,7 +360,8 @@ export const routeResource: ResourceSpec<Route> = {
   title: 'Routes',
   singular: 'Route',
   description: 'Regular lanes, with an indicative rate used to prefill a shipment.',
-  writeRoles: WRITE_OPERATIONAL,
+  pageRoles: PAGE_ROLES.routes,
+  writeRoles: WRITE_ROUTES,
   columns: [
     {
       key: 'name',
@@ -409,6 +424,7 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
   title: 'Expense categories',
   singular: 'Expense category',
   description: 'How spend is classified on liquidations and billable expenses.',
+  pageRoles: PAGE_ROLES.expenseCategories,
   writeRoles: WRITE_FINANCIAL,
   removalNote:
     'A category nothing has been filed under is deleted outright. Once a liquidation line or billable expense uses it, it is deactivated instead so those records keep reading correctly.',
@@ -480,6 +496,7 @@ export const commissionRuleResource: ResourceSpec<CommissionRule> = {
   singular: 'Commission rule',
   description:
     'What crew are paid. A narrower scope wins; ties break on priority, highest first. Commissions freeze the rate they used, so editing a rule never moves money already computed.',
+  pageRoles: PAGE_ROLES.commissionRules,
   writeRoles: WRITE_FINANCIAL,
   columns: [
     {

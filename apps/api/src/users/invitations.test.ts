@@ -139,7 +139,9 @@ beforeEach(async () => {
         id: INVITEE_ID,
         email: INVITEE_EMAIL,
         name: 'Invited Person',
-        role: UserRole.OPERATIONS,
+        // An office role that needs no staff link, so the fixture is a login
+        // the app would also consider valid. A dispatcher would now need one.
+        role: UserRole.ACCOUNTING,
         emailVerified: false,
       },
     });

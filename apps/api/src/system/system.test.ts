@@ -1,8 +1,9 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
 import { createPrismaClient, testUuid, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
 import { UserRole } from '@eztruckr/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { PrismaService } from '../prisma/prisma.service';
+import type { InvitationsService } from '../users/invitations.service';
 import type { UsersService } from '../users/users.service';
 import { SystemService } from './system.service';
 
@@ -67,12 +68,39 @@ const id = (name: string) => testUuid('00000008', name);
  * claim: whether the administrator is created at all, and whether it survives.
  * So this writes the user row directly and records what it did.
  */
+/**
+ * Whether the stubbed transport managed to deliver. Only the delivery test
+ * touches it; `beforeEach` puts it back.
+ */
+let deliverySucceeds = true;
+
+/**
+ * Stands in for the invitation `createBootstrapAdministrator` would have
+ * minted. The real one is covered by `invitations.test.ts`; what matters here
+ * is only whether it went out, because that is what `initialize` now refuses on.
+ */
+function invitationsStub(): InvitationsService {
+  return {
+    latestFor: async (userId: string) => ({
+      id: id(`invitation-${userId}`),
+      userId,
+      sentAt: deliverySucceeds ? new Date().toISOString() : null,
+      deliveryError: deliverySucceeds ? null : '403 The domain is not verified',
+    }),
+  } as unknown as InvitationsService;
+}
+
 function usersStub(): UsersService {
   return {
     createBootstrapAdministrator: async (input: { email: string; name: string }) => {
       const created = await prisma.user.create({
         data: {
-          id: id(input.email),
+          // Unique per CALL, not per email. A rolled-back attempt soft-deletes
+          // its user, and the retry is allowed to reuse the address — so the
+          // same email legitimately provisions twice in one test, and a
+          // deterministic id would collide on the primary key rather than on
+          // the partial unique this is meant to exercise.
+          id: id(`${input.email}-${provisioned.length}`),
           email: input.email,
           name: input.name,
           role: UserRole.ADMINISTRATOR,
@@ -125,7 +153,11 @@ beforeAll(async () => {
     return;
   }
 
-  system = new SystemService({ client: prisma } as unknown as PrismaService, usersStub());
+  system = new SystemService(
+    { client: prisma } as unknown as PrismaService,
+    usersStub(),
+    invitationsStub(),
+  );
 });
 
 afterAll(async () => {
@@ -142,6 +174,7 @@ beforeEach(async () => {
   provisioned = [];
   barrierSize = 0;
   waiting = [];
+  deliverySucceeds = true;
   await cleanup();
   await setInitialized(false);
 });
@@ -224,6 +257,59 @@ describe.runIf(process.env.SKIP_DB_TESTS !== 'true')('setting a system up', () =
     const live = await prisma.user.count({
       where: { id: { in: provisioned.map((entry) => entry.id) } },
     });
+    expect(live).toBe(1);
+  });
+
+  /**
+   * THE ONE INVITATION NOBODY CAN RESEND.
+   *
+   * A delivery failure is recorded rather than raised everywhere else, because
+   * an administrator can see it and click resend. Here the administrator IS the
+   * failed invite. Answering 204 and stamping the flag left an installation
+   * with an account nobody could activate and a `/setup` that refuses to run
+   * twice — recoverable only through psql, since the token is stored hashed.
+   *
+   * Found by running the production stack with an invalid Resend key, not by
+   * reading the code: every layer behaved exactly as designed.
+   */
+  it('rolls back and stays open when the invitation cannot be delivered', async () => {
+    if (!available) return;
+
+    deliverySucceeds = false;
+
+    await expect(initialize()).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    // The flag is untouched, so the operator gets another go.
+    await expect(system.status()).resolves.toEqual({ initialized: false });
+
+    // And the half-made administrator did not survive.
+    const live = await prisma.user.count({
+      where: { id: { in: provisioned.map((entry) => entry.id) } },
+    });
+    expect(live).toBe(0);
+  });
+
+  /**
+   * The rollback has to free the ADDRESS, not just the row — the operator will
+   * retry with the same one. `user_email_live_key` is partial
+   * (`WHERE "deletedAt" IS NULL`), which is what makes that work.
+   */
+  it('lets the same address be used again once mail is fixed', async () => {
+    if (!available) return;
+
+    deliverySucceeds = false;
+    await expect(initialize()).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    deliverySucceeds = true;
+    await expect(initialize()).resolves.toBeUndefined();
+
+    await expect(system.status()).resolves.toEqual({ initialized: true });
+
+    // Two attempts, and exactly one live administrator to show for them.
+    const live = await prisma.user.count({
+      where: { id: { in: provisioned.map((entry) => entry.id) } },
+    });
+    expect(provisioned).toHaveLength(2);
     expect(live).toBe(1);
   });
 

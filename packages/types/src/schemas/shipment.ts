@@ -132,8 +132,9 @@ export const shipmentSchema = auditFieldsSchema.extend({
   commissionsComputedAt: z.string().nullable(),
 
   /**
-   * The stored commission chain predates a charge on the shipment, so the
-   * figures on screen no longer follow from the line items beside them.
+   * The stored commission chain predates a charge on the shipment, or a
+   * correction to its rate chain, so the figures on screen no longer follow
+   * from the ones beside them.
    *
    * Derived by comparing timestamps rather than stored, so it cannot disagree
    * with the rows it describes. Only present on the detail response; the list
@@ -223,6 +224,29 @@ export type CreateShipmentInput = z.infer<typeof createShipmentSchema>;
 /** Cross-field rules cannot run on a fragment; the service re-applies them. */
 export const updateShipmentSchema = shipmentFields.partial();
 export type UpdateShipmentInput = z.infer<typeof updateShipmentSchema>;
+
+/**
+ * Correcting the rate chain after the trip has left DRAFT.
+ *
+ * ITS OWN ENDPOINT, not a relaxation of `updateShipmentSchema`, and the reason
+ * is that the two obey different rules in three ways at once. The booking edit
+ * is every dispatcher's and stops at DRAFT, because origin, cargo and the route
+ * describe a trip that has not happened yet. This is a correction to an agreed
+ * FIGURE — a broker who confirms a different cut, a rate typed with a zero
+ * missing — it belongs to the administrator and the dispatch manager, and it
+ * stays open until money has actually been paid against it. Widening the first
+ * to cover the second would have given every dispatcher a lever on the
+ * commission base of work already done.
+ *
+ * `thirdPartyId` is here because the broker and the cut are one fact: a TPC
+ * cannot be set without a broker to owe it to, so a trip booked as direct
+ * cannot be corrected without naming one. The other booking fields are not.
+ */
+export const updateRateChainSchema = shipmentFields
+  .pick({ grossRate: true, thirdPartyId: true, tpcRate: true, tpcAmount: true })
+  .partial();
+
+export type UpdateRateChainInput = z.infer<typeof updateRateChainSchema>;
 
 // ---------------------------------------------------------------------------
 // Crew assignment

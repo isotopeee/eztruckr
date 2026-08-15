@@ -28,6 +28,7 @@ import { AllowancesService } from './allowances.service';
 import { LiquidationService } from './liquidation.service';
 import { ReceiptsService } from './receipts.service';
 import { SettlementService } from './settlement.service';
+import { ShipmentAccessService } from './shipment-access.service';
 import { ensurePendingLiquidation } from './pending-liquidation';
 
 /**
@@ -51,6 +52,7 @@ let liquidations: LiquidationService;
 let allowances: AllowancesService;
 let settlements: SettlementService;
 let receipts: ReceiptsService;
+let access: ShipmentAccessService;
 let shipments: ShipmentsService;
 let staff: StaffService;
 let storage: { removed: string[]; service: StorageService };
@@ -111,6 +113,8 @@ function serviceStubs(client: ExtendedPrismaClient, storage: StorageService) {
     liquidations: liquidationService,
     allowances: new AllowancesService(prismaService, receipts, liquidationService),
     settlements: new SettlementService(prismaService, receipts),
+    // Who may SEE one account, as opposed to who may edit it.
+    access: new ShipmentAccessService(prismaService),
     // The close guard lives here, and it is the one caller that has to know
     // about EVERY account on a trip rather than one of them.
     shipments: new ShipmentsService(prismaService),
@@ -191,7 +195,7 @@ beforeAll(async () => {
   };
 
   storage = recordingStorage();
-  ({ liquidations, allowances, settlements, receipts, shipments, staff } = serviceStubs(
+  ({ liquidations, allowances, settlements, receipts, access, shipments, staff } = serviceStubs(
     prisma,
     storage.service,
   ));
@@ -407,6 +411,24 @@ function crewActor(staffId: string): RequestUser {
   };
 }
 
+/**
+ * An office session that holds cash: a dispatcher or a dispatch manager.
+ *
+ * Confined to their own accounts exactly as a crew session is, which is the
+ * whole reason this helper looks identical to `crewActor` bar the role — the
+ * scoping rule stopped being about crew.
+ */
+function officeCashHolderActor(role: UserRole, staffId: string): RequestUser {
+  return {
+    id: adminId,
+    email: 'office@eztruckr.ph',
+    name: 'Office cash holder',
+    role,
+    isActive: true,
+    staffId,
+  };
+}
+
 async function addLine(liquidationId: string, amount: string) {
   await withActor({ userId: adminId }, async () =>
     liquidations.addLine(
@@ -465,7 +487,7 @@ describe('a liquidation exists from the moment of delivery', () => {
       ),
     );
 
-    const summary = await allowances.summary(shipmentId);
+    const summary = await allowances.summary(shipmentId, null);
 
     expect(summary.releaseCount).toBe(2);
     expect(summary.totalAdvanced).toBe('5500.00');
@@ -860,7 +882,7 @@ describe('two people holding cash on one trip', () => {
     // And the settlements say who owes whom, which is the fact the old shape
     // was structurally unable to record: the driver returns 2,000 and the
     // company owes the helper 500, on the same trip.
-    const settled = await settlements.listForShipment(shipmentId);
+    const settled = await settlements.listForShipment(shipmentId, null);
     const byCustodian = new Map(settled.map((row) => [row.custodianId, row]));
 
     expect(settled).toHaveLength(2);
@@ -921,7 +943,7 @@ describe('two people holding cash on one trip', () => {
     // The trip-level answer stays permissive while ANY account is open —
     // otherwise approving the driver's would hide the release form from a
     // helper who still needs ferry money.
-    const summary = await allowances.summary(shipmentId);
+    const summary = await allowances.summary(shipmentId, null);
     expect(summary.canIssue).toBe(true);
 
     const topUp = await act(async () =>
@@ -1079,15 +1101,17 @@ describe('the constraints hold when the service is bypassed', () => {
     if (!available) return;
 
     // This trip has a driver and no helper, so the helper is a staff member who
-    // exists, is not a dispatch manager, and was never on it — being answerable
-    // for cash you never held is either a typo or a problem.
+    // exists, holds no float from the office, and was never on it — being
+    // answerable for cash you never held is either a typo or a problem.
     const { shipmentId } = await deliveredTrip('outsider-custodian', '1000.00');
 
     const refusal = await validationMessage(() =>
       act(async () => liquidations.createForShipment(shipmentId, { custodianId: helperId })),
     );
 
-    expect(refusal).toMatch(/custodianId: .*neither worked shipment .* nor is a dispatch manager/i);
+    expect(refusal).toMatch(
+      /custodianId: .*neither worked shipment .* nor holds trip cash from the office/i,
+    );
   });
 });
 
@@ -1205,6 +1229,136 @@ describe('a dispatch manager holds cash without being on the truck', () => {
     expect(mine.map((item) => item.custodianName)).toEqual(['Test Dispatcher']);
   });
 
+  /**
+   * THE CONTROL THAT ARRIVED WITH THE DISPATCHER FLOAT, and the one worth
+   * failing a build over: holding cash and editing cash are different
+   * permissions. Both dispatch roles are in `CAN_SUBMIT_LIQUIDATION`, which is
+   * a route-level list and cannot tell one account from another — so without
+   * `assertMayAccountForThisFloat` a dispatcher could type lines into the
+   * driver's ₱10,000 as freely as into their own.
+   *
+   * Asserted for both roles, because they reach it through the same predicate
+   * and a change that dropped either would look like tidying.
+   */
+  it.each([
+    ['a dispatch manager', UserRole.DISPATCH_MANAGER],
+    ['a dispatcher', UserRole.OPERATIONS],
+  ])('refuses %s the crew’s account', async (_label, role) => {
+    if (!available) return;
+
+    const { driverAccountId } = await tripWithTwoAccounts(`office-scope-${role}`);
+
+    await expect(
+      act(async () =>
+        liquidations.addLine(
+          driverAccountId,
+          {
+            expenseCategoryId: fuelCategoryId,
+            description: 'Not mine to claim',
+            amount: '100.00',
+            spentAt: new Date().toISOString(),
+            payeeId,
+            receiptId: null,
+          },
+          officeCashHolderActor(role, dispatcherId),
+        ),
+      ),
+    ).rejects.toThrow(/another person/i);
+  });
+
+  /**
+   * The one arm of the rule that is NOT the same as a crew member's.
+   *
+   * An account with no custodian is the row created at booking, and it stays
+   * open to whoever is in a slot on the trip — refusing everybody would leave
+   * it unusable. An office cash holder is in no slot, so nothing has been
+   * handed to them: the float becomes theirs when somebody with
+   * `CAN_WRITE_SHIPMENT_MONEY` names them to it, which is deliberately not a
+   * thing they can do for themselves.
+   */
+  it('may not claim the unnamed account created at booking', async () => {
+    if (!available) return;
+
+    const { liquidationId } = await deliveredTrip('office-unnamed', '2000.00');
+
+    await expect(
+      act(async () =>
+        liquidations.addLine(
+          liquidationId,
+          {
+            expenseCategoryId: fuelCategoryId,
+            description: 'Nobody handed me this',
+            amount: '100.00',
+            spentAt: new Date().toISOString(),
+            payeeId,
+            receiptId: null,
+          },
+          officeCashHolderActor(UserRole.DISPATCH_MANAGER, dispatcherId),
+        ),
+      ),
+    ).rejects.toThrow(/not on the trip/i);
+  });
+
+  /**
+   * The other office role that may hold a float, and the reason `StaffRole`
+   * grew a fourth code rather than reusing the third.
+   *
+   * Making every dispatcher a DISPATCH_MANAGER would have worked for the cash
+   * and been wrong about everything else — that role carries the fleet, the
+   * client and broker directories and the payee list. This exercises the
+   * database CHECK as well as the predicate: `staff_eligible_roles_valid` has
+   * to have been widened to 4 by a migration, and a TypeScript-only append
+   * fails here rather than in production.
+   */
+  it('accepts a DISPATCHER-eligible staff member as custodian', async () => {
+    if (!available) return;
+
+    const person = await act(async () =>
+      prisma.staff.create({
+        data: {
+          id: id('dispatcher-role'),
+          firstName: 'Test',
+          lastName: 'Booker',
+          eligibleRoles: [StaffRole.DISPATCHER],
+        },
+      }),
+    );
+
+    const { shipmentId } = await deliveredTrip('dispatcher-role-custodian', '1000.00');
+
+    const account = await act(async () =>
+      liquidations.createForShipment(shipmentId, { custodianId: person.id }),
+    );
+
+    expect(account.custodianName).toBe('Test Booker');
+  });
+
+  it('may account for the float that IS theirs', async () => {
+    if (!available) return;
+
+    const { shipmentId } = await deliveredTrip('office-own-float', '1000.00');
+    const account = await act(async () =>
+      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId }),
+    );
+
+    const line = await act(async () =>
+      liquidations.addLine(
+        account.id,
+        {
+          expenseCategoryId: fuelCategoryId,
+          description: 'Diesel',
+          amount: '900.00',
+          spentAt: new Date().toISOString(),
+          payeeId,
+          receiptId: null,
+        },
+        officeCashHolderActor(UserRole.DISPATCH_MANAGER, dispatcherId),
+      ),
+    );
+
+    expect(line.liquidationId).toBe(account.id);
+  });
+
   it('can have their balance carried to payout, like any other debt', async () => {
     if (!available) return;
 
@@ -1307,7 +1461,7 @@ describe('a crew session reaches only the cash it answers for', () => {
           crewActor(helperId),
         ),
       ),
-    ).rejects.toThrow(/another crew member/i);
+    ).rejects.toThrow(/another person/i);
   });
 
   it('admits the account created at booking, which names nobody yet', async () => {
@@ -1350,6 +1504,92 @@ describe('a crew session reaches only the cash it answers for', () => {
     expect(waiting.map((row) => row.id)).toContain(helperAccountId);
     expect(waiting.map((row) => row.id)).not.toContain(driverAccountId);
     expect(waiting.every((row) => row.custodianId !== driverId)).toBe(true);
+  });
+
+  /**
+   * READING, not just writing — and the door the write guard never covered.
+   *
+   * Every by-id route here guarded with "did you work this trip", which is the
+   * shipment's question and not the account's: the LIST was scoped to own
+   * custodianship from the start, so a helper who fetched the driver's
+   * liquidation by id got their advances, their claims, their variance and
+   * their history, and the portal looked correct the whole time.
+   */
+  it('refuses a crew member a colleague’s account by id', async () => {
+    if (!available) return;
+
+    const { driverAccountId, helperAccountId } = await tripWithTwoAccounts('crew-read');
+
+    await expect(access.assertMayReadAccount(driverAccountId, crewActor(helperId))).rejects.toThrow(
+      /another person/i,
+    );
+
+    // Their own is theirs to read, or the refusal would have broken the portal
+    // instead of narrowing it.
+    await expect(
+      access.assertMayReadAccount(helperAccountId, crewActor(helperId)),
+    ).resolves.toBeUndefined();
+  });
+
+  /**
+   * The office is NOT scoped by this. A dispatcher books the trip and has to
+   * see whether the driver has liquidated; what they may not do is edit it,
+   * which is a different guard and a different list.
+   */
+  it('lets an office session read any account on the trip', async () => {
+    if (!available) return;
+
+    const { driverAccountId } = await tripWithTwoAccounts('office-read');
+
+    await expect(access.assertMayReadAccount(driverAccountId, actor)).resolves.toBeUndefined();
+    await expect(
+      access.assertMayReadAccount(
+        driverAccountId,
+        officeCashHolderActor(UserRole.OPERATIONS, dispatcherId),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  /**
+   * A release says who was handed how much against whose account, and a
+   * settlement says who came up short. Both are rows belonging to ONE
+   * custodian, so both lists scope with the same key the liquidation list uses.
+   *
+   * The total is scoped with the rows deliberately: filtering the list while
+   * leaving `totalAdvanced` at the trip figure hands the same number back by
+   * subtraction.
+   */
+  it('scopes the releases and their total to the crew member’s own account', async () => {
+    if (!available) return;
+
+    const { shipmentId } = await tripWithTwoAccounts('crew-releases');
+
+    const mine = await allowances.summary(shipmentId, helperId);
+    const office = await allowances.summary(shipmentId, null);
+
+    // The fixture advances 10,000 to the driver and 3,000 to the helper.
+    expect(office.totalAdvanced).toBe('13000.00');
+    expect(mine.totalAdvanced).toBe('3000.00');
+    expect(mine.allowances.every((row) => row.staffId === helperId)).toBe(true);
+  });
+
+  it('scopes the settlements list the same way', async () => {
+    if (!available) return;
+
+    const { shipmentId, driverAccountId, helperAccountId } =
+      await tripWithTwoAccounts('crew-settlements');
+
+    for (const liquidationId of [driverAccountId, helperAccountId]) {
+      await addLine(liquidationId, '100.00');
+      await act(async () => liquidations.submit(liquidationId, { remarks: null }, actor));
+      await act(async () => liquidations.approve(liquidationId, { remarks: null }, actor));
+    }
+
+    const office = await settlements.listForShipment(shipmentId, null);
+    const mine = await settlements.listForShipment(shipmentId, helperId);
+
+    expect(office.length).toBe(2);
+    expect(mine.map((row) => row.liquidationId)).toEqual([helperAccountId]);
   });
 });
 

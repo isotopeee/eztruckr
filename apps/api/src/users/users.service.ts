@@ -307,7 +307,7 @@ export class UsersService {
   }
 
   /**
-   * A crew login is only meaningful if it points at a live crew member, and
+   * A linked login is only meaningful if it points at a live staff member, and
    * only one login may point at each — the partial unique index enforces the
    * second half, but a clear message beats a 409 from an index name.
    */

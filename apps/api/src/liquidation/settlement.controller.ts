@@ -19,10 +19,13 @@ export class SettlementController {
   ) {}
 
   /**
-   * Every account's settlement on one trip.
+   * Every account's settlement on one trip — except to a crew member, who sees
+   * only their own.
    *
    * A list, because a trip can carry one per cash holder — the driver may have
    * squared up while the helper has not, and a single record could not say so.
+   * Which is exactly why it is scoped: a settlement names one custodian, what
+   * they came up short by, and whether it was recovered from their pay.
    */
   @Get('shipments/:shipmentId/settlements')
   @Roles(...CAN_READ_SHIPMENTS, ...CAN_SUBMIT_LIQUIDATION)
@@ -32,7 +35,7 @@ export class SettlementController {
   ): Promise<Settlement[]> {
     await this.access.assertMayRead(shipmentId, user);
 
-    return this.settlements.listForShipment(shipmentId);
+    return this.settlements.listForShipment(shipmentId, this.access.accountScopeFor(user));
   }
 
   @Get('liquidations/:liquidationId/settlement')
@@ -41,11 +44,9 @@ export class SettlementController {
     @Param('liquidationId') liquidationId: string,
     @CurrentUser() user: RequestUser,
   ): Promise<Settlement> {
-    const settlement = await this.settlements.getForLiquidation(liquidationId);
+    await this.access.assertMayReadAccount(liquidationId, user);
 
-    await this.access.assertMayRead(settlement.shipmentId, user);
-
-    return settlement;
+    return this.settlements.getForLiquidation(liquidationId);
   }
 
   @Post('liquidations/:liquidationId/settlement/record')

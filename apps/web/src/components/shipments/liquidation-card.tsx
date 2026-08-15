@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  isConfinedToTheirOwnFloat,
   LIQUIDATION_HISTORY_ACTION_LABELS,
   LIQUIDATION_STATUS_LABELS,
   LiquidationHistoryAction,
@@ -179,18 +180,20 @@ function Account({
 }) {
   const { user } = useCurrentUser();
 
-  // Mirrors `assertCrewMayAccount` on the API: a crew session may account for
-  // its own cash, or for the account nobody has been named to yet — a helper
-  // who worked the trip has no business editing the driver's claims. Office
-  // roles may act on any of them, and the history names whoever did.
-  const isCrew = user?.role === UserRole.CREW;
-  const isTheirs =
-    account.custodianId === null || (user?.staffId != null && account.custodianId === user.staffId);
-  const mayAccount = isCrew
-    ? isTheirs
-    : user?.role === UserRole.ADMINISTRATOR ||
-      user?.role === UserRole.OPERATIONS ||
-      user?.role === UserRole.ACCOUNTING;
+  // Mirrors `assertMayAccountForThisFloat` on the API: anybody who can HOLD a
+  // float may account for their own and nobody else's — a helper has no
+  // business editing the driver's claims, and a dispatcher none editing a
+  // colleague's. The unnamed account, created with the trip, is open to whoever
+  // is in a slot on it. Only the two roles that hold no cash may act on any
+  // account, and the history names whoever did.
+  const confined = user !== null && isConfinedToTheirOwnFloat(user.role);
+  const isTheirs = user?.staffId != null && account.custodianId === user.staffId;
+  const onTheTruck =
+    user?.staffId != null &&
+    (shipment.driverId === user.staffId || shipment.helperId === user.staffId);
+  const mayAccount = confined
+    ? isTheirs || (account.custodianId === null && onTheTruck)
+    : user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
 
   const canEditLines = account.isEditable && mayAccount;
 

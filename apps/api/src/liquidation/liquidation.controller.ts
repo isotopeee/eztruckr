@@ -103,17 +103,26 @@ export class LiquidationController {
 
   // --- the account itself ----------------------------------------------
 
+  /**
+   * ONE account, by id — and the guard is the account's, not the trip's.
+   *
+   * It used to be `assertMayRead(shipmentId)`, which asks a crew member
+   * whether they worked the trip. That is the wrong question here: this
+   * response carries one person's advances, claims, variance and history, and
+   * a helper who worked the trip is not entitled to the driver's. The list
+   * above was filtered on custodianship all along, so this door disagreed with
+   * it — the failure this codebase keeps naming, in the direction where the
+   * screen looks right and the payload is not.
+   */
   @Get('liquidations/:liquidationId')
   @Roles(...CAN_SUBMIT_LIQUIDATION, ...CAN_READ_SHIPMENTS)
   async get(
     @Param('liquidationId') liquidationId: string,
     @CurrentUser() user: RequestUser,
   ): Promise<Liquidation> {
-    const liquidation = await this.liquidations.get(liquidationId);
+    await this.access.assertMayReadAccount(liquidationId, user);
 
-    await this.access.assertMayRead(liquidation.shipmentId, user);
-
-    return liquidation;
+    return this.liquidations.get(liquidationId);
   }
 
   @Patch('liquidations/:liquidationId/custodian')

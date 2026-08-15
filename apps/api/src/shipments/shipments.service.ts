@@ -12,6 +12,7 @@ import {
   hasBrokerForTpc,
   hasUnambiguousTpc,
   isAllowedManualTransition,
+  isRateChainCorrectable,
   isRateChainEditable,
   isShipmentStatus,
   LiquidationStatus,
@@ -35,6 +36,7 @@ import {
   type Shipment,
   type ShipmentListQuery,
   type TransitionShipmentInput,
+  type UpdateRateChainInput,
   type UpdateShipmentInput,
 } from '@eztruckr/types';
 import { computeRateChain } from '../commission/commission-chain';
@@ -320,6 +322,111 @@ export class ShipmentsService {
   }
 
   /**
+   * Correcting the gross rate or the broker cut after the trip has left DRAFT.
+   *
+   * SEPARATE FROM `update` because the rule is different in both directions,
+   * and collapsing them would break one of the two. `update` is the booking
+   * form: every dispatcher may use it, and it closes at DRAFT because origin,
+   * cargo and route describe a trip that has not left yet. This is a correction
+   * to a figure that was agreed and recorded wrong, it belongs to
+   * `CAN_EDIT_RATE_CHAIN`, and it stays open far longer.
+   *
+   * WHAT ACTUALLY STOPS IT is not the status, it is `assertNothingPaid` — the
+   * same line that governs a late charge, for the same reason. A commission
+   * computed but not paid goes STALE and is recomputed; a commission that has
+   * been paid names a voucher that has to keep reconciling, and no correction is
+   * worth rewriting that. The status bound on top of it exists because
+   * LIQUIDATED means every account was approved against these figures.
+   *
+   * `rateChainUpdatedAt` is stamped here and nowhere else. Without it a
+   * correction after a computation would leave the commissions quietly wrong
+   * rather than reported stale — the shipment's own `updatedAt` cannot stand in,
+   * because swapping a truck moves it too.
+   */
+  async updateRateChain(id: string, input: UpdateRateChainInput): Promise<Shipment> {
+    const current = await this.load(id);
+    const status = this.statusOf(current);
+
+    if (!isRateChainCorrectable(status)) {
+      throw new ConflictException(
+        `Shipment ${current.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; its rate chain is part of the settled record.`,
+      );
+    }
+
+    await this.assertNothingPaid(current, 'Correcting the rate chain');
+
+    // THE BROKER AND THE CUT MOVE TOGETHER. A cut belongs to the broker it was
+    // agreed with, so a swap has to restate it rather than inherit it — the
+    // previous broker's ₱5,000 is not this one's, and carrying it over is
+    // exactly the kind of invented number this codebase refuses. Clearing the
+    // broker needs no restatement: there is nobody left to owe a share to.
+    const thirdPartyId =
+      input.thirdPartyId === undefined ? current.thirdPartyId : input.thirdPartyId;
+    const brokerChanged = thirdPartyId !== current.thirdPartyId;
+    const cutRestated = input.tpcRate !== undefined || input.tpcAmount !== undefined;
+
+    if (brokerChanged && thirdPartyId !== null && !cutRestated) {
+      throw badRequest(
+        'tpcRate',
+        'name the cut agreed with the third party you are naming — the previous one’s is not theirs',
+      );
+    }
+
+    // Which of the two columns carries the deal is what `appliedTpcRate`
+    // records: set for a percentage, null for a flat peso figure.
+    //
+    // A DIRECT CLIENT KEEPS NEITHER, and reading the stored `tpcAmount` back
+    // for one is the trap here: it is 0, not null, so carrying it forward turns
+    // "no broker, no cut" into "a cut of zero pesos owed to nobody" and the
+    // broker check refuses a correction that only touched the gross.
+    const agreedRate = decimalToString(current.appliedTpcRate);
+    const carriesACut = thirdPartyId !== null;
+    const cut = cutRestated
+      ? { tpcRate: input.tpcRate ?? null, tpcAmount: input.tpcAmount ?? null }
+      : brokerChanged || !carriesACut
+        ? { tpcRate: null, tpcAmount: null }
+        : {
+            tpcRate: agreedRate,
+            tpcAmount: agreedRate === null ? current.tpcAmount.toString() : null,
+          };
+
+    const merged = { thirdPartyId, ...cut };
+
+    if (!hasUnambiguousTpc(merged)) {
+      throw badRequest('tpcAmount', TPC_EXCLUSIVE_MESSAGE);
+    }
+
+    if (!hasBrokerForTpc(merged)) {
+      throw badRequest('thirdPartyId', TPC_WITHOUT_BROKER_MESSAGE);
+    }
+
+    await this.assertReferencesExist({ thirdPartyId: input.thirdPartyId });
+
+    const rates = computeRateChain({
+      grossRate: input.grossRate ?? current.grossRate.toString(),
+      tpcRate: merged.tpcRate,
+      tpcAmount: merged.tpcAmount,
+    });
+
+    this.assertNetRateIsSane(rates.netRate, rates.grossRate);
+
+    return toShipment(
+      await this.shipments.update({
+        where: { id },
+        data: {
+          thirdPartyId,
+          grossRate: rates.grossRate,
+          tpcAmount: rates.tpcAmount,
+          netRate: rates.netRate,
+          appliedTpcRate: rates.appliedTpcRate,
+          rateChainUpdatedAt: new Date(),
+        },
+        include: SHIPMENT_INCLUDE,
+      }),
+    );
+  }
+
+  /**
    * Crew assignment, with the licence check the brief asks for.
    *
    * Both slots move together because they are one decision — assigning them
@@ -582,12 +689,17 @@ export class ShipmentsService {
   }
 
   /**
-   * True when the stored commission chain predates the charges it is supposed
+   * True when the stored commission chain predates the figures it is supposed
    * to be derived from.
    *
    * Derived rather than stored: a `stale` column would be one more thing that
    * can be wrong, whereas comparing timestamps cannot disagree with the rows
    * it is comparing.
+   *
+   * THE RATE CHAIN COUNTS TOO, and did not have to until it became correctable
+   * — it was frozen at dispatch, so no computation could fall behind it. A
+   * corrected gross moves the base for every crew member on the trip, which is
+   * precisely what this flag exists to announce.
    */
   async isComputationStale(shipmentId: string): Promise<boolean> {
     const shipment = await this.load(shipmentId);
@@ -597,6 +709,10 @@ export class ShipmentsService {
     }
 
     const computedAt = shipment.commissionsComputedAt;
+
+    if (shipment.rateChainUpdatedAt !== null && shipment.rateChainUpdatedAt > computedAt) {
+      return true;
+    }
 
     const [expense, charge] = await Promise.all([
       this.prisma.client.billableExpense.findFirst({

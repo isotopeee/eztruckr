@@ -53,6 +53,30 @@ export class StorageService {
       region: this.config.get('S3_REGION', { infer: true }),
       credentials: { accessKeyId, secretAccessKey },
       forcePathStyle: this.config.get('S3_FORCE_PATH_STYLE', { infer: true }),
+
+      /**
+       * BOTH OF THESE ARE FOR NON-AWS BACKENDS, and both are load-bearing in
+       * production, where the store is Cloudflare R2.
+       *
+       * From v3.729 the SDK defaults these to `WHEN_SUPPORTED`, which makes it
+       * attach a CRC32 trailer and send the body as `aws-chunked` with
+       * `x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER`. That is a
+       * real S3 feature and S3 accepts it; S3-COMPATIBLE stores are a step
+       * behind on it, and the ones that do not implement it reject the upload
+       * outright rather than ignoring the header. MinIO does the same on older
+       * tags, so this keeps development honest to production too.
+       *
+       * `WHEN_REQUIRED` is the pre-3.729 behaviour: checksums still go on the
+       * calls whose API mandates them, and an ordinary PutObject travels as an
+       * ordinary signed body. Nothing is unprotected — the payload is still
+       * signed, and TLS is still underneath.
+       *
+       * Symptom if this is removed: every receipt upload fails against R2 with
+       * a 501 or "not implemented", while `check()` keeps reporting "up"
+       * because HeadBucket carries no body.
+       */
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
     });
   }
 

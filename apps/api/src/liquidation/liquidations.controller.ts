@@ -34,13 +34,18 @@ export class LiquidationsController {
    *
    * SCOPED FOR EVERY LINKED ROLE, not just CREW. This list is a WORK QUEUE —
    * the portal renders it under "liquidations waiting on you" — and the only
-   * people it can be waiting on are the ones who may act on it. A dispatch
-   * manager is unscoped everywhere else, and deliberately: they see every trip
-   * through `/shipments` and every account on one through
-   * `/shipments/:id/liquidations`. But they cannot approve, return or reverse
-   * anything, so accounting's queue is not theirs to read, and handing it to
-   * them under that heading would be the same defect the crew scope already
-   * had — a list that disagrees with the guard behind it.
+   * people it can be waiting on are the ones who may act on it. The two office
+   * cash holders still READ widely: they see every trip through `/shipments`
+   * and every account on one through `/shipments/:id/liquidations`. But they
+   * may edit only accounts they are custodian of and may decide none at all, so
+   * accounting's queue is not theirs, and handing it to them under that heading
+   * would be the same defect the crew scope already had — a list that disagrees
+   * with the guard behind it.
+   *
+   * The two lists are separately declared and happen to agree: a role is linked
+   * to a staff row because it holds cash, and holds cash means confined to its
+   * own. `ROLES_CONFINED_TO_THEIR_OWN_FLOAT` is the one the guard consults, and
+   * if the two ever part company this should follow that one.
    */
   private scopeToCaller(user: RequestUser): string | null {
     if (!roleRequiresStaffLink(user.role)) {

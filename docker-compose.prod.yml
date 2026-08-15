@@ -1,0 +1,197 @@
+# EZTruckr — production stack. One droplet, four containers.
+#
+# NOT A SUPERSET OF docker-compose.yml, and not meant to be layered over it
+# with `-f`. That file builds images from source and publishes ports to a
+# laptop; this one pulls tagged images from the registry and publishes nothing
+# but 80 and 443. Two separate files beats one file with a fork in every
+# service — see DEPLOYMENT.md.
+#
+# Lives on the droplet at /opt/eztruckr/docker-compose.prod.yml, beside the
+# `.env` the deploy workflow writes. Every value below comes from that file.
+
+name: eztruckr
+
+services:
+  # ---------------------------------------------------------------------------
+  # Postgres 18 — see the note in docker-compose.yml about why 18 exactly and
+  # why the volume mounts where it does. Both apply identically here.
+  # ---------------------------------------------------------------------------
+  postgres:
+    # Debian rather than Alpine — musl sorts text by raw byte order whatever
+    # the database reports as its collation. See docker-compose.yml for the
+    # worked example; dev, CI and prod must all be on the same libc or a name
+    # ordering reproduces in only one of them.
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-eztruckr}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD - generate one with 'openssl rand -base64 32'}"
+      POSTGRES_DB: ${POSTGRES_DB:-eztruckr}
+      TZ: UTC
+      PGTZ: UTC
+    # NO PORTS. The database is reachable only from this compose network.
+    # Nothing on the public internet, and nothing else on the droplet, should
+    # be able to open a socket to it. For a psql prompt, use
+    # `docker compose exec postgres psql -U eztruckr eztruckr` over SSH.
+    volumes:
+      # /var/lib/postgresql, NOT /var/lib/postgresql/data. The 18 images store
+      # data in a version-specific subdirectory and a volume pinned at the old
+      # path makes the container refuse to start.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-eztruckr} -d ${POSTGRES_DB:-eztruckr}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: &logging
+      # Capped, because an unbounded json-file log will eventually fill the
+      # droplet's disk and take the database down with it.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # API — NestJS. Migrations do NOT run here; see the `migrate` service.
+  # ---------------------------------------------------------------------------
+  api:
+    image: ${API_IMAGE:?set API_IMAGE, e.g. ghcr.io/owner/eztruckr-api:sha}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-eztruckr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-eztruckr}?schema=public
+
+      # All three are the SAME single origin, because Caddy serves both apps
+      # from it. See infra/Caddyfile.
+      APP_BASE_URL: https://${APP_DOMAIN:?set APP_DOMAIN}
+      CORS_ORIGINS: https://${APP_DOMAIN}
+      BETTER_AUTH_URL: https://${APP_DOMAIN}
+
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET - generate one with 'openssl rand -base64 32'}"
+
+      # Cloudflare R2. Path-style addressing and region "auto" are what R2
+      # expects; the endpoint is the account-level one, WITHOUT the bucket name.
+      S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT to https://<account-id>.r2.cloudflarestorage.com}
+      S3_REGION: ${S3_REGION:-auto}
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+      S3_FORCE_PATH_STYLE: "true"
+
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Manila}
+
+      # Mail is NOT optional here. Every account, including the very first
+      # administrator created at /setup, is activated from an emailed link — so
+      # a deployment without a working sender is a deployment nobody can sign
+      # in to. There is deliberately no fallback: the log-instead-of-sending
+      # switch stays off, because an invite link in a log file is a credential
+      # in a log file.
+      RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY - nobody can sign in without working mail}
+      MAIL_FROM: ${MAIL_FROM:?set MAIL_FROM to a verified sender on your Resend domain}
+      MAIL_LOG_INSTEAD_OF_SENDING: "false"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *logging
+
+  # ---------------------------------------------------------------------------
+  # Web — Next.js standalone.
+  # ---------------------------------------------------------------------------
+  #
+  # NOTE there is no NEXT_PUBLIC_API_URL here, and adding one would do nothing.
+  # Next inlines NEXT_PUBLIC_* into the client bundle at BUILD time, so it is a
+  # build argument in the deploy workflow, not a runtime variable. Changing the
+  # domain therefore needs a rebuild, not a restart.
+  web:
+    image: ${WEB_IMAGE:?set WEB_IMAGE, e.g. ghcr.io/owner/eztruckr-web:sha}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    healthcheck:
+      # `status < 500`, not `ok`. The root path answers with a redirect for a
+      # signed-out browser, and a 3xx means the server is perfectly healthy.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/',{redirect:'manual'}).then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *logging
+
+  # ---------------------------------------------------------------------------
+  # Caddy — TLS termination and the only thing bound to a public port.
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      web:
+        condition: service_started
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/etc/caddy/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging: *logging
+
+  # ---------------------------------------------------------------------------
+  # Migrations — one-shot, run by the deploy workflow BEFORE the new api starts.
+  # ---------------------------------------------------------------------------
+  #
+  # WHY THIS IS NOT THE API'S START COMMAND, which is how docker-compose.yml
+  # does it. With `restart: unless-stopped`, a migration that fails on boot
+  # crash-loops the API: the deploy still "succeeds", the old container is
+  # already gone, and the site is down while the real error scrolls past in
+  # `docker logs`. Run separately, a bad migration fails the deploy loudly and
+  # the currently-running api keeps serving the previous release.
+  #
+  # Profiled so `up -d` ignores it. Invoked as:
+  #   docker compose --profile tools run --rm migrate
+  migrate:
+    image: ${API_IMAGE}
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-eztruckr}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-eztruckr}?schema=public
+    working_dir: /app/packages/db
+    # The Prisma binary directly, so the runtime image never has to resolve a
+    # package manager. `migrate deploy` applies pending migrations and never
+    # generates, resets or prompts.
+    command: ["./node_modules/.bin/prisma", "migrate", "deploy"]
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

@@ -68,6 +68,11 @@ function shipmentFixture(): Shipment {
     gasRateOverride: '0.3000',
     gasRateOverrideReason: 'long haul',
     commissionableBase: '30000',
+
+    // The trip's WHOLE float — every custodian's releases summed. Not a
+    // revenue figure, which is why it is not in MONEY_FIELDS, and redacted for
+    // a different reason: it tells a helper what the driver was carrying.
+    totalAdvanced: '15000',
   } as unknown as Shipment;
 }
 
@@ -120,6 +125,20 @@ describe('a crew session is served no money figures for a trip', () => {
     }
   });
 
+  /**
+   * The trip's total float, which is a per-custodian figure summed across
+   * custodians. A helper reading it learns what the driver was given — the one
+   * thing the accounts were split apart to keep separate. Their own total
+   * arrives on the allowance summary, scoped to the account they answer for.
+   */
+  it('zeroes the trip’s total advanced, which is every custodian’s cash', async () => {
+    const detail = await controllerFor(shipmentFixture()).get('any', crew);
+    const page = await controllerFor(shipmentFixture()).list({} as never, crew);
+
+    expect(detail.totalAdvanced).toBe('0.00');
+    expect(page.items[0]?.totalAdvanced).toBe('0.00');
+  });
+
   it('leaves everything that is not money alone', async () => {
     const shipment = await controllerFor(shipmentFixture()).get('any', crew);
 
@@ -134,6 +153,7 @@ describe('a crew session is served no money figures for a trip', () => {
     expect(shipment.grossRate).toBe('40000');
     expect(shipment.netRate).toBe('35000');
     expect(shipment.commissionableBase).toBe('30000');
+    expect(shipment.totalAdvanced).toBe('15000');
   });
 
   /**

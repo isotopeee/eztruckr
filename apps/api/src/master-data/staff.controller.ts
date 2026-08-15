@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { UserRole, type Staff, type Page, type RemovalResult } from '@eztruckr/types';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
-import { CAN_READ_MASTER_DATA, CAN_WRITE_OPERATIONAL_MASTER_DATA } from '../auth/role-policy';
+import { CAN_READ_MASTER_DATA, CAN_WRITE_STAFF } from '../auth/role-policy';
 import type { RequestUser } from '../auth/request-user';
 import { StaffService } from './staff.service';
 import { CreateStaffDto, ListQueryDto, UpdateStaffDto } from './master-data.dto';
@@ -45,19 +45,19 @@ export class StaffController {
   }
 
   @Post()
-  @Roles(...CAN_WRITE_OPERATIONAL_MASTER_DATA)
+  @Roles(...CAN_WRITE_STAFF)
   create(@Body() dto: CreateStaffDto): Promise<Staff> {
     return this.crew.create(dto);
   }
 
   @Patch(':id')
-  @Roles(...CAN_WRITE_OPERATIONAL_MASTER_DATA)
+  @Roles(...CAN_WRITE_STAFF)
   update(@Param('id') id: string, @Body() dto: UpdateStaffDto): Promise<Staff> {
     return this.crew.update(id, dto);
   }
 
   @Delete(':id')
-  @Roles(...CAN_WRITE_OPERATIONAL_MASTER_DATA)
+  @Roles(...CAN_WRITE_STAFF)
   remove(@Param('id') id: string): Promise<RemovalResult> {
     return this.crew.remove(id);
   }

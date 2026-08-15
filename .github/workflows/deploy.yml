@@ -1,0 +1,274 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One production deploy at a time, and NEVER cancel one in flight. A run
+# cancelled between `migrate` and `up -d` leaves a database ahead of the code
+# that is serving it, which is the one state this stack has no way to detect.
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Nothing reaches the droplet that has not passed the same checks a pull
+  # request does. Same file, called rather than copied.
+  # ---------------------------------------------------------------------------
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  # ---------------------------------------------------------------------------
+  # Build both images and push them to GHCR.
+  #
+  # BUILT HERE, NOT ON THE DROPLET, on purpose. A Next.js production build
+  # wants more memory than a small droplet can spare while also serving
+  # traffic, and building in place means the site is degraded for the length of
+  # every deploy. This way the droplet only ever pulls a finished layer.
+  # ---------------------------------------------------------------------------
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - app: api
+            build_args: ""
+          - app: web
+            # NEXT_PUBLIC_* is inlined into the client bundle by the compiler,
+            # so the public origin has to be known HERE, at build time. This is
+            # why changing the domain needs a new image and not a restart.
+            build_args: |
+              NEXT_PUBLIC_API_URL=https://${{ vars.APP_DOMAIN }}/api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image name
+        id: image
+        # GHCR rejects uppercase in a path, and GitHub owners are free to
+        # contain it. `${VAR,,}` lowercases in place.
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}-${{ matrix.app }}" >>"$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/${{ matrix.app }}/Dockerfile
+          push: true
+          build-args: ${{ matrix.build_args }}
+          # The SHA tag is what actually gets deployed; `latest` exists only so
+          # a human poking at the registry sees something recognisable.
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
+            ${{ steps.image.outputs.name }}:latest
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  # ---------------------------------------------------------------------------
+  # Ship it.
+  # ---------------------------------------------------------------------------
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Attach a GitHub Environment so this can be given a required reviewer
+    # later without touching this file.
+    environment:
+      name: production
+      url: https://${{ vars.APP_DOMAIN }}
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image names
+        id: image
+        run: echo "prefix=ghcr.io/${GITHUB_REPOSITORY,,}" >>"$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # The droplet's .env is generated from secrets on every single deploy, so
+      # "what is configured" is always this file and never something somebody
+      # edited over SSH eight months ago and forgot.
+      # -----------------------------------------------------------------------
+      - name: Compose the production env file
+        env:
+          APP_DOMAIN: ${{ vars.APP_DOMAIN }}
+          APP_TIMEZONE: ${{ vars.APP_TIMEZONE }}
+          IMAGE_PREFIX: ${{ steps.image.outputs.prefix }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          BACKUP_BUCKET: ${{ secrets.BACKUP_BUCKET }}
+        run: |
+          umask 077
+          cat >.env.production <<EOF
+          APP_DOMAIN=${APP_DOMAIN}
+          APP_TIMEZONE=${APP_TIMEZONE:-Asia/Manila}
+
+          API_IMAGE=${IMAGE_PREFIX}-api:${GITHUB_SHA}
+          WEB_IMAGE=${IMAGE_PREFIX}-web:${GITHUB_SHA}
+
+          POSTGRES_USER=eztruckr
+          POSTGRES_DB=eztruckr
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+
+          BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+
+          S3_ENDPOINT=${S3_ENDPOINT}
+          S3_REGION=auto
+          S3_BUCKET=${S3_BUCKET}
+          S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
+          S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
+
+          RESEND_API_KEY=${RESEND_API_KEY}
+          MAIL_FROM=${MAIL_FROM}
+
+          BACKUP_BUCKET=${BACKUP_BUCKET}
+          BACKUP_RETENTION_DAYS=30
+          EOF
+
+      - name: Write the Cloudflare origin certificate
+        env:
+          ORIGIN_CERT: ${{ secrets.CF_ORIGIN_CERT }}
+          ORIGIN_KEY: ${{ secrets.CF_ORIGIN_KEY }}
+        run: |
+          umask 077
+          mkdir -p certs-out
+          printf '%s\n' "$ORIGIN_CERT" >certs-out/origin.pem
+          printf '%s\n' "$ORIGIN_KEY" >certs-out/origin.key
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" >~/.ssh/id_ed25519
+          # A pinned host key, not ssh-keyscan at deploy time. Trusting whatever
+          # answers on first connection would hand a deploy — secrets and all —
+          # to anyone who can get in the middle of it once.
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Copy the stack to the droplet
+        env:
+          TARGET: deploy@${{ secrets.DEPLOY_HOST }}
+        run: |
+          ssh "$TARGET" 'mkdir -p /opt/eztruckr/infra /opt/eztruckr/certs'
+          scp docker-compose.prod.yml       "$TARGET:/opt/eztruckr/"
+          scp infra/Caddyfile infra/backup.sh "$TARGET:/opt/eztruckr/infra/"
+          scp .env.production               "$TARGET:/opt/eztruckr/.env"
+          scp certs-out/origin.pem certs-out/origin.key "$TARGET:/opt/eztruckr/certs/"
+
+      - name: Authenticate the droplet to GHCR
+        env:
+          TARGET: deploy@${{ secrets.DEPLOY_HOST }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Through stdin, so the token never appears in an argv that anything
+        # else on the box could read out of /proc.
+        run: |
+          printf '%s\n' "$GHCR_TOKEN" |
+            ssh "$TARGET" "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+
+      - name: Migrate, then release
+        env:
+          TARGET: deploy@${{ secrets.DEPLOY_HOST }}
+        # The remote script needs no interpolation — every value it uses is in
+        # the .env that was just copied — so the heredoc is quoted and what you
+        # read here is exactly what runs.
+        run: |
+          ssh "$TARGET" 'bash -euo pipefail' <<'REMOTE'
+          cd /opt/eztruckr
+          chmod 600 .env certs/origin.key
+          chmod 700 certs
+          chmod +x infra/backup.sh
+
+          echo "==> Pulling images"
+          docker compose -f docker-compose.prod.yml pull --quiet
+
+          # Postgres has to be up for the migration, and it is the one service
+          # whose container survives a release untouched.
+          docker compose -f docker-compose.prod.yml up -d postgres
+
+          echo "==> Applying migrations"
+          # BEFORE the new api starts, and as its own step. If this fails the
+          # deploy stops here with the reason on screen, and the previous
+          # release keeps serving — which is not what happens when migrations
+          # run from a restarting container's entrypoint.
+          docker compose -f docker-compose.prod.yml --profile tools run --rm migrate
+
+          echo "==> Starting"
+          docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+          echo "==> Pruning old images"
+          docker image prune -f
+
+          # Nightly backup at 18:10 UTC — 02:10 Manila, after the working day.
+          # Written here rather than in provision.sh so it is re-asserted on
+          # every deploy and cannot quietly go missing.
+          CRON='10 18 * * * /opt/eztruckr/infra/backup.sh >>/var/log/eztruckr-backup.log 2>&1'
+          ( crontab -l 2>/dev/null | grep -vF '/opt/eztruckr/infra/backup.sh'; echo "$CRON" ) | crontab -
+          REMOTE
+
+      - name: Verify the release is healthy
+        env:
+          TARGET: deploy@${{ secrets.DEPLOY_HOST }}
+        # Reads the container's own healthcheck rather than curling the public
+        # URL: this has to report on the code that was just deployed, not on
+        # whatever Cloudflare still has cached.
+        run: |
+          ssh "$TARGET" 'bash -euo pipefail' <<'REMOTE'
+          cd /opt/eztruckr
+
+          # Resolved through compose by SERVICE name rather than hardcoded
+          # container names. No service declares a `container_name`, so Docker
+          # assigns `eztruckr-api-1` and friends — and asking compose keeps this
+          # correct if that convention ever changes.
+          # `{{if .State.Health}}` is not decoration. A container with no
+          # healthcheck resolves that field to nil and prints an EMPTY STRING
+          # while exiting 0 — which would compare unequal to "healthy" forever
+          # and spin this loop out to its full timeout reporting `api=` with no
+          # hint as to why. Saying "none" out loud names the actual fault.
+          health() {
+            id=$(docker compose -f docker-compose.prod.yml ps -q "$1" 2>/dev/null)
+            [ -n "$id" ] || { echo missing; return; }
+            s=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id" 2>/dev/null) || s=missing
+            echo "${s:-missing}"
+          }
+
+          for _ in $(seq 1 40); do
+            api=$(health api)
+            web=$(health web)
+            if [ "$api" = healthy ] && [ "$web" = healthy ]; then
+              echo "healthy"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "TIMED OUT — api=${api} web=${web}" >&2
+          docker compose -f docker-compose.prod.yml logs --tail=120 api web >&2
+          exit 1
+          REMOTE

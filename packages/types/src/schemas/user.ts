@@ -38,11 +38,12 @@ const userFields = z.object({
    *
    * Required for the roles in `ROLES_LINKED_TO_STAFF` and forbidden for every
    * other, but for two different reasons. A CREW login that resolved to nobody
-   * would see an empty portal, because the link IS its scope key. A
-   * DISPATCH_MANAGER is not scoped by it at all — they see every trip — and is
-   * linked so the system can tell which of the floats out there are theirs. An
-   * office login that resolved to a person would be silently narrowed to that
-   * person's records by any query that filtered on it.
+   * would see an empty portal, because the link IS its scope key. The two
+   * office cash holders — OPERATIONS and DISPATCH_MANAGER — are not confined to
+   * their own trips at all, and are linked so the system can tell which of the
+   * floats out there are theirs to explain. An office login that resolved to a
+   * person without needing to would be silently narrowed to that person's
+   * records by any query that filtered on it.
    */
   staffId: z
     .string()
@@ -60,7 +61,7 @@ export function hasStaffLinkMatchingRole(value: {
 }
 
 export const STAFF_LINK_MESSAGE =
-  'a crew or dispatch-manager login must name the staff member it belongs to, and no other role may';
+  'a crew, dispatcher or dispatch-manager login must name the staff member it belongs to, and no other role may';
 
 /**
  * NO PASSWORD FIELD. A login is provisioned empty and its owner sets the

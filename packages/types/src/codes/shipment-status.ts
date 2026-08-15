@@ -117,13 +117,37 @@ export function statusAfterManualTransition(requested: ShipmentStatus): Shipment
 }
 
 /**
- * Statuses at which the rate chain and the crew assignment are still editable.
+ * Statuses at which the booking — the rate chain included — is still an
+ * ordinary edit.
  *
  * Once a shipment is dispatched the crew is on the road against agreed
  * figures, so the gross rate stops being a draft and becomes a commitment.
  */
 export function isRateChainEditable(status: ShipmentStatus): boolean {
   return status === ShipmentStatus.DRAFT;
+}
+
+/**
+ * Statuses at which an agreed rate may still be CORRECTED.
+ *
+ * A different question from `isRateChainEditable`, and the pair is the point.
+ * That one says when the figure is still a proposal, and dispatch stops it. A
+ * broker who confirms a different cut the next morning, or a gross rate typed
+ * with a zero missing, is neither a proposal nor a thing the crew being on the
+ * road can fix — the rate was simply recorded wrong, and refusing to correct it
+ * means the trip's revenue is knowingly false for ever.
+ *
+ * SAME BOUND AS THE CHARGES, deliberately, because it is the same reason: both
+ * feed the commission base, so both stay open until the base is frozen for good
+ * at LIQUIDATED. And the harder bound is not here at all — a correction is
+ * refused once any commission has been PAID, which is a fact about the payout
+ * rather than about the status, so `assertNothingPaid` enforces it and this
+ * cannot.
+ *
+ * Restricted by role as well: see `CAN_EDIT_RATE_CHAIN`.
+ */
+export function isRateChainCorrectable(status: ShipmentStatus): boolean {
+  return !shipmentStatusAtLeast(status, ShipmentStatus.LIQUIDATED);
 }
 
 /**
