@@ -49,8 +49,8 @@ Ports are deliberately non-standard: postgres **5433**, minio **9010/9011**, api
   crew-pay net.
 
 **Counts (verified live):** 32 tables (29 business + 3 Better Auth), 27 `_created_by_required`,
-29 `_soft_delete_consistent`, 24 partial uniques, 9 payout triggers, 11 functions, 58
-code-column comments, 177 `uuid` columns, **6 migrations**. `code-constraints.test.ts` asserts
+29 `_soft_delete_consistent`, 24 partial uniques, 9 payout triggers, 11 functions, 67
+column comments, 178 `uuid` columns, **7 migrations**. `code-constraints.test.ts` asserts
 the table count and reads every code CHECK back out of the catalog, so both a new table and a
 code appended without a migration fail there rather than at the first write.
 
@@ -118,6 +118,19 @@ Every action takes a **liquidation id**; only the lists and the create take a sh
 billable expense is revenue whose cost lands wherever the money left, so counting both
 double-counts; an adjustment is never an edit to a `Commission`, which states its own arithmetic
 so a voucher is re-derivable a year later.
+
+**`BillableExpense` and `CompanyPaidExpense` carry the same fields**, `isCommissionable` aside —
+one act of spending seen from two sides. Both resolve the payee rule through
+`resolvePayeeRequirement` and freeze it under a `*_payee_required` CHECK; billable's category
+stays nullable for rows that predate it, so an uncategorised row freezes the rule **false**,
+which is the only value that CHECK accepts with no payee.
+
+**Every reference number is optional and never unique** — allowance, liquidation and both
+expenses. A reference is what somebody wrote on a piece of paper, and one transfer covering two
+crew members legitimately repeats. Repetition is therefore **reported, not refused**:
+`AllowanceSummary` derives `referenceNumberIsDuplicated` per request, case-insensitively, across
+every live allowance rather than the trip's. Trimming is the request schema's job
+(`optionalText`), so the comparison only has to survive case.
 
 ### Statuses
 
@@ -564,6 +577,14 @@ allowed it throughout.
 stamping its flag on a failed invite, a pooled connection left with triggers disabled, and a
 release script eating itself from stdin. **The pattern: each layer behaved exactly as designed,
 and the failure lived between two of them.** Conventional Commits from `3122b22` on.
+
+**10** — the paperwork fields. `shipment.shipmentDate` and `containerNumber` (searched alongside
+the number and the lane), reference numbers on the liquidation and both expenses, the allowance's
+own `issuedAt` finally offered on the form, and `BillableExpense` given the fields
+`CompanyPaidExpense` already had. Every delete on the money screens now asks first, through one
+`ConfirmDeleteButton` that renders its own trigger so a card cannot place the button without the
+question — each had wired a bin icon straight to its mutation while master data and users had
+confirmed all along.
 
 ---
 
