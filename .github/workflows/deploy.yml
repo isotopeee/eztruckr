@@ -121,32 +121,36 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           MAIL_FROM: ${{ secrets.MAIL_FROM }}
           BACKUP_BUCKET: ${{ secrets.BACKUP_BUCKET }}
+        # Values are QUOTED. Compose strips the quotes, so nothing downstream
+        # sees them — but `MAIL_FROM=EZTruckr <no-reply@…>` is a redirection to
+        # any shell that reads this file, and unquoted it takes the whole line
+        # out. Quoting costs nothing and keeps the file safe for both readers.
         run: |
           umask 077
           cat >.env.production <<EOF
-          APP_DOMAIN=${APP_DOMAIN}
-          APP_TIMEZONE=${APP_TIMEZONE:-Asia/Manila}
+          APP_DOMAIN="${APP_DOMAIN}"
+          APP_TIMEZONE="${APP_TIMEZONE:-Asia/Manila}"
 
-          API_IMAGE=${IMAGE_PREFIX}-api:${GITHUB_SHA}
-          WEB_IMAGE=${IMAGE_PREFIX}-web:${GITHUB_SHA}
+          API_IMAGE="${IMAGE_PREFIX}-api:${GITHUB_SHA}"
+          WEB_IMAGE="${IMAGE_PREFIX}-web:${GITHUB_SHA}"
 
-          POSTGRES_USER=eztruckr
-          POSTGRES_DB=eztruckr
-          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          POSTGRES_USER="eztruckr"
+          POSTGRES_DB="eztruckr"
+          POSTGRES_PASSWORD="${POSTGRES_PASSWORD}"
 
-          BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+          BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET}"
 
-          S3_ENDPOINT=${S3_ENDPOINT}
-          S3_REGION=auto
-          S3_BUCKET=${S3_BUCKET}
-          S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
-          S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
+          S3_ENDPOINT="${S3_ENDPOINT}"
+          S3_REGION="auto"
+          S3_BUCKET="${S3_BUCKET}"
+          S3_ACCESS_KEY_ID="${S3_ACCESS_KEY_ID}"
+          S3_SECRET_ACCESS_KEY="${S3_SECRET_ACCESS_KEY}"
 
-          RESEND_API_KEY=${RESEND_API_KEY}
-          MAIL_FROM=${MAIL_FROM}
+          RESEND_API_KEY="${RESEND_API_KEY}"
+          MAIL_FROM="${MAIL_FROM}"
 
-          BACKUP_BUCKET=${BACKUP_BUCKET}
-          BACKUP_RETENTION_DAYS=30
+          BACKUP_BUCKET="${BACKUP_BUCKET}"
+          BACKUP_RETENTION_DAYS="30"
           EOF
 
       - name: Write the Cloudflare origin certificate

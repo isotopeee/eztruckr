@@ -18,16 +18,38 @@ COMPOSE="docker compose -f ${APP_DIR}/docker-compose.prod.yml"
 
 cd "$APP_DIR"
 
-# The same .env compose reads, so the credentials and bucket names can never
-# drift apart from the ones the application is using.
-set -a
-# shellcheck disable=SC1091
-source "${APP_DIR}/.env"
-set +a
+# The same .env compose reads, so credentials and bucket names cannot drift
+# from the ones the application is using — but READ, never sourced.
+#
+# `.env` is Compose's format, not shell's, and the two disagree. `MAIL_FROM` is
+#
+#     MAIL_FROM=EZTruckr <no-reply@mail.optimuslogisticscorp.com>
+#
+# which bash parses as an assignment followed by a redirection, and dies with
+# "syntax error near unexpected token `newline`" — killing this script before
+# it takes a single backup, while the stack it is backing up runs perfectly,
+# because Compose parses that same line correctly. Sourcing also imports every
+# other key, including ones with no business being in this script's environment.
+#
+# So: pull out exactly the seven values needed, tolerating quoted or bare
+# values, and never let the file reach a shell parser.
+env_value() {
+	sed -n "s/^$1=//p" "${APP_DIR}/.env" | tail -n 1 |
+		sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
 
-: "${POSTGRES_USER:?}" "${POSTGRES_DB:?}" "${S3_ENDPOINT:?}" "${BACKUP_BUCKET:?}"
-: "${S3_ACCESS_KEY_ID:?}" "${S3_SECRET_ACCESS_KEY:?}"
-RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
+POSTGRES_USER="$(env_value POSTGRES_USER)"
+POSTGRES_DB="$(env_value POSTGRES_DB)"
+S3_ENDPOINT="$(env_value S3_ENDPOINT)"
+S3_ACCESS_KEY_ID="$(env_value S3_ACCESS_KEY_ID)"
+S3_SECRET_ACCESS_KEY="$(env_value S3_SECRET_ACCESS_KEY)"
+BACKUP_BUCKET="$(env_value BACKUP_BUCKET)"
+
+: "${POSTGRES_USER:?not found in .env}" "${POSTGRES_DB:?not found in .env}"
+: "${S3_ENDPOINT:?not found in .env}" "${BACKUP_BUCKET:?not found in .env}"
+: "${S3_ACCESS_KEY_ID:?not found in .env}" "${S3_SECRET_ACCESS_KEY:?not found in .env}"
+RETENTION_DAYS="$(env_value BACKUP_RETENTION_DAYS)"
+RETENTION_DAYS="${RETENTION_DAYS:-30}"
 
 STAMP="$(date -u +%Y-%m-%dT%H%M%SZ)"
 FILE="eztruckr-${STAMP}.dump"
