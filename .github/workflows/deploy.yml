@@ -199,8 +199,15 @@ jobs:
         # The remote script needs no interpolation — every value it uses is in
         # the .env that was just copied — so the heredoc is quoted and what you
         # read here is exactly what runs.
+        #
+        # THE SENTINEL AT THE BOTTOM IS A REAL CHECK, not decoration. bash reads
+        # this script from stdin, so any command inside it that also reads stdin
+        # swallows the remaining lines; bash then hits EOF and exits 0, and a
+        # half-finished deploy reports success. Requiring the last line to have
+        # actually printed turns that silent truncation into a failed step,
+        # whatever future command causes it.
         run: |
-          ssh "$TARGET" 'bash -euo pipefail' <<'REMOTE'
+          out=$(ssh "$TARGET" 'bash -euo pipefail' <<'REMOTE'
           cd /opt/eztruckr
           chmod 600 .env certs/origin.key
           chmod 700 certs
@@ -218,7 +225,16 @@ jobs:
           # deploy stops here with the reason on screen, and the previous
           # release keeps serving — which is not what happens when migrations
           # run from a restarting container's entrypoint.
-          docker compose -f docker-compose.prod.yml --profile tools run --rm migrate
+          #
+          # `-T </dev/null` IS NOT OPTIONAL, and leaving it off does not fail —
+          # it silently truncates this script. bash is reading these lines from
+          # its own stdin (the heredoc piped in over ssh), and `compose run`
+          # attaches stdin by default, so it consumes every remaining line as
+          # container input. bash then reaches EOF and exits 0: migrations
+          # applied, nothing after this point executed, deploy reported success,
+          # and only postgres was left running. That is exactly what happened —
+          # the giveaway was the crontab install at the end never landing.
+          docker compose -f docker-compose.prod.yml --profile tools run --rm -T migrate </dev/null
 
           echo "==> Starting"
           docker compose -f docker-compose.prod.yml up -d --remove-orphans
@@ -230,8 +246,23 @@ jobs:
           # Written here rather than in provision.sh so it is re-asserted on
           # every deploy and cannot quietly go missing.
           CRON='10 18 * * * /opt/eztruckr/infra/backup.sh >>/var/log/eztruckr-backup.log 2>&1'
-          ( crontab -l 2>/dev/null | grep -vF '/opt/eztruckr/infra/backup.sh'; echo "$CRON" ) | crontab -
+          # `|| true` because `grep -v` exits 1 when it selects NO lines, which
+          # is the ordinary case on a box whose crontab is empty or holds only
+          # the line being replaced. Under `pipefail` that non-zero propagates,
+          # `set -e` kills the subshell before `echo "$CRON"` runs, and the
+          # whole step dies one line short of finishing — with the crontab left
+          # empty, which is precisely the state this line exists to prevent.
+          ( crontab -l 2>/dev/null | grep -vF '/opt/eztruckr/infra/backup.sh' || true; echo "$CRON" ) | crontab -
+
+          echo "__RELEASE_COMPLETE__"
           REMOTE
+          )
+          echo "$out"
+          grep -q '__RELEASE_COMPLETE__' <<<"$out" || {
+            echo "::error::The release script did not run to completion — its last line never" \
+                 "printed. Something inside it consumed stdin and truncated the rest." >&2
+            exit 1
+          }
 
       - name: Verify the release is healthy
         env:
