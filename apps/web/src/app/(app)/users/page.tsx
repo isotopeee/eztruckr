@@ -62,6 +62,7 @@ export default function UsersPage() {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
   const [removing, setRemoving] = useState<User | null>(null);
+  const [revoking, setRevoking] = useState<User | null>(null);
   const [resetting, setResetting] = useState<User | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [values, setValues] = useState<FormValues>({});
@@ -197,6 +198,7 @@ export default function UsersPage() {
     mutationFn: (user: User) =>
       apiFetch<StaffInvitation>(`/users/${user.id}/invitation`, { method: 'DELETE' }),
     onSuccess: async () => {
+      setRevoking(null);
       toast.success('Invite withdrawn. The link no longer works and the account cannot sign in.');
       await queryClient.invalidateQueries({ queryKey: ['users'] });
     },
@@ -311,13 +313,16 @@ export default function UsersPage() {
                         >
                           <Send className="size-4" />
                         </Button>
+                        {/* Asked first, like Remove below: withdrawing shuts an
+                            account somebody may be part-way through setting up,
+                            and the link they were sent dies with it. */}
                         {!user.invitation.revokedAt ? (
                           <Button
                             variant="ghost"
                             size="icon"
                             aria-label="Withdraw invite"
                             disabled={revokeInvite.isPending}
-                            onClick={() => revokeInvite.mutate(user)}
+                            onClick={() => setRevoking(user)}
                           >
                             <Ban className="size-4" />
                           </Button>
@@ -442,6 +447,32 @@ export default function UsersPage() {
             >
               {resetPassword.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
               Set password
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={revoking !== null} onOpenChange={(open) => !open && setRevoking(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Withdraw {revoking?.name}&apos;s invite?</DialogTitle>
+            <DialogDescription>
+              The link they were sent stops working and the account stays shut until somebody sends
+              a new invite. Resend mints a fresh link instead, if the old one has simply gone
+              astray.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRevoking(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={revokeInvite.isPending}
+              onClick={() => revoking && revokeInvite.mutate(revoking)}
+            >
+              {revokeInvite.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
+              Withdraw invite
             </Button>
           </DialogFooter>
         </DialogContent>

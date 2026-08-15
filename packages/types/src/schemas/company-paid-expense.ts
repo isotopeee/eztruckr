@@ -40,6 +40,7 @@ export const companyPaidExpenseSchema = auditFieldsSchema.extend({
   payeeName: z.string().nullable(),
   /** The rule that applied to THIS row, frozen when it was written. */
   payeeRequired: z.boolean(),
+  referenceNumber: z.string().nullable(),
   receiptId: z.string().nullable(),
   receiptFileName: z.string().nullable(),
 });
@@ -63,6 +64,12 @@ export const createCompanyPaidExpenseSchema = z.object({
    * see the note on `createLiquidationLineSchema.payeeId`.
    */
   payeeId: idSchema.nullish().transform((value) => value ?? null),
+  /**
+   * Invoice, official receipt or transaction reference. Optional, like every
+   * other reference in the system: a mandatory one is answered with an invented
+   * one, which reads like evidence and is not.
+   */
+  referenceNumber: optionalText(80),
   receiptId: idSchema.nullish().transform((value) => value ?? null),
 });
 

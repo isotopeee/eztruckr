@@ -631,6 +631,7 @@ model Payee {
   isActive    Boolean @default(true)
 
   liquidationLines    LiquidationLine[]
+  billableExpenses    BillableExpense[]
   companyPaidExpenses CompanyPaidExpense[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
@@ -916,11 +917,28 @@ model Shipment {
   truckId String? @db.Uuid
   truck   Truck?  @relation(fields: [truckId], references: [id], onDelete: Restrict)
 
+  /// The date the trip ran, as it appears on the paperwork.
+  ///
+  /// DELIBERATELY NOT `dispatchedAt`. That one is an event the system stamps
+  /// when somebody presses dispatch, so it can only ever say when the row was
+  /// touched; this is a fact about the trip, which a booking typed up a week
+  /// late still has to be able to state correctly. Defaults to now, so the
+  /// common case — booked the day it runs — needs nobody to fill it in.
+  shipmentDate DateTime @default(now()) @db.Timestamptz(6)
+
   /// Snapshotted from the route at dispatch so later edits to the route do not
   /// rewrite history.
   origin           String
   destination      String
   cargoDescription String?
+
+  /// The container or van number on the trailer, for containerised freight.
+  ///
+  /// Nullable, because plenty of freight is not in a box — and a required
+  /// field is answered with "N/A", which looks like a container number and is
+  /// not. Matched by the shipment search alongside the number and the lane,
+  /// because it is what a client phones up quoting.
+  containerNumber String?
 
   driverId String? @db.Uuid
   driver   Staff?  @relation("ShipmentDriver", fields: [driverId], references: [id], onDelete: Restrict)
@@ -1167,6 +1185,14 @@ model Liquidation {
   approvedBy     String?   @db.Uuid
   approvedByUser User?     @relation("LiquidationApprovedBy", fields: [approvedBy], references: [id], onDelete: Restrict)
   remarks        String?
+
+  /// The voucher or document number this account was settled under.
+  ///
+  /// Optional, and never unique. A reference is what somebody wrote on a piece
+  /// of paper; this system issues no such number and cannot vouch for one, so
+  /// enforcing uniqueness on it would only refuse the truth when two documents
+  /// genuinely carry the same reference.
+  referenceNumber String?
 
   lines       LiquidationLine[]
   history     LiquidationHistory[]
@@ -1439,6 +1465,14 @@ model Settlement {
 
 /// A cost the company fronted and recovers from the client (permit, crane,
 /// port charges). Adds to revenue and is also a real cost.
+///
+/// CARRIES THE SAME FIELDS AS `CompanyPaidExpense`, and the one difference is
+/// the point of both tables: this one is rebilled to the client and can feed
+/// the crew's commission base, that one is simply a cost. Everything else —
+/// what it was for, when the money left, who was paid, the paper behind it —
+/// is the same question asked of the same act of spending, and the two forms
+/// disagreeing about which of those to ask was an accident of which was
+/// written first.
 model BillableExpense {
   id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   shipmentId String   @db.Uuid
@@ -1447,10 +1481,30 @@ model BillableExpense {
   expenseCategoryId String?          @db.Uuid
   expenseCategory   ExpenseCategory? @relation(fields: [expenseCategoryId], references: [id], onDelete: Restrict)
 
-  description      String
-  amount           Decimal @db.Decimal(15, 4)
-  /// Whether this amount feeds the commission base.
-  isCommissionable Boolean @default(false)
+  /// Optional, unlike the amount: a category and a payee say more than a
+  /// description box repeating the category's own name. Rows written before
+  /// there was a category to pick still carry theirs.
+  description      String?
+  amount           Decimal  @db.Decimal(15, 4)
+  /// When the money left, which is not when the row was typed.
+  spentAt          DateTime @db.Timestamptz(6)
+  /// Whether this amount feeds the commission base. The one field with no
+  /// counterpart on a company-paid expense, because only this side can.
+  isCommissionable Boolean  @default(false)
+
+  /// Who was paid. Required only when `payeeRequired` says so.
+  payeeId String? @db.Uuid
+  payee   Payee?  @relation(fields: [payeeId], references: [id], onDelete: Restrict)
+
+  /// Copied from the expense category when the row was written. Frozen for the
+  /// same reason as `LiquidationLine.payeeRequired` — see the note there. Every
+  /// row predating the column reads false, because no payee could have been
+  /// named then and a frozen rule must state what actually applied.
+  payeeRequired Boolean @default(true)
+
+  /// Invoice, official receipt or transaction reference. Optional and never
+  /// unique, the same rule as `Allowance.referenceNumber`.
+  referenceNumber String?
 
   /// Partial-unique WHERE "deletedAt" IS NULL.
   receiptId String?  @db.Uuid
@@ -1467,6 +1521,8 @@ model BillableExpense {
   deletedByUser User?     @relation("BillableExpenseDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
   @@index([shipmentId])
+  @@index([expenseCategoryId])
+  @@index([payeeId])
   @@index([deletedAt])
   @@map("billable_expense")
 }
@@ -1513,6 +1569,10 @@ model CompanyPaidExpense {
   /// Copied from the expense category when the row was written. Frozen for the
   /// same reason as `LiquidationLine.payeeRequired` — see the note there.
   payeeRequired Boolean @default(true)
+
+  /// Invoice, official receipt or transaction reference. Optional and never
+  /// unique, the same rule as `Allowance.referenceNumber`.
+  referenceNumber String?
 
   /// Partial-unique WHERE "deletedAt" IS NULL — a receipt backs at most one
   /// live row, the same rule as every other attachment in the system.

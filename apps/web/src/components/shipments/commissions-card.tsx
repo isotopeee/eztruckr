@@ -15,8 +15,9 @@ import {
   type CrewPayLine,
   type Shipment,
 } from '@eztruckr/types';
-import { AlertTriangle, Loader2, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, Loader2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
+import { ConfirmDeleteButton } from '@/components/confirm-delete-button';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -280,16 +281,13 @@ function AdjustmentRow({
           {formatMoney(adjustment.signedAmount)}
         </span>
         {canRemove && adjustment.isEditable ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            aria-label={`Remove adjustment: ${adjustment.reason}`}
-            onClick={onRemove}
-            disabled={removing}
-          >
-            <Trash2 className="h-3 w-3" />
-          </Button>
+          <ConfirmDeleteButton
+            label={`Remove adjustment: ${adjustment.reason}`}
+            title="Remove this adjustment?"
+            description={`${adjustment.staffName ?? 'This crew member'}'s net pay for the trip moves by ${formatMoney(adjustment.signedAmount)}. The commission itself is untouched — an adjustment is never an edit to one.`}
+            pending={removing}
+            onConfirm={onRemove}
+          />
         ) : null}
         {!adjustment.isEditable ? <Badge variant="outline">Paid</Badge> : null}
       </div>

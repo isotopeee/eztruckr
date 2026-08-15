@@ -117,6 +117,10 @@ export class ShipmentsService {
               { shipmentNumber: { contains: query.search, mode: 'insensitive' } },
               { origin: { contains: query.search, mode: 'insensitive' } },
               { destination: { contains: query.search, mode: 'insensitive' } },
+              // The container number is what a client phones up quoting, so it
+              // is searched exactly like the shipment number rather than being
+              // a filter of its own.
+              { containerNumber: { contains: query.search, mode: 'insensitive' } },
             ],
           }
         : {}),
@@ -191,9 +195,13 @@ export class ShipmentsService {
       thirdPartyId: input.thirdPartyId,
       routeId: input.routeId,
       truckId: input.truckId,
+      // Omitted rather than passed as null, so the column's own default stands:
+      // a booking that says nothing about the date is one made today.
+      ...(input.shipmentDate === null ? {} : { shipmentDate: new Date(input.shipmentDate) }),
       origin: input.origin,
       destination: input.destination,
       cargoDescription: input.cargoDescription,
+      containerNumber: input.containerNumber,
       grossRate: rates.grossRate,
       tpcAmount: rates.tpcAmount,
       netRate: rates.netRate,
@@ -294,6 +302,10 @@ export class ShipmentsService {
     if (input.origin !== undefined) data.origin = input.origin;
     if (input.destination !== undefined) data.destination = input.destination;
     if (input.cargoDescription !== undefined) data.cargoDescription = input.cargoDescription;
+    if (input.containerNumber !== undefined) data.containerNumber = input.containerNumber;
+    // Null is "the schema normalised an absent date", not "clear the date" —
+    // the column is NOT NULL, so there is nothing to clear it to.
+    if (input.shipmentDate) data.shipmentDate = new Date(input.shipmentDate);
 
     // Any touch of the rate inputs re-derives the whole chain, so gross, TPC
     // and net can never drift apart into three separately-edited numbers.
@@ -971,9 +983,12 @@ export function toShipment(row: ShipmentRow): Shipment {
     truckId: row.truckId,
     truckPlateNumber: row.truck?.plateNumber ?? null,
 
+    shipmentDate: row.shipmentDate.toISOString(),
+
     origin: row.origin,
     destination: row.destination,
     cargoDescription: row.cargoDescription,
+    containerNumber: row.containerNumber,
 
     driverId: row.driverId,
     driverName: row.driver ? `${row.driver.firstName} ${row.driver.lastName}` : null,

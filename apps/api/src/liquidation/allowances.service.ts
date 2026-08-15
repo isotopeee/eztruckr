@@ -72,6 +72,8 @@ export class AllowancesService {
       orderBy: { issuedAt: 'asc' },
     });
 
+    const repeated = await this.repeatedReferenceNumbers(rows);
+
     return {
       shipmentId,
       // The one figure the variance is measured against. Computed here so no
@@ -80,8 +82,66 @@ export class AllowancesService {
       releaseCount: rows.length,
       routeStandardAllowance: decimalToString(shipment.route?.standardAllowance ?? null),
       canIssue: await this.canIssue(shipmentId),
-      allowances: rows.map(toAllowance),
+      allowances: rows.map((row) => {
+        const reference = normaliseReference(row.referenceNumber);
+
+        return {
+          ...toAllowance(row),
+          referenceNumberIsDuplicated: reference !== null && repeated.has(reference),
+        };
+      }),
     };
+  }
+
+  /**
+   * Which of these references also appear on another live release.
+   *
+   * SEARCHED ACROSS EVERY TRIP, not just this one, and that is the case worth
+   * catching: a deposit slip entered twice usually lands on two different
+   * shipments, which is exactly when nobody notices. Soft-deleted releases are
+   * excluded by the client extension — a reference freed by a correction should
+   * stop warning about itself.
+   *
+   * REPORTED, NEVER REFUSED. One bank transfer covering two crew members
+   * legitimately carries one reference on both releases, so a unique index
+   * would refuse a true record; the screen states it and the person holding the
+   * slip decides which of the two they have.
+   */
+  private async repeatedReferenceNumbers(
+    rows: readonly { referenceNumber: string | null }[],
+  ): Promise<Set<string>> {
+    const references = [
+      ...new Set(rows.map((row) => row.referenceNumber).filter((value) => value !== null)),
+    ];
+
+    if (references.length === 0) {
+      return new Set();
+    }
+
+    // MATCHED CASE-INSENSITIVELY, and one `equals` per reference rather than a
+    // single `in`, because `in` is exact: "BDO-4417" and "bdo-4417" are the
+    // same slip typed by two people, and a check that only catches identical
+    // spelling would miss the duplicate at exactly the moment two people
+    // recorded it. The list is the references already on this trip, so it is a
+    // handful of terms, not a scan of the column.
+    const matches = await this.prisma.client.allowance.findMany({
+      where: {
+        OR: references.map((reference) => ({
+          referenceNumber: { equals: reference, mode: 'insensitive' as const },
+        })),
+      },
+      select: { referenceNumber: true },
+    });
+
+    const seen = new Map<string, number>();
+
+    for (const match of matches) {
+      const key = normaliseReference(match.referenceNumber);
+      if (key === null) continue;
+      seen.set(key, (seen.get(key) ?? 0) + 1);
+    }
+
+    return new Set([...seen].filter(([, count]) => count > 1).map(([reference]) => reference));
   }
 
   /**
@@ -349,6 +409,17 @@ function badRequest(path: string, message: string): BadRequestException {
   return new BadRequestException({ message: 'Validation failed', errors: [{ path, message }] });
 }
 
+/**
+ * A reference as the duplicate check compares it: trimmed, lowercased, and null
+ * when there is nothing left. The web form normalises the same way as it is
+ * typed, so the warning before saving and the warning after it agree.
+ */
+function normaliseReference(reference: string | null): string | null {
+  const trimmed = reference?.trim().toLowerCase();
+
+  return trimmed ? trimmed : null;
+}
+
 export function toAllowance(row: AllowanceRow): Allowance {
   if (!isDisbursementMode(row.disbursementMode)) {
     // The column carries a CHECK, so this needs raw SQL to reach. Failing
@@ -372,6 +443,10 @@ export function toAllowance(row: AllowanceRow): Allowance {
     releasedByName: row.releasedByUser?.name ?? null,
     disbursementMode: row.disbursementMode,
     referenceNumber: row.referenceNumber,
+    // Costs a query to answer, so only the summary pays for it and overrides
+    // this. False means "not checked" — the safe way round, since it never
+    // claims a reference is unique when nothing has looked.
+    referenceNumberIsDuplicated: false,
     receiptId: row.receiptId,
     receiptFileName: row.receipt?.fileName ?? null,
     ...auditFields(row),

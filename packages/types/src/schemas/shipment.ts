@@ -36,21 +36,60 @@ const chargeLineFields = {
   isCommissionable: z.boolean().default(false),
 };
 
+/**
+ * A cost the company fronted and rebills to the client.
+ *
+ * THE SAME FIELDS AS A COMPANY-PAID EXPENSE, deliberately, plus
+ * `isCommissionable`. Both record one act of spending on a trip; what separates
+ * them is where the money ends up, not what is worth knowing about it. The two
+ * forms used to ask different questions — this one wanted only a description
+ * and an amount — which meant the same permit fee was recorded with a payee and
+ * a date on one screen and without them on the other, and the reason was
+ * nothing better than which card was written first.
+ */
 export const billableExpenseSchema = auditFieldsSchema.extend({
   id: z.string(),
   shipmentId: z.string(),
   expenseCategoryId: z.string().nullable(),
   expenseCategoryName: z.string().nullable(),
-  description: z.string(),
+  description: z.string().nullable(),
   amount: z.string(),
+  spentAt: z.string(),
   isCommissionable: z.boolean(),
+  payeeId: z.string().nullable(),
+  payeeName: z.string().nullable(),
+  /** The rule that applied to THIS row, frozen when it was written. */
+  payeeRequired: z.boolean(),
+  referenceNumber: z.string().nullable(),
+  receiptId: z.string().nullable(),
+  receiptFileName: z.string().nullable(),
 });
 
 export type BillableExpense = z.infer<typeof billableExpenseSchema>;
 
 export const createBillableExpenseSchema = z.object({
-  ...chargeLineFields,
+  description: optionalText(200),
+  amount: positiveMoneyStringSchema,
+  isCommissionable: chargeLineFields.isCommissionable,
+  /**
+   * Still nullish, unlike a company-paid expense's.
+   *
+   * The asymmetry is about what the row is FOR rather than about the form: a
+   * company-paid expense exists to be a cost in the P&L, and an uncategorised
+   * cost is one nobody can report on, whereas a billable expense is primarily a
+   * thing to invoice. Rows written before there was a category to pick also
+   * still have to be patchable.
+   */
   expenseCategoryId: idSchema.nullish().transform((value) => value ?? null),
+  /** When the money left, which is not when somebody typed it in. */
+  spentAt: isoDateTimeSchema,
+  /**
+   * Who was paid. Optional here, required by the expense category — see the
+   * note on `createLiquidationLineSchema.payeeId`.
+   */
+  payeeId: idSchema.nullish().transform((value) => value ?? null),
+  referenceNumber: optionalText(80),
+  receiptId: idSchema.nullish().transform((value) => value ?? null),
 });
 
 export type CreateBillableExpenseInput = z.infer<typeof createBillableExpenseSchema>;
@@ -90,9 +129,13 @@ export const shipmentSchema = auditFieldsSchema.extend({
   truckId: z.string().nullable(),
   truckPlateNumber: z.string().nullable(),
 
+  /** The date the trip ran, from the paperwork — not `dispatchedAt`. */
+  shipmentDate: z.string(),
+
   origin: z.string(),
   destination: z.string(),
   cargoDescription: z.string().nullable(),
+  containerNumber: z.string().nullable(),
 
   driverId: z.string().nullable(),
   driverName: z.string().nullable(),
@@ -203,12 +246,22 @@ const shipmentFields = z.object({
   truckId: idSchema.nullish().transform((value) => value ?? null),
 
   /**
+   * When the trip ran. Optional, defaulting to now on the server, because the
+   * common case is booking a trip on the day it runs — and a date somebody has
+   * to restate every time is a date somebody gets wrong.
+   */
+  shipmentDate: isoDateTimeSchema.nullish().transform((value) => value ?? null),
+
+  /**
    * Snapshotted onto the shipment rather than read through the route, so
    * renaming a route later does not rewrite where old trips went.
    */
   origin: requiredText(160),
   destination: requiredText(160),
   cargoDescription: optionalText(400),
+
+  /** The box on the trailer. Null for freight that is not containerised. */
+  containerNumber: optionalText(40),
 
   grossRate: positiveMoneyStringSchema,
   tpcRate: rateStringSchema.nullish().transform((value) => value ?? null),

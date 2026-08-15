@@ -217,6 +217,7 @@ describe('recording a cost the company paid itself', () => {
         amount: '6200.00',
         spentAt: '2026-08-11T00:00:00.000Z',
         payeeId,
+        referenceNumber: null,
         receiptId: null,
       }),
     );
@@ -237,6 +238,7 @@ describe('recording a cost the company paid itself', () => {
           amount: '100.00',
           spentAt: '2026-08-11T00:00:00.000Z',
           payeeId,
+          referenceNumber: null,
           receiptId: null,
         }),
       ),
@@ -254,6 +256,7 @@ describe('recording a cost the company paid itself', () => {
           amount: '100.00',
           spentAt: '2026-08-11T00:00:00.000Z',
           payeeId: ABSENT_ID,
+          referenceNumber: null,
           receiptId: null,
         }),
       ),
@@ -275,6 +278,7 @@ describe('recording a cost the company paid itself', () => {
           amount: '100.00',
           spentAt: '2026-08-11T00:00:00.000Z',
           payeeId: null,
+          referenceNumber: null,
           receiptId: null,
         }),
       ),
@@ -305,6 +309,7 @@ describe('recording a cost the company paid itself', () => {
         amount: '20.00',
         spentAt: '2026-08-11T00:00:00.000Z',
         payeeId: null,
+        referenceNumber: null,
         receiptId: null,
       }),
     );
@@ -334,6 +339,7 @@ describe('recording a cost the company paid itself', () => {
         amount: '20.00',
         spentAt: '2026-08-11T00:00:00.000Z',
         payeeId: null,
+        referenceNumber: null,
         receiptId: null,
       }),
     );
@@ -410,6 +416,7 @@ describe('recording a cost the company paid itself', () => {
         amount: '3000.00',
         spentAt: '2026-08-11T00:00:00.000Z',
         payeeId,
+        referenceNumber: null,
         receiptId: null,
       }),
     );
@@ -430,10 +437,107 @@ describe('recording a cost the company paid itself', () => {
           amount: '500.00',
           spentAt: '2026-08-11T00:00:00.000Z',
           payeeId,
+          referenceNumber: null,
           receiptId: null,
         }),
       ),
     ).rejects.toThrow(/closed; its costs are now part of the record/i);
+  });
+});
+
+/**
+ * A billable expense records the same facts as a company-paid one.
+ *
+ * The two are one act of spending seen from opposite sides — rebilled, or not —
+ * so what is worth knowing about it does not change with the side. These pin
+ * the parity in the places it could quietly come apart: the payee rule, which
+ * has to be resolved through the shared statement of it rather than a second
+ * copy, and the CHECK that backs the frozen flag.
+ */
+describe('a billable expense carries what a company-paid one does', () => {
+  it('records the date, the payee and the reference alongside the amount', async () => {
+    if (!available) return;
+
+    const expense = await act(() =>
+      charges.addBillableExpense(SHIPMENT_ID, {
+        expenseCategoryId: fuelCategoryId,
+        description: 'Crane hire, rebilled',
+        amount: '4500.00',
+        spentAt: '2026-08-11T00:00:00.000Z',
+        isCommissionable: false,
+        payeeId,
+        referenceNumber: 'SI-88214',
+        receiptId: null,
+      }),
+    );
+
+    expect(expense.spentAt).toBe('2026-08-11T00:00:00.000Z');
+    expect(expense.payeeId).toBe(payeeId);
+    expect(expense.referenceNumber).toBe('SI-88214');
+    // Frozen from the category — Fuel demands a payee — rather than read live.
+    expect(expense.payeeRequired).toBe(true);
+  });
+
+  it('refuses a missing payee when the category demands one', async () => {
+    if (!available) return;
+
+    await setCategoryRequiresPayee(toggleCategoryId, true);
+
+    const errors = await validationErrors(() =>
+      act(() =>
+        charges.addBillableExpense(SHIPMENT_ID, {
+          expenseCategoryId: toggleCategoryId,
+          description: null,
+          amount: '100.00',
+          spentAt: '2026-08-11T00:00:00.000Z',
+          isCommissionable: false,
+          payeeId: null,
+          referenceNumber: null,
+          receiptId: null,
+        }),
+      ),
+    );
+
+    expect(errors).toEqual([
+      { path: 'payeeId', message: expect.stringContaining('must record who was paid') },
+    ]);
+  });
+
+  /**
+   * The case a company-paid expense cannot reach, because its category is
+   * mandatory. With no category there is no rule to freeze, so the flag has to
+   * come out false — the only value the CHECK accepts without a payee beside it.
+   */
+  it('freezes the rule false when there is no category to take one from', async () => {
+    if (!available) return;
+
+    const expense = await act(() =>
+      charges.addBillableExpense(SHIPMENT_ID, {
+        expenseCategoryId: null,
+        description: 'Port charges, no category',
+        amount: '900.00',
+        spentAt: '2026-08-11T00:00:00.000Z',
+        isCommissionable: false,
+        payeeId: null,
+        referenceNumber: null,
+        receiptId: null,
+      }),
+    );
+
+    expect(expense.expenseCategoryId).toBeNull();
+    expect(expense.payeeRequired).toBe(false);
+  });
+
+  it('cannot store a required-but-missing payee, even bypassing the service', async () => {
+    if (!available) return;
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        INSERT INTO "billable_expense"
+          (id, "shipmentId", "expenseCategoryId", amount, "spentAt", "payeeRequired", "createdAt", "updatedAt", "createdBy")
+        VALUES ('${id('billable-no-payee')}', '${SHIPMENT_ID}', '${fuelCategoryId}', 100, now(), true, now(), now(), '${adminId}')
+      `),
+    ).rejects.toThrow(/billable_expense_payee_required/);
   });
 });
 
@@ -446,6 +550,7 @@ describe('gross profit', () => {
         amount,
         spentAt: '2026-08-11T00:00:00.000Z',
         payeeId,
+        referenceNumber: null,
         receiptId: null,
       }),
     );
@@ -456,10 +561,16 @@ describe('gross profit', () => {
 
     await act(() =>
       charges.addBillableExpense(SHIPMENT_ID, {
+        // Uncategorised, which is still legal for a rebill and is the case
+        // that freezes `payeeRequired` false with nothing to take a rule from.
         expenseCategoryId: null,
         description: 'Port charges, rebilled',
         amount: '2000.00',
+        spentAt: '2026-08-11T00:00:00.000Z',
         isCommissionable: false,
+        payeeId: null,
+        referenceNumber: null,
+        receiptId: null,
       }),
     );
     await act(() =>

@@ -46,7 +46,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { ApiError, apiFetch } from '@/lib/api-client';
-import { formatMoney } from '@/lib/format';
+import { formatDate, formatMoney } from '@/lib/format';
 import { createShipment, listShipments, shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 
@@ -107,7 +107,7 @@ export default function Page() {
             <Label htmlFor="search">Search</Label>
             <Input
               id="search"
-              placeholder="Number, origin or destination"
+              placeholder="Number, container, origin or destination"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
@@ -145,8 +145,10 @@ export default function Page() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Number</TableHead>
+                  <TableHead>Date</TableHead>
                   <TableHead>Client</TableHead>
                   <TableHead>Route</TableHead>
+                  <TableHead>Container</TableHead>
                   <TableHead>Crew</TableHead>
                   <TableHead>Truck</TableHead>
                   {showNetRate ? <TableHead className="text-right">Net rate</TableHead> : null}
@@ -164,9 +166,15 @@ export default function Page() {
                         {shipment.shipmentNumber}
                       </Link>
                     </TableCell>
+                    <TableCell className="text-muted-foreground whitespace-nowrap">
+                      {formatDate(shipment.shipmentDate)}
+                    </TableCell>
                     <TableCell>{shipment.clientName ?? '—'}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {shipment.origin} → {shipment.destination}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      {shipment.containerNumber ?? '—'}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
                       {shipment.driverName ?? 'no driver'}
@@ -218,8 +226,13 @@ function CreateShipmentDialog() {
     thirdPartyId: NONE,
     routeId: NONE,
     truckId: NONE,
+    // Today, and editable: a trip booked on Monday for a run that happened on
+    // Friday is ordinary, and the shipment number's date part records when the
+    // row was made rather than when the truck moved.
+    shipmentDate: new Date().toISOString().slice(0, 10),
     origin: '',
     destination: '',
+    containerNumber: '',
     grossRate: '',
     tpcMode: 'rate' as 'rate' | 'amount',
     tpcValue: '',
@@ -284,9 +297,13 @@ function CreateShipmentDialog() {
         thirdPartyId: hasBroker ? form.thirdPartyId : null,
         routeId: form.routeId === NONE ? null : form.routeId,
         truckId: form.truckId === NONE ? null : form.truckId,
+        // A date-only input means midnight local; sent as an instant, because
+        // storage is UTC and the display layer renders Asia/Manila.
+        shipmentDate: new Date(form.shipmentDate).toISOString(),
         origin: form.origin,
         destination: form.destination,
         cargoDescription: null,
+        containerNumber: form.containerNumber || null,
         grossRate: form.grossRate,
         tpcRate: hasBroker && form.tpcMode === 'rate' && form.tpcValue ? form.tpcValue : null,
         tpcAmount: hasBroker && form.tpcMode === 'amount' && form.tpcValue ? form.tpcValue : null,
@@ -331,20 +348,31 @@ function CreateShipmentDialog() {
             create.mutate();
           }}
         >
-          <Field id="clientId" label="Client" error={errors.clientId}>
-            <Select value={form.clientId} onValueChange={set('clientId')}>
-              <SelectTrigger id="clientId">
-                <SelectValue placeholder="Choose a client" />
-              </SelectTrigger>
-              <SelectContent>
-                {(clients.data?.items ?? []).map((client) => (
-                  <SelectItem key={client.id} value={client.id}>
-                    {client.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field id="clientId" label="Client" error={errors.clientId}>
+              <Select value={form.clientId} onValueChange={set('clientId')}>
+                <SelectTrigger id="clientId">
+                  <SelectValue placeholder="Choose a client" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(clients.data?.items ?? []).map((client) => (
+                    <SelectItem key={client.id} value={client.id}>
+                      {client.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field id="shipmentDate" label="Shipment date" error={errors.shipmentDate}>
+              <Input
+                id="shipmentDate"
+                type="date"
+                required
+                value={form.shipmentDate}
+                onChange={(event) => set('shipmentDate')(event.target.value)}
+              />
+            </Field>
+          </div>
 
           <Field id="routeId" label="Route" error={errors.routeId}>
             <Select value={form.routeId} onValueChange={chooseRoute}>
@@ -385,16 +413,26 @@ function CreateShipmentDialog() {
             </Field>
           </div>
 
-          <Field id="grossRate" label="Gross rate" error={errors.grossRate}>
-            <Input
-              id="grossRate"
-              inputMode="decimal"
-              required
-              placeholder="18000.00"
-              value={form.grossRate}
-              onChange={(event) => set('grossRate')(event.target.value)}
-            />
-          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field id="grossRate" label="Gross rate" error={errors.grossRate}>
+              <Input
+                id="grossRate"
+                inputMode="decimal"
+                required
+                placeholder="18000.00"
+                value={form.grossRate}
+                onChange={(event) => set('grossRate')(event.target.value)}
+              />
+            </Field>
+            <Field id="containerNumber" label="Container no." error={errors.containerNumber}>
+              <Input
+                id="containerNumber"
+                placeholder="Optional"
+                value={form.containerNumber}
+                onChange={(event) => set('containerNumber')(event.target.value)}
+              />
+            </Field>
+          </div>
 
           <Field id="truckId" label="Truck" error={errors.truckId}>
             <Select value={form.truckId} onValueChange={set('truckId')}>

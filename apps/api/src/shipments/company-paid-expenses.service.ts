@@ -78,6 +78,7 @@ export class CompanyPaidExpensesService {
         spentAt: new Date(input.spentAt),
         payeeId: input.payeeId,
         payeeRequired,
+        referenceNumber: input.referenceNumber,
         receiptId: input.receiptId,
       },
       include: EXPENSE_INCLUDE,
@@ -113,6 +114,7 @@ export class CompanyPaidExpensesService {
         ...(input.amount === undefined ? {} : { amount: input.amount }),
         ...(input.spentAt === undefined ? {} : { spentAt: new Date(input.spentAt) }),
         ...(input.payeeId === undefined ? {} : { payeeId: input.payeeId }),
+        ...(input.referenceNumber === undefined ? {} : { referenceNumber: input.referenceNumber }),
         ...(input.receiptId === undefined ? {} : { receiptId: input.receiptId }),
         // Re-stamped: the row's frozen rule follows its category.
         payeeRequired,
@@ -254,6 +256,7 @@ function toCompanyPaidExpense(row: ExpenseRow): CompanyPaidExpense {
     payeeId: row.payeeId,
     payeeName: row.payee?.name ?? null,
     payeeRequired: row.payeeRequired,
+    referenceNumber: row.referenceNumber,
     receiptId: row.receiptId,
     receiptFileName: row.receipt?.fileName ?? null,
     ...auditFields(row),

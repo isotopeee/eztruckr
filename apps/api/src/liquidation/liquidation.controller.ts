@@ -16,6 +16,7 @@ import {
   ReturnLiquidationDto,
   ReverseLiquidationDto,
   SetCustodianDto,
+  SetLiquidationReferenceDto,
   SubmitLiquidationDto,
   UpdateLiquidationLineDto,
 } from './liquidation.dto';
@@ -132,6 +133,25 @@ export class LiquidationController {
     @Body() dto: SetCustodianDto,
   ): Promise<Liquidation> {
     return this.liquidations.setCustodian(liquidationId, dto);
+  }
+
+  /**
+   * The voucher number this account was settled under.
+   *
+   * `CAN_SUBMIT_LIQUIDATION`, not `CAN_WRITE_SHIPMENT_MONEY` like the custodian
+   * above, and the difference is deliberate. Naming who answers for a float is
+   * a decision about somebody else's money; transcribing the reference off the
+   * paperwork is part of accounting for it, which is what the custodian is
+   * being asked to do. The service confines them to their own account.
+   */
+  @Patch('liquidations/:liquidationId/reference')
+  @Roles(...CAN_SUBMIT_LIQUIDATION)
+  setReference(
+    @Param('liquidationId') liquidationId: string,
+    @Body() dto: SetLiquidationReferenceDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Liquidation> {
+    return this.liquidations.setReference(liquidationId, dto, user);
   }
 
   @Delete('liquidations/:liquidationId')

@@ -48,6 +48,25 @@ export const allowanceSchema = auditFieldsSchema.extend({
   disbursementMode: disbursementModeSchema,
   referenceNumber: z.string().nullable(),
 
+  /**
+   * This reference number appears on another live release, anywhere in the
+   * system.
+   *
+   * A WARNING, NEVER A REFUSAL, and the difference is the whole design. One
+   * bank transfer covering two crew members legitimately carries one reference
+   * on both releases, so a unique index would refuse the truth; the far more
+   * common cause is the same slip being recorded twice, which nothing else
+   * catches because the amounts and the dates differ. Stating it lets the
+   * person looking decide which of the two they are holding.
+   *
+   * DERIVED PER REQUEST, not stored — the answer changes when another release
+   * is recorded or removed, and a stored flag would go quietly stale on the row
+   * that was already there. Answered only by the summary, which is the one
+   * response that can afford the lookup; `false` elsewhere means "not checked",
+   * the same convention as `Shipment.commissionsStale`.
+   */
+  referenceNumberIsDuplicated: z.boolean().default(false),
+
   receiptId: z.string().nullable(),
   receiptFileName: z.string().nullable(),
 });

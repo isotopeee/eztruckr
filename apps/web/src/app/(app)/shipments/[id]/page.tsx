@@ -17,6 +17,7 @@ import { RateChainCard } from '@/components/shipments/rate-chain-card';
 import { SettlementCard } from '@/components/shipments/settlement-card';
 import { Badge } from '@/components/ui/badge';
 import { ApiError } from '@/lib/api-client';
+import { formatDate } from '@/lib/format';
 import { getShipment, shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 
@@ -60,8 +61,12 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
             <Badge>{SHIPMENT_STATUS_LABELS[data.status]}</Badge>
           </div>
           <p className="text-muted-foreground text-sm">
-            {data.clientName} · {data.origin} → {data.destination}
+            {formatDate(data.shipmentDate)} · {data.clientName} · {data.origin} → {data.destination}
             {data.thirdPartyName ? ` · via ${data.thirdPartyName}` : ''}
+            {/* Beside the lane rather than in a card of its own: it is how
+                somebody on the phone identifies the trip, so it belongs where
+                the trip is identified. */}
+            {data.containerNumber ? ` · container ${data.containerNumber}` : ''}
           </p>
         </div>
       </div>

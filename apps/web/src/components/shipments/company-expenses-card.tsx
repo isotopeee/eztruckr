@@ -3,8 +3,9 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { UserRole, type ExpenseCategory, type Page, type Shipment } from '@eztruckr/types';
-import { Loader2, Paperclip, Trash2 } from 'lucide-react';
+import { Loader2, Paperclip } from 'lucide-react';
 import { toast } from 'sonner';
+import { ConfirmDeleteButton } from '@/components/confirm-delete-button';
 import { PayeeField } from '@/components/shipments/payee-field';
 import { ReceiptField } from '@/components/shipments/receipt-field';
 import { Button } from '@/components/ui/button';
@@ -53,6 +54,7 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
     amount: '',
     spentAt: new Date().toISOString().slice(0, 10),
     payeeId: '',
+    referenceNumber: '',
     receiptId: null as string | null,
     receiptFileName: null as string | null,
   });
@@ -96,6 +98,7 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
         spentAt: new Date(draft.spentAt).toISOString(),
         // '' is "nothing chosen"; the wire wants null.
         payeeId: draft.payeeId || null,
+        referenceNumber: draft.referenceNumber || null,
         receiptId: draft.receiptId,
       }),
     onSuccess: () => {
@@ -106,6 +109,7 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
         ...current,
         description: '',
         amount: '',
+        referenceNumber: '',
         receiptId: null,
         receiptFileName: null,
       }));
@@ -145,6 +149,7 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
                     {formatDate(expense.spentAt)}
                     {expense.payeeName ? ` · ${expense.payeeName}` : ''}
                     {expense.description ? ` · ${expense.description}` : ''}
+                    {expense.referenceNumber ? ` · Ref ${expense.referenceNumber}` : ''}
                   </p>
                   {expense.receiptFileName ? (
                     <p className="text-muted-foreground mt-1 flex items-center gap-1 text-xs">
@@ -156,15 +161,13 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="tabular-nums">{formatMoney(expense.amount)}</span>
                   {canEdit ? (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Remove ${expense.expenseCategoryName ?? 'expense'}`}
-                      onClick={() => remove.mutate(expense.id)}
-                      disabled={remove.isPending}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    <ConfirmDeleteButton
+                      label={`Remove ${expense.expenseCategoryName ?? 'expense'}`}
+                      title="Remove this expense?"
+                      description="It stops counting as a cost of this trip, so the gross profit below moves by its amount."
+                      pending={remove.isPending}
+                      onConfirm={() => remove.mutate(expense.id)}
+                    />
                   ) : null}
                 </div>
               </li>
@@ -257,10 +260,24 @@ export function CompanyExpensesCard({ shipment }: { shipment: Shipment }) {
               onChange={(payeeId) => setDraft((current) => ({ ...current, payeeId }))}
             />
 
+            <div className="space-y-1">
+              <Label htmlFor="company-expense-reference" className="text-xs">
+                Reference
+              </Label>
+              <Input
+                id="company-expense-reference"
+                placeholder="Invoice or OR number (optional)"
+                value={draft.referenceNumber}
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, referenceNumber: event.target.value }))
+                }
+              />
+            </div>
+
             <ReceiptField
               value={draft.receiptId}
               fileName={draft.receiptFileName}
-              label="Attach invoice"
+              label="Attach receipt"
               onChange={(receiptId, fileName) =>
                 setDraft((current) => ({ ...current, receiptId, receiptFileName: fileName }))
               }

@@ -10,6 +10,7 @@ import type {
 } from '@eztruckr/types';
 import { PrismaService } from '../prisma/prisma.service';
 import { auditFields } from '../master-data/serialize';
+import { resolvePayeeRequirement } from '../master-data/payee-requirement';
 import { ShipmentsService } from './shipments.service';
 
 /**
@@ -30,6 +31,14 @@ import { ShipmentsService } from './shipments.service';
  * unflagged charge costs the company nothing extra, whereas a wrongly flagged
  * one silently inflates every commission on the trip.
  *
+ * A BILLABLE EXPENSE NOW CARRIES WHAT A COMPANY-PAID ONE DOES — a date, a
+ * payee with its frozen requirement, a reference and a receipt. The two are the
+ * same act of spending recorded from opposite sides, and this one asking fewer
+ * questions was an accident of which was written first, not a rule. The payee
+ * requirement is resolved through the same `resolvePayeeRequirement` and backed
+ * by the same shape of CHECK, so the three disbursement tables refuse the same
+ * rows rather than each being trusted separately.
+ *
  * Every write here goes through `assertChargesEditable`, so a charge can never
  * be added behind a commission that has already been computed against a base
  * that did not include it.
@@ -48,8 +57,8 @@ export class ShipmentChargesService {
 
     const rows = await this.prisma.client.billableExpense.findMany({
       where: { shipmentId },
-      include: { expenseCategory: { select: { name: true } } },
-      orderBy: { createdAt: 'asc' },
+      include: BILLABLE_INCLUDE,
+      orderBy: [{ spentAt: 'asc' }, { createdAt: 'asc' }],
     });
 
     return rows.map(toBillableExpense);
@@ -61,6 +70,8 @@ export class ShipmentChargesService {
   ): Promise<BillableExpense> {
     await this.shipments.assertChargesEditable(shipmentId);
     await this.assertCategoryExists(input.expenseCategoryId);
+    await this.assertPayeeExists(input.payeeId);
+    await this.assertReceiptExists(input.receiptId);
 
     const row = await this.prisma.client.billableExpense.create({
       data: {
@@ -68,9 +79,14 @@ export class ShipmentChargesService {
         expenseCategoryId: input.expenseCategoryId,
         description: input.description,
         amount: input.amount,
+        spentAt: new Date(input.spentAt),
         isCommissionable: input.isCommissionable,
+        payeeId: input.payeeId,
+        payeeRequired: await this.freezePayeeRule(input.expenseCategoryId, input.payeeId),
+        referenceNumber: input.referenceNumber,
+        receiptId: input.receiptId,
       },
-      include: { expenseCategory: { select: { name: true } } },
+      include: BILLABLE_INCLUDE,
     });
 
     return toBillableExpense(row);
@@ -84,6 +100,13 @@ export class ShipmentChargesService {
     await this.shipments.assertChargesEditable(shipmentId);
     await this.assertBillableExpenseExists(shipmentId, id);
     await this.assertCategoryExists(input.expenseCategoryId);
+    await this.assertPayeeExists(input.payeeId);
+    await this.assertReceiptExists(input.receiptId);
+
+    // Resolved against the row as the patch will leave it, not against the
+    // request: changing only the category, or clearing only the payee, are the
+    // same failure approached from opposite sides.
+    const payeeRequired = await this.resolveRequirementAfterPatch(id, input);
 
     const row = await this.prisma.client.billableExpense.update({
       where: { id },
@@ -93,11 +116,17 @@ export class ShipmentChargesService {
           : { expenseCategoryId: input.expenseCategoryId }),
         ...(input.description === undefined ? {} : { description: input.description }),
         ...(input.amount === undefined ? {} : { amount: input.amount }),
+        ...(input.spentAt === undefined ? {} : { spentAt: new Date(input.spentAt) }),
         ...(input.isCommissionable === undefined
           ? {}
           : { isCommissionable: input.isCommissionable }),
+        ...(input.payeeId === undefined ? {} : { payeeId: input.payeeId }),
+        ...(input.referenceNumber === undefined ? {} : { referenceNumber: input.referenceNumber }),
+        ...(input.receiptId === undefined ? {} : { receiptId: input.receiptId }),
+        // Re-stamped: the row's frozen rule follows its category.
+        payeeRequired,
       },
-      include: { expenseCategory: { select: { name: true } } },
+      include: BILLABLE_INCLUDE,
     });
 
     return toBillableExpense(row);
@@ -213,19 +242,103 @@ export class ShipmentChargesService {
     });
 
     if (!found) {
-      throw new BadRequestException({
-        message: 'Validation failed',
-        errors: [
-          { path: 'expenseCategoryId', message: `No expense category with id ${categoryId}` },
-        ],
-      });
+      throw badRequest('expenseCategoryId', `No expense category with id ${categoryId}`);
     }
+  }
+
+  /**
+   * Existence only, deliberately — not `isActive`. A deactivated payee is one
+   * no longer OFFERED for new work, and refusing it here would block correcting
+   * an expense whose vendor has since been retired. The same rule, and the same
+   * argument, as `CompanyPaidExpensesService.assertPayeeExists`.
+   */
+  private async assertPayeeExists(payeeId: string | null | undefined): Promise<void> {
+    if (!payeeId) return;
+
+    const found = await this.prisma.client.payee.findFirst({
+      where: { id: payeeId },
+      select: { id: true },
+    });
+
+    if (!found) {
+      throw badRequest('payeeId', `No payee with id ${payeeId}`);
+    }
+  }
+
+  private async assertReceiptExists(receiptId: string | null | undefined): Promise<void> {
+    if (!receiptId) return;
+
+    const found = await this.prisma.client.receipt.findFirst({
+      where: { id: receiptId },
+      select: { id: true },
+    });
+
+    if (!found) {
+      throw badRequest('receiptId', `No receipt with id ${receiptId}`);
+    }
+  }
+
+  /**
+   * The payee rule to freeze onto a billable expense, which may have no
+   * category to take one from.
+   *
+   * `resolvePayeeRequirement` is the shared statement of the rule and it
+   * requires a category, because a liquidation line and a company-paid expense
+   * always carry one. A billable expense need not, and an uncategorised row has
+   * no rule to freeze: it freezes FALSE, which is also the only value the CHECK
+   * accepts without a payee beside it.
+   */
+  private freezePayeeRule(
+    expenseCategoryId: string | null,
+    payeeId: string | null,
+  ): Promise<boolean> {
+    if (expenseCategoryId === null) {
+      return Promise.resolve(false);
+    }
+
+    return resolvePayeeRequirement(this.prisma.client.expenseCategory, expenseCategoryId, payeeId);
+  }
+
+  /**
+   * The rule as the patch will leave the row, not as the request states it.
+   *
+   * `undefined` means "this PATCH did not mention the field", so the current
+   * value stands; an explicit `null` means "clear it" — which for the category
+   * is a real move here, unlike on a company-paid expense where the column is
+   * mandatory. That is why both fields are compared against `undefined` rather
+   * than coalesced with `??`, which would quietly ignore a deliberate clear.
+   */
+  private async resolveRequirementAfterPatch(
+    id: string,
+    input: UpdateBillableExpenseInput,
+  ): Promise<boolean> {
+    const current = await this.prisma.client.billableExpense.findFirst({
+      where: { id },
+      select: { expenseCategoryId: true, payeeId: true },
+    });
+
+    if (!current) {
+      throw new NotFoundException(`No billable expense with id ${id}`);
+    }
+
+    return this.freezePayeeRule(
+      input.expenseCategoryId === undefined ? current.expenseCategoryId : input.expenseCategoryId,
+      input.payeeId === undefined ? current.payeeId : input.payeeId,
+    );
   }
 }
 
-type BillableExpenseRow = Prisma.BillableExpenseGetPayload<{
-  include: { expenseCategory: { select: { name: true } } };
-}>;
+const BILLABLE_INCLUDE = {
+  expenseCategory: { select: { name: true } },
+  payee: { select: { name: true } },
+  receipt: { select: { fileName: true } },
+} satisfies Prisma.BillableExpenseInclude;
+
+type BillableExpenseRow = Prisma.BillableExpenseGetPayload<{ include: typeof BILLABLE_INCLUDE }>;
+
+function badRequest(path: string, message: string): BadRequestException {
+  return new BadRequestException({ message: 'Validation failed', errors: [{ path, message }] });
+}
 
 function toBillableExpense(row: BillableExpenseRow): BillableExpense {
   return {
@@ -235,7 +348,14 @@ function toBillableExpense(row: BillableExpenseRow): BillableExpense {
     expenseCategoryName: row.expenseCategory?.name ?? null,
     description: row.description,
     amount: row.amount.toString(),
+    spentAt: row.spentAt.toISOString(),
     isCommissionable: row.isCommissionable,
+    payeeId: row.payeeId,
+    payeeName: row.payee?.name ?? null,
+    payeeRequired: row.payeeRequired,
+    referenceNumber: row.referenceNumber,
+    receiptId: row.receiptId,
+    receiptFileName: row.receipt?.fileName ?? null,
     ...auditFields(row),
   };
 }

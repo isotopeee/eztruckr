@@ -12,8 +12,9 @@ import {
   type Liquidation,
   type Shipment,
 } from '@eztruckr/types';
-import { Loader2, Trash2 } from 'lucide-react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { ConfirmDeleteButton } from '@/components/confirm-delete-button';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -134,6 +135,17 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
                         : 'the unassigned account'}
                     </span>
                     {release.referenceNumber ? <span>Ref {release.referenceNumber}</span> : null}
+                    {/* The reference is on another live release somewhere in
+                        the system. Said, not refused: one transfer covering two
+                        crew members legitimately shares a reference, and the
+                        person holding the slip is the one who can tell that
+                        from the same slip entered twice. */}
+                    {release.referenceNumberIsDuplicated ? (
+                      <span className="text-destructive inline-flex items-center gap-1">
+                        <AlertTriangle className="h-3 w-3" />
+                        Reference already used on another release
+                      </span>
+                    ) : null}
                     {release.releasedByName ? <span>by {release.releasedByName}</span> : null}
                     {release.receiptId ? (
                       <a
@@ -153,15 +165,17 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="tabular-nums">{formatMoney(release.amount)}</span>
                   {canIssueRole && data?.canIssue ? (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Remove release"
-                      onClick={() => remove.mutate(release.id)}
-                      disabled={remove.isPending}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    <ConfirmDeleteButton
+                      label="Remove release"
+                      title="Remove this cash release?"
+                      description={`${formatMoney(release.amount)} comes off ${
+                        release.custodianName
+                          ? `${release.custodianName}'s account`
+                          : 'the unassigned account'
+                      }, so their variance moves by the same amount. Records a release that never happened as never having happened — correct one that did by removing it and recording it again.`}
+                      pending={remove.isPending}
+                      onConfirm={() => remove.mutate(release.id)}
+                    />
                   ) : null}
                 </div>
               </li>
@@ -215,6 +229,10 @@ function IssueForm({
     liquidationId: '',
     staffId: crew[0]?.id ?? '',
     amount: summary.releaseCount === 0 ? (summary.routeStandardAllowance ?? '') : '',
+    // Today, and editable: cash handed over on Friday is routinely typed up on
+    // Monday, and a release dated the day it was recorded misstates when the
+    // crew actually had the money.
+    issuedAt: new Date().toISOString().slice(0, 10),
     disbursementMode: String(DisbursementMode.CASH),
     referenceNumber: '',
     receiptId: null as string | null,
@@ -235,7 +253,9 @@ function IssueForm({
         liquidationId,
         staffId: draft.staffId,
         amount: draft.amount,
-        issuedAt: null,
+        // A date-only input means midnight local; sent as an instant, because
+        // storage is UTC and the display layer renders Asia/Manila.
+        issuedAt: new Date(draft.issuedAt).toISOString(),
         disbursementMode: Number(draft.disbursementMode) as DisbursementMode,
         referenceNumber: draft.referenceNumber || null,
         receiptId: draft.receiptId,
@@ -260,6 +280,16 @@ function IssueForm({
   });
 
   const mode = Number(draft.disbursementMode) as DisbursementMode;
+
+  // Case-insensitive and trimmed, because "BDO-4417" and "bdo-4417 " are the
+  // same slip typed by two people. Compared against what the summary already
+  // holds, so it costs no request.
+  const typedReference = draft.referenceNumber.trim().toLowerCase();
+  const alreadyOnThisTrip =
+    typedReference.length > 0 &&
+    summary.allowances.some(
+      (release) => (release.referenceNumber ?? '').trim().toLowerCase() === typedReference,
+    );
 
   if (crew.length === 0) {
     return (
@@ -344,6 +374,20 @@ function IssueForm({
 
       <div className="grid gap-2 sm:grid-cols-2">
         <div className="space-y-1">
+          <Label htmlFor="allowance-issued-at" className="text-xs">
+            Released on
+          </Label>
+          <Input
+            id="allowance-issued-at"
+            type="date"
+            required
+            value={draft.issuedAt}
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, issuedAt: event.target.value }))
+            }
+          />
+        </div>
+        <div className="space-y-1">
           <Label htmlFor="allowance-mode" className="text-xs">
             Released by
           </Label>
@@ -365,21 +409,32 @@ function IssueForm({
             </SelectContent>
           </Select>
         </div>
-        <div className="space-y-1">
-          <Label htmlFor="allowance-reference" className="text-xs">
-            Reference
-          </Label>
-          <Input
-            id="allowance-reference"
-            // Never required, whatever the mode: cash in the yard has none, and
-            // a mandatory field is answered with an invented reference.
-            placeholder={expectsReferenceNumber(mode) ? 'Transaction reference' : 'Optional'}
-            value={draft.referenceNumber}
-            onChange={(event) =>
-              setDraft((current) => ({ ...current, referenceNumber: event.target.value }))
-            }
-          />
-        </div>
+      </div>
+
+      <div className="space-y-1">
+        <Label htmlFor="allowance-reference" className="text-xs">
+          Reference
+        </Label>
+        <Input
+          id="allowance-reference"
+          // Never required, whatever the mode: cash in the yard has none, and
+          // a mandatory field is answered with an invented reference.
+          placeholder={expectsReferenceNumber(mode) ? 'Transaction reference' : 'Optional'}
+          value={draft.referenceNumber}
+          onChange={(event) =>
+            setDraft((current) => ({ ...current, referenceNumber: event.target.value }))
+          }
+        />
+        {/* Checked against this trip's releases as it is typed — the case the
+            person can still fix without saving anything. Releases on OTHER
+            trips are caught too, but only by the server, which is what the
+            warning on the rows above reports. */}
+        {alreadyOnThisTrip ? (
+          <p className="text-destructive flex items-center gap-1 text-[11px]">
+            <AlertTriangle className="h-3 w-3" />A release on this trip already carries that
+            reference. Record it anyway if one transfer covered both.
+          </p>
+        ) : null}
       </div>
 
       <Input

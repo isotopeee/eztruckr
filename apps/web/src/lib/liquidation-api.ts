@@ -11,6 +11,7 @@ import type {
   Receipt,
   RecordSettlementInput,
   SetCustodianInput,
+  SetLiquidationReferenceInput,
   Settlement,
 } from '@eztruckr/types';
 import { apiFetch, apiUpload, queryString, receiptContentUrl } from './api-client';
@@ -85,6 +86,21 @@ export function setLiquidationCustodian(
   input: SetCustodianInput,
 ): Promise<Liquidation> {
   return apiFetch<Liquidation>(`/liquidations/${liquidationId}/custodian`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * The voucher number this account was settled under. Its own call rather than
+ * part of the submission, because the paperwork does not always arrive at the
+ * same moment the claims do — see `setLiquidationReferenceSchema`.
+ */
+export function setLiquidationReference(
+  liquidationId: string,
+  input: SetLiquidationReferenceInput,
+): Promise<Liquidation> {
+  return apiFetch<Liquidation>(`/liquidations/${liquidationId}/reference`, {
     method: 'PATCH',
     body: JSON.stringify(input),
   });

@@ -124,6 +124,15 @@ export const liquidationSchema = auditFieldsSchema.extend({
   approvedByName: z.string().nullable(),
   remarks: z.string().nullable(),
 
+  /**
+   * The voucher or document number this account was settled under.
+   *
+   * NOT an identifier this system issues, and never unique: it is what somebody
+   * wrote on a piece of paper, and two documents genuinely carrying the same
+   * reference is a fact to record rather than one to refuse.
+   */
+  referenceNumber: z.string().nullable(),
+
   lines: z.array(liquidationLineSchema),
   history: z.array(liquidationHistoryEntrySchema),
 
@@ -172,6 +181,22 @@ export const setCustodianSchema = z.object({
 });
 
 export type SetCustodianInput = z.infer<typeof setCustodianSchema>;
+
+/**
+ * Recording the voucher number an account was settled under.
+ *
+ * ITS OWN CALL rather than a field on `submit`, because the two are not the
+ * same event. A reference arrives when the paperwork does — which may be before
+ * the crew submit, after accounting have looked at it, or as a correction to a
+ * digit somebody transposed — and folding it into the submission would mean the
+ * only chance to state it was the one moment a person may not have it. It stays
+ * open until approval, like everything else on the account.
+ */
+export const setLiquidationReferenceSchema = z.object({
+  referenceNumber: optionalText(80),
+});
+
+export type SetLiquidationReferenceInput = z.infer<typeof setLiquidationReferenceSchema>;
 
 // ---------------------------------------------------------------------------
 // The four moves

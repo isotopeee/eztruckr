@@ -839,6 +839,127 @@ describe('approval is the lock, and reversing it is a reasoned act', () => {
   });
 });
 
+describe('the paperwork behind the cash', () => {
+  it('records the voucher number an account was settled under, and freezes it on approval', async () => {
+    if (!available) return;
+
+    const { liquidationId } = await deliveredTrip('reference', '5000.00');
+
+    const named = await act(() =>
+      liquidations.setReference(liquidationId, { referenceNumber: 'CV-2026-0413' }, actor),
+    );
+    expect(named.referenceNumber).toBe('CV-2026-0413');
+
+    // Clearing it is a legal correction while the account is open — a number
+    // typed against the wrong trip has to be removable.
+    const cleared = await act(() =>
+      liquidations.setReference(liquidationId, { referenceNumber: null }, actor),
+    );
+    expect(cleared.referenceNumber).toBeNull();
+
+    await addLine(liquidationId, '5000.00');
+    await act(() => liquidations.submit(liquidationId, { remarks: null }, actor));
+    await act(() => liquidations.approve(liquidationId, { remarks: null }, actor));
+
+    // The same lock the lines obey. Approval freezes the account, and the
+    // reference is part of what it froze.
+    await expect(
+      act(() => liquidations.setReference(liquidationId, { referenceNumber: 'CV-9999' }, actor)),
+    ).rejects.toThrow(/approved and locked/i);
+  });
+
+  it('flags a release whose reference is already on another one, whatever the trip', async () => {
+    if (!available) return;
+
+    // Two trips, one reference: the case that actually arises, since a slip
+    // entered twice usually lands on different shipments and nobody looking at
+    // either screen can see the other.
+    const first = await deliveredTrip('ref-dupe-a', '1000.00');
+    const second = await deliveredTrip('ref-dupe-b', '1000.00');
+
+    const release = (shipmentId: string, liquidationId: string, referenceNumber: string) =>
+      act(() =>
+        allowances.issue(
+          shipmentId,
+          {
+            liquidationId,
+            staffId: driverId,
+            amount: '500.00',
+            issuedAt: null,
+            disbursementMode: DisbursementMode.BANK_TRANSFER,
+            referenceNumber,
+            receiptId: null,
+            releasedBy: null,
+            remarks: null,
+          },
+          actor,
+        ),
+      );
+
+    await release(first.shipmentId, first.liquidationId, 'BDO-4417');
+    // Different case, which is the same slip typed by two people. Padding is
+    // not tested because it cannot be stored: `optionalText` trims at the
+    // request boundary, so the comparison only has to survive case.
+    await release(second.shipmentId, second.liquidationId, 'bdo-4417');
+    await release(first.shipmentId, first.liquidationId, 'BDO-9999');
+
+    const summary = await allowances.summary(first.shipmentId, null);
+    const flagged = new Map(
+      summary.allowances.map((row) => [row.referenceNumber, row.referenceNumberIsDuplicated]),
+    );
+
+    expect(flagged.get('BDO-4417')).toBe(true);
+    expect(flagged.get('BDO-9999')).toBe(false);
+    // The release with no reference at all is never a duplicate of anything.
+    expect(flagged.get(null)).toBe(false);
+
+    // And it is symmetric: the other trip's copy is flagged from its own screen.
+    const other = await allowances.summary(second.shipmentId, null);
+    expect(
+      other.allowances.find((row) => row.referenceNumber === 'bdo-4417')
+        ?.referenceNumberIsDuplicated,
+    ).toBe(true);
+  });
+
+  it('stops flagging once the duplicate is removed', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await deliveredTrip('ref-dupe-fixed', '1000.00');
+
+    const issue = (referenceNumber: string) =>
+      act(() =>
+        allowances.issue(
+          shipmentId,
+          {
+            liquidationId,
+            staffId: driverId,
+            amount: '250.00',
+            issuedAt: null,
+            disbursementMode: DisbursementMode.EWALLET,
+            referenceNumber,
+            receiptId: null,
+            releasedBy: null,
+            remarks: null,
+          },
+          actor,
+        ),
+      );
+
+    await issue('MB-7781');
+    const mistake = await issue('MB-7781');
+
+    const before = await allowances.summary(shipmentId, null);
+    expect(before.allowances.filter((row) => row.referenceNumberIsDuplicated)).toHaveLength(2);
+
+    // Soft-deleted rows are out of the comparison, so correcting the mistake
+    // clears the warning rather than leaving it to argue with itself.
+    await act(() => allowances.remove(shipmentId, mistake.id));
+
+    const after = await allowances.summary(shipmentId, null);
+    expect(after.allowances.some((row) => row.referenceNumberIsDuplicated)).toBe(false);
+  });
+});
+
 /**
  * The change these tests exist for: a trip where two people are each holding
  * cash, which the single-liquidation shape could not express at all.

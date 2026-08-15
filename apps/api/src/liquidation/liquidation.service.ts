@@ -33,6 +33,7 @@ import {
   type ReturnLiquidationInput,
   type ReverseLiquidationInput,
   type SetCustodianInput,
+  type SetLiquidationReferenceInput,
   type SubmitLiquidationInput,
   type UpdateLiquidationLineInput,
 } from '@eztruckr/types';
@@ -258,6 +259,32 @@ export class LiquidationService {
       await this.prisma.client.liquidation.update({
         where: { id: liquidationId },
         data: { custodianId: input.custodianId },
+        include: LIQUIDATION_INCLUDE,
+      }),
+    );
+  }
+
+  /**
+   * Recording the voucher number this account was settled under.
+   *
+   * `CAN_SUBMIT_LIQUIDATION` on the controller and `loadEditable` here, which
+   * is the same pair the LINES obey — and for the same reason. The reference is
+   * on the paperwork the custodian is holding, so the person who can write the
+   * claims is the person who can write the number beside them; accounting, who
+   * hold no float, act on any account as they do everywhere else. Approval
+   * freezes it with the rest of the account.
+   */
+  async setReference(
+    liquidationId: string,
+    input: SetLiquidationReferenceInput,
+    user: RequestUser,
+  ): Promise<Liquidation> {
+    await this.loadEditable(liquidationId, user);
+
+    return toLiquidation(
+      await this.prisma.client.liquidation.update({
+        where: { id: liquidationId },
+        data: { referenceNumber: input.referenceNumber },
         include: LIQUIDATION_INCLUDE,
       }),
     );
@@ -1048,6 +1075,7 @@ export function toLiquidation(row: LiquidationRow): Liquidation {
     approvedBy: row.approvedBy,
     approvedByName: row.approvedByUser?.name ?? null,
     remarks: row.remarks,
+    referenceNumber: row.referenceNumber,
 
     lines: row.lines.map(toLine),
     history,

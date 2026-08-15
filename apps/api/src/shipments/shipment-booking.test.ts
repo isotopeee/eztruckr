@@ -99,9 +99,13 @@ function booking(overrides: Partial<CreateShipmentInput> = {}): CreateShipmentIn
     thirdPartyId: null,
     routeId: null,
     truckId: null,
+    // Null, not a date: the common booking says nothing and takes the column's
+    // default, which is the path worth exercising here.
+    shipmentDate: null,
     origin: 'Manila',
     destination: 'Batangas',
     cargoDescription: null,
+    containerNumber: null,
     grossRate: '20000.00',
     tpcRate: null,
     tpcAmount: null,

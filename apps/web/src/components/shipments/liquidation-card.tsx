@@ -14,8 +14,9 @@ import {
   type Page,
   type Shipment,
 } from '@eztruckr/types';
-import { AlertTriangle, Loader2, Trash2, UserPlus } from 'lucide-react';
+import { AlertTriangle, Loader2, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
+import { ConfirmDeleteButton } from '@/components/confirm-delete-button';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -43,6 +44,7 @@ import {
   returnLiquidation,
   reverseLiquidation,
   setLiquidationCustodian,
+  setLiquidationReference,
   submitLiquidation,
 } from '@/lib/liquidation-api';
 import { shipmentKeys } from '@/lib/shipment-api';
@@ -251,6 +253,8 @@ function Account({
         />
       </dl>
 
+      <ReferenceField liquidation={account} canEdit={canEditLines} onChanged={onChanged} />
+
       <Lines liquidation={account} canEdit={canEditLines} onChanged={onChanged} />
 
       <Actions
@@ -377,15 +381,77 @@ function RemoveAccountButton({
   });
 
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      aria-label="Remove account"
-      onClick={() => remove.mutate()}
-      disabled={remove.isPending}
-    >
-      <Trash2 className="h-4 w-4" />
-    </Button>
+    <ConfirmDeleteButton
+      label="Remove account"
+      title="Remove this account?"
+      description={`${
+        account.custodianName ?? 'This account'
+      } will no longer have a float to answer for on this trip. The API refuses if any cash was released against it or anything has been claimed.`}
+      pending={remove.isPending}
+      onConfirm={() => remove.mutate()}
+    />
+  );
+}
+
+/**
+ * The voucher number this account was settled under.
+ *
+ * A FIELD THAT SAVES ITSELF, rather than a form with a button, because it is
+ * one value and the paperwork it comes off is usually in the person's other
+ * hand. It commits on blur; an unchanged value sends nothing.
+ *
+ * Editable exactly as long as the claims are — approval freezes the account,
+ * reference included, and reversing it opens both again.
+ */
+function ReferenceField({
+  liquidation,
+  canEdit,
+  onChanged,
+}: {
+  liquidation: Liquidation;
+  canEdit: boolean;
+  onChanged: () => void;
+}) {
+  const [value, setValue] = useState(liquidation.referenceNumber ?? '');
+
+  const save = useMutation({
+    mutationFn: () =>
+      setLiquidationReference(liquidation.id, { referenceNumber: value.trim() || null }),
+    onSuccess: onChanged,
+    onError: (error: unknown) => {
+      // Put back what the server still holds, so the box never shows a value
+      // that was refused.
+      setValue(liquidation.referenceNumber ?? '');
+      toast.error('Could not save that reference', {
+        description: error instanceof ApiError ? error.displayMessage : String(error),
+      });
+    },
+  });
+
+  if (!canEdit) {
+    return liquidation.referenceNumber ? (
+      <p className="text-muted-foreground text-xs">Reference {liquidation.referenceNumber}</p>
+    ) : null;
+  }
+
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={`liquidation-reference-${liquidation.id}`} className="text-xs">
+        Reference
+      </Label>
+      <Input
+        id={`liquidation-reference-${liquidation.id}`}
+        className="sm:max-w-xs"
+        placeholder="Voucher or document number (optional)"
+        value={value}
+        disabled={save.isPending}
+        onChange={(event) => setValue(event.target.value)}
+        onBlur={() => {
+          if (value.trim() === (liquidation.referenceNumber ?? '')) return;
+          save.mutate();
+        }}
+      />
+    </div>
   );
 }
 
@@ -597,15 +663,13 @@ function Lines({
               <div className="flex shrink-0 items-center gap-2">
                 <span className="tabular-nums">{formatMoney(line.amount)}</span>
                 {canEdit ? (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Remove line"
-                    onClick={() => remove.mutate(line.id)}
-                    disabled={remove.isPending}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  <ConfirmDeleteButton
+                    label="Remove line"
+                    title="Remove this claimed expense?"
+                    description={`${formatMoney(line.amount)} comes off what this account has liquidated, so its variance grows by the same amount.`}
+                    pending={remove.isPending}
+                    onConfirm={() => remove.mutate(line.id)}
+                  />
                 ) : null}
               </div>
             </li>
