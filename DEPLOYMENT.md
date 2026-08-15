@@ -27,7 +27,7 @@ After that, deploying is `git push origin main`.
                             Cloudflare R2 — receipts + backups
 ```
 
-**One hostname serves both apps.** `eztruckr.optimuslogisticscorp.com` is the API origin _and_
+**One hostname serves both apps.** `eztruckr.apps.optimuslogisticscorp.com` is the API origin _and_
 the web origin, split on the `/api` path by Caddy.
 
 That is the single most useful decision here, because it collapses the four URL settings that
@@ -148,15 +148,36 @@ ssh -i ~/.ssh/eztruckr-optimus-gh-actions-deploy-prod deploy@<DROPLET_IP> 'docke
 
 Cloudflare → `optimuslogisticscorp.com` → **DNS → Add record**
 
-|              |                            |
-| ------------ | -------------------------- |
-| Type         | `A`                        |
-| Name         | `eztruckr`                 |
-| IPv4         | `<DROPLET_IP>`             |
-| Proxy status | **Proxied** (orange cloud) |
-| TTL          | Auto                       |
+|              |                                                      |
+| ------------ | ---------------------------------------------------- |
+| Type         | `A`                                                  |
+| Name         | `eztruckr.apps` — Cloudflare appends the zone itself |
+| IPv4         | `<DROPLET_IP>`                                       |
+| Proxy status | **Proxied** (orange cloud)                           |
+| TTL          | Auto                                                 |
 
-### 3b. SSL/TLS mode
+### 3b. Edge certificate — the one thing this hostname costs
+
+> **`eztruckr.apps.…` is a second-level subdomain, and free Universal SSL does not cover it.**
+>
+> On a full setup, Universal SSL issues for the apex and **first-level** subdomains only —
+> `optimuslogisticscorp.com` and `*.optimuslogisticscorp.com`. A name two labels deep falls
+> outside that wildcard, so a proxied `eztruckr.apps.…` is served an edge certificate that does
+> not match and **every browser shows a certificate warning**. Nothing in this repository can fix
+> that; it is a Cloudflare plan feature.
+
+Pick one before going further:
+
+| Option                                             | Cost        | Consequence                                                                                                                             |
+| -------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **Advanced Certificate Manager** or Total TLS      | paid add-on | Covers deep subdomains. Keeps the orange cloud. Enable it **before** step 7.                                                            |
+| **Flatten to `eztruckr.optimuslogisticscorp.com`** | free        | Universal SSL covers it. Change one GitHub variable — no file edit.                                                                     |
+| **Turn the proxy off** (grey cloud)                | free        | Caddy gets its own Let's Encrypt certificate, but the droplet's IP becomes public and the origin certificate in 3d is no longer usable. |
+
+Confirm the edge certificate actually lists your hostname under **SSL/TLS → Edge Certificates**
+before continuing.
+
+### 3c. SSL/TLS mode
 
 **SSL/TLS → Overview → Configure → Full (strict)**.
 
@@ -164,12 +185,12 @@ Not "Flexible", which would leave Cloudflare→droplet traffic **unencrypted** w
 the browser suggests otherwise. Not "Full", which encrypts but accepts any certificate, including
 one an attacker on the path presents.
 
-### 3c. The origin certificate
+### 3d. The origin certificate
 
 **SSL/TLS → Origin Server → Create Certificate**
 
 - Private key type: **RSA (2048)**
-- Hostnames: `eztruckr.optimuslogisticscorp.com`
+- Hostnames: `eztruckr.apps.optimuslogisticscorp.com`
 - Validity: **15 years**
 
 Cloudflare shows the certificate and the key **exactly once**. Copy both — they become the
@@ -265,10 +286,10 @@ Repo → **Settings → Secrets and variables → Actions**.
 
 ### Variables (tab: _Variables_) — not secret, and useful in build logs
 
-| Name           | Value                               |
-| -------------- | ----------------------------------- |
-| `APP_DOMAIN`   | `eztruckr.optimuslogisticscorp.com` |
-| `APP_TIMEZONE` | `Asia/Manila`                       |
+| Name           | Value                                    |
+| -------------- | ---------------------------------------- |
+| `APP_DOMAIN`   | `eztruckr.apps.optimuslogisticscorp.com` |
+| `APP_TIMEZONE` | `Asia/Manila`                            |
 
 ### Secrets (tab: _Secrets_)
 
@@ -286,8 +307,8 @@ openssl rand -base64 32   # BETTER_AUTH_SECRET
 | `DEPLOY_KNOWN_HOSTS`   | `ssh-keyscan <DROPLET_IP>` — see below                                                  |
 | `POSTGRES_PASSWORD`    | generated above                                                                         |
 | `BETTER_AUTH_SECRET`   | generated above                                                                         |
-| `CF_ORIGIN_CERT`       | step 3c, `-----BEGIN CERTIFICATE-----` block                                            |
-| `CF_ORIGIN_KEY`        | step 3c, `-----BEGIN PRIVATE KEY-----` block                                            |
+| `CF_ORIGIN_CERT`       | step 3d, `-----BEGIN CERTIFICATE-----` block                                            |
+| `CF_ORIGIN_KEY`        | step 3d, `-----BEGIN PRIVATE KEY-----` block                                            |
 | `S3_ENDPOINT`          | step 5                                                                                  |
 | `S3_BUCKET`            | `eztruckr`                                                                              |
 | `S3_ACCESS_KEY_ID`     | step 5                                                                                  |
@@ -332,7 +353,7 @@ tested.
 
 ## Step 8 — Create the first administrator
 
-Open **https://eztruckr.optimuslogisticscorp.com/setup**
+Open **https://eztruckr.apps.optimuslogisticscorp.com/setup**
 
 Enter your name and email. The system creates one ADMINISTRATOR and **emails you an invite link** —
 it deliberately does not show you a password, because there isn't one. Click the link, set a
@@ -433,12 +454,12 @@ Set up **one** external uptime check. It is the cheapest safeguard here by a wid
 it catches every failure mode this document warns about — expired origin certificate (526), a
 crashed container, a full disk, a droplet that never came back from a reboot.
 
-|              |                                                        |
-| ------------ | ------------------------------------------------------ |
-| URL          | `https://eztruckr.optimuslogisticscorp.com/api/health` |
-| Interval     | 5 minutes                                              |
-| Healthy when | HTTP 200 **and** body contains `"status":"ok"`         |
-| Alert to     | an address that is **not** on this domain              |
+|              |                                                             |
+| ------------ | ----------------------------------------------------------- |
+| URL          | `https://eztruckr.apps.optimuslogisticscorp.com/api/health` |
+| Interval     | 5 minutes                                                   |
+| Healthy when | HTTP 200 **and** body contains `"status":"ok"`              |
+| Alert to     | an address that is **not** on this domain                   |
 
 The body check matters. `/api/health` answers **200 even when degraded**, deliberately — so
 orchestrators can tell "process is serving" from "a dependency is unhappy". A status-code-only
