@@ -124,20 +124,20 @@ First, generate the keypair GitHub Actions will deploy with. **This is a separat
 personal one**, so it can be revoked without locking you out:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/eztruckr_deploy -N "" -C "github-actions-deploy"
+ssh-keygen -t ed25519 -f ~/.ssh/eztruckr-optimus-gh-actions-deploy-prod -N "" -C "github-actions-deploy"
 ```
 
 Then provision, passing the **public** half:
 
 ```bash
-ssh root@<DROPLET_IP> 'bash -s' < infra/provision.sh "$(cat ~/.ssh/eztruckr_deploy.pub)"
+ssh root@<DROPLET_IP> 'bash -s' < infra/provision.sh "$(cat ~/.ssh/eztruckr-optimus-gh-actions-deploy-prod.pub)"
 ```
 
 **Before closing that session**, confirm the deploy account works — the script disables password
 authentication, so a broken key means a droplet you cannot reach:
 
 ```bash
-ssh -i ~/.ssh/eztruckr_deploy deploy@<DROPLET_IP> 'docker ps'
+ssh -i ~/.ssh/eztruckr-optimus-gh-actions-deploy-prod deploy@<DROPLET_IP> 'docker ps'
 ```
 
 ---
@@ -279,22 +279,22 @@ openssl rand -base64 32   # POSTGRES_PASSWORD
 openssl rand -base64 32   # BETTER_AUTH_SECRET
 ```
 
-| Name                   | Where it came from                                              |
-| ---------------------- | --------------------------------------------------------------- |
-| `DEPLOY_HOST`          | `<DROPLET_IP>`                                                  |
-| `DEPLOY_SSH_KEY`       | `cat ~/.ssh/eztruckr_deploy` — the **private** half, whole file |
-| `DEPLOY_KNOWN_HOSTS`   | `ssh-keyscan <DROPLET_IP>` — see below                          |
-| `POSTGRES_PASSWORD`    | generated above                                                 |
-| `BETTER_AUTH_SECRET`   | generated above                                                 |
-| `CF_ORIGIN_CERT`       | step 3c, `-----BEGIN CERTIFICATE-----` block                    |
-| `CF_ORIGIN_KEY`        | step 3c, `-----BEGIN PRIVATE KEY-----` block                    |
-| `S3_ENDPOINT`          | step 5                                                          |
-| `S3_BUCKET`            | `eztruckr`                                                      |
-| `S3_ACCESS_KEY_ID`     | step 5                                                          |
-| `S3_SECRET_ACCESS_KEY` | step 5                                                          |
-| `BACKUP_BUCKET`        | `eztruckr-backups`                                              |
-| `RESEND_API_KEY`       | step 4                                                          |
-| `MAIL_FROM`            | `EZTruckr <no-reply@mail.optimuslogisticscorp.com>`             |
+| Name                   | Where it came from                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `DEPLOY_HOST`          | `<DROPLET_IP>`                                                                          |
+| `DEPLOY_SSH_KEY`       | `cat ~/.ssh/eztruckr-optimus-gh-actions-deploy-prod` — the **private** half, whole file |
+| `DEPLOY_KNOWN_HOSTS`   | `ssh-keyscan <DROPLET_IP>` — see below                                                  |
+| `POSTGRES_PASSWORD`    | generated above                                                                         |
+| `BETTER_AUTH_SECRET`   | generated above                                                                         |
+| `CF_ORIGIN_CERT`       | step 3c, `-----BEGIN CERTIFICATE-----` block                                            |
+| `CF_ORIGIN_KEY`        | step 3c, `-----BEGIN PRIVATE KEY-----` block                                            |
+| `S3_ENDPOINT`          | step 5                                                                                  |
+| `S3_BUCKET`            | `eztruckr`                                                                              |
+| `S3_ACCESS_KEY_ID`     | step 5                                                                                  |
+| `S3_SECRET_ACCESS_KEY` | step 5                                                                                  |
+| `BACKUP_BUCKET`        | `eztruckr-backups`                                                                      |
+| `RESEND_API_KEY`       | step 4                                                                                  |
+| `MAIL_FROM`            | `EZTruckr <no-reply@mail.optimuslogisticscorp.com>`                                     |
 
 For `DEPLOY_KNOWN_HOSTS`:
 
