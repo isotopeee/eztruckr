@@ -2,9 +2,9 @@
 
 Trucking operations system. Turborepo monorepo, Philippine haulage domain (₱, Asia/Manila).
 
-**Phase 9 uncommitted on `main`, over `edb0d14`.** `pnpm run check` green (100 types + 237 api +
-60 db), no schema drift. **No default logins** — development starts empty and is set up at
-`/setup`.
+**LIVE** at `https://eztruckr.optimuslogisticscorp.com`, phase 9 shipped. `pnpm run check` green
+(100 types + 237 api + 60 db), no schema drift. **No default logins** — every install starts empty
+and is set up at `/setup`.
 
 ```
 apps/api    NestJS 11 — REST, guards, the money engine
@@ -229,13 +229,11 @@ component**, so a new screen cannot forget the check.
 administrator, who is emailed an invite like everyone else. `GET /system/status` and
 `POST /system/initialize` are `@Public()`, since there is nobody to authenticate as yet.
 
-**A failed invite rolls the whole thing back** (`503`, flag unstamped, account soft-deleted, same
-address reusable via the partial `user_email_live_key`). Delivery failures are _recorded_ rather
-than raised everywhere else, because an administrator can see `deliveryError` and resend — but
-here the administrator IS the failed invite, and the token is stored hashed, so a stamped flag
-meant an installation recoverable only through `psql`. `assertTheInviteWasDelivered` runs before
-the claim. Found by running the prod stack with an invalid Resend key; every layer was behaving as
-designed.
+**A failed invite rolls the whole thing back** — `503`, flag unstamped, account soft-deleted, the
+address reusable via the partial `user_email_live_key`. Delivery failures are _recorded_ rather
+than raised everywhere else, because an admin can see `deliveryError` and resend; here the admin
+IS the failed invite and the token is hashed, so a stamped flag meant recovery only through
+`psql`. `assertTheInviteWasDelivered` runs before the claim.
 
 **`system_setting.initializedAt` closes that endpoint and is STORED, not derived**: "an
 administrator exists" would reopen a public administrator-minting endpoint the moment the last
@@ -311,6 +309,14 @@ liquidation-lifecycle · `00000003` shipment-booking · `00000004` truck-assignm
 trip-profit · `00000006` adjustments · `00000007` invitations · `00000008` system · `00000009`
 crew-licence. Cleanup matches child rows **by relationship, not by id**.
 
+**Cleanup suspends the payout triggers only via `withTriggersSuspended`.**
+`session_replication_role` is per-CONNECTION and Prisma pools, so `SET replica` / deletes /
+`SET DEFAULT` as loose statements can leave one connection with **every trigger disabled for the
+rest of the run** — assertions then pass or fail by which connection served them. The helper pins
+them to one connection and uses `SET LOCAL`, which reverts on commit and rollback. It cost CI four
+red trigger-backed assertions that passed on every laptop; CHECKs and unique indexes kept passing
+throughout, because `replica` suspends triggers only.
+
 ### Where the machinery already is
 
 | Need                                  | Use                                                                              |
@@ -349,12 +355,14 @@ crew-licence. Cleanup matches child rows **by relationship, not by id**.
   predicate must be a **union**: unpaid commissions ∪ unpaid adjustments ∪ outstanding
   `CrewDeduction`s — `PayoutLine.commission` is already nullable.
 - **`CommissionService.computeForShipment` has no test**, only live verification.
-- **Phase 9 was never driven through the running stack** — Docker Hub was unreachable, so the
-  containers still serve the Phase 8 build (and Next 15) against the Phase 9 database.
-  `docker compose build api web && docker compose up -d --force-recreate api web` first. The dev
-  database is migrated and drift-free; unclicked are the dispatcher's screens, the rate-chain
-  correction form and the dispatch manager's transition buttons. The Next 16 standalone build
-  boots, serves and hydrates — verified on the host instead.
+- **Phase 9's screens have still not been clicked through** — the dispatcher's screens, the
+  rate-chain correction form and the dispatch manager's transition buttons. The build is now the
+  Phase 9 one everywhere (production runs it), so this is unexercised UI rather than a stale
+  container.
+- **R2 has never taken a real receipt upload.** `/api/health` reports `storage: up` in production,
+  which is `HeadBucket` succeeding — it carries no body, so it does not exercise the checksum path
+  that `WHEN_REQUIRED` exists for. The first upload is the proof.
+- **`backup.sh` has never run to completion against R2.** Cron is installed; nothing has fired.
 - **Known flake, open.** `adjustments.test.ts > survives a recompute…` and one whole api-suite
   run, neither reproducible since. Both smell like cross-suite interference through global master
   data in the shared test database.
@@ -476,6 +484,14 @@ Kept so a later session sees what was decided rather than reopening it.
 | Should `staff.email` and `user.email` be one column?    | **No.** Credential vs contact detail.                           |
 | Does a driver need a licence EXPIRY, not just a number? | **Yes, both.** Half a licence used to save and fail later.      |
 | Is an expired licence rejected on the staff record?     | **No.** A fact worth recording; the driver slot refuses.        |
+| One hostname, or an `api.` subdomain?                   | **One.** Four URL settings collapse to one; cookie first-party. |
+| `eztruckr.` or `eztruckr.apps.`?                        | **Flat.** Universal SSL stops at first-level; deeper needs ACM. |
+| Origin cert: Cloudflare CA or Let's Encrypt?            | **Cloudflare, 15 yr.** DNS-01 wants a token covering mail too.  |
+| Postgres image: Alpine or Debian?                       | **Debian.** musl sorts text by byte order whatever it reports.  |
+| Build images on the droplet?                            | **No.** GitHub Actions builds; the droplet only pulls.          |
+| Pin `container_name` in prod?                           | **No.** Global, not project-scoped — blocks a second stack.     |
+| Migrations from the API's entrypoint?                   | **No.** Own step, or a bad one crash-loops behind a green run.  |
+| DNS at DigitalOcean instead of Cloudflare?              | **No.** The proxy is what the origin cert and edge TLS rest on. |
 
 ### Payees are not third parties
 
@@ -537,46 +553,54 @@ caught what the type change broke: the `lastLoginAt` raw update needed `::uuid` 
 500'd), `eztruckr_commission_is_paid` needed a `uuid` parameter (payout guards silently stopped
 resolving), and `audit_log.entityId` stays **text** because it is polymorphic.
 
-**9** uncommitted — the dispatcher becomes a cash holder and loses the directories; Next 15 → 16.
+**9** `7e75fd8` — the dispatcher becomes a cash holder and loses the directories; Next 15 → 16.
 Four defects, one shape: **the control sat where the UI happened to look.** The one not described
 above: `crew-and-lifecycle-card.tsx` hand-copied a role list and omitted DISPATCH_MANAGER from
 `canDispatch`, so every dispatch button was dead for the role whose job it is, while the API
 allowed it throughout.
 
+**Deploy** `7e75fd8`…`3122b22` — shipped to production. Every defect it surfaced was invisible to
+`pnpm run check` and cost a green-but-wrong run: R2 rejecting the SDK's default checksums, `/setup`
+stamping its flag on a failed invite, a pooled connection left with triggers disabled, and a
+release script eating itself from stdin. **The pattern: each layer behaved exactly as designed,
+and the failure lived between two of them.** Conventional Commits from `3122b22` on.
+
 ---
 
 ## Production
 
-**[DEPLOYMENT.md](DEPLOYMENT.md)** is the runbook. One DigitalOcean droplet, Cloudflare DNS + R2,
-GitHub Actions building images to GHCR and releasing over SSH. Deploying is `git push`.
+**[DEPLOYMENT.md](DEPLOYMENT.md)** is the runbook; the shape and the rejected alternatives are in
+the decision record. One DigitalOcean droplet (SGP1, Ubuntu 26.04, 1 vCPU/1 GB + 2 GB swap;
+measured idle footprint ~220 MB), Cloudflare DNS + R2, GitHub Actions → GHCR → SSH. Deploying is
+`git push`. Caddy fronts both apps on one hostname, split on `/api`.
 
-**Caddy serves both apps from ONE hostname**, split on `/api`. That collapses the four URL
-settings `.env.example` warns must change together into a single value, and makes the session
-cookie first-party — no CORS, no third-party-cookie problem, one certificate. A separate `api.`
-subdomain would cost all of it and buy nothing; both processes share the droplet regardless.
+Four traps, each of which produced a **green run and a broken result**:
 
-- `docker-compose.prod.yml` is **not** a layer over `docker-compose.yml` — it pulls tagged images
-  and publishes only 80/443, where the other builds from source for a laptop.
-- **Migrations run as their own deploy step**, not from the API's entrypoint. Under
-  `restart: unless-stopped` a failed migration crash-loops the container while the deploy reports
-  success; run separately it fails loudly and the previous release keeps serving.
-- **`WHEN_REQUIRED` checksums in `StorageService` are load-bearing for R2.** The SDK's default
-  since v3.729 sends a CRC trailer R2 rejects — and `/api/health` still reports storage `up`,
-  because `HeadBucket` carries no body. `backup.sh` sets the CLI's equivalent for the same reason.
-- The droplet's `.env` is regenerated from GitHub secrets on every deploy, so editing it by hand
-  is reverted by the next one.
+- **`WHEN_REQUIRED` checksums in `StorageService`.** The SDK's default since v3.729 sends a CRC
+  trailer R2 rejects — while `/api/health` still says storage `up`, because `HeadBucket` carries no
+  body. `backup.sh` sets the CLI's equivalent.
+- **The release script is read from bash's stdin**, so any command in it that reads stdin eats the
+  rest and bash exits 0 half-done. Hence `-T </dev/null` on `compose run` and the
+  `__RELEASE_COMPLETE__` sentinel the step fails without. Same step: `|| true` on the crontab
+  `grep -v`, which exits 1 on an empty crontab and killed it under `pipefail`.
+- **`docker-compose.prod.yml` is not a layer over `docker-compose.yml`** — it pulls tagged images
+  and publishes only 80/443.
+- The droplet's `.env` is regenerated from GitHub secrets every deploy; hand edits are reverted.
+
+The origin certificate expires in **15 years with no auto-renew**; the browser-facing one is
+Universal SSL and renews itself. An uptime check on `/api/health` is what turns that eventual 526
+into a page — and it must match `"status":"ok"` in the **body**, since the endpoint answers 200
+even when degraded.
 
 ---
 
 ## Tech stack (per brief, one substitution)
 
 Turborepo · Docker Compose · **Next.js 16** App Router · shadcn/ui + Tailwind v4 · TanStack
-Query · NestJS · Prisma · **PostgreSQL 18** · currency.js · MinIO · Prettier · Better Auth
-1.6.26.
+Query · NestJS · Prisma · **PostgreSQL 18** · currency.js · MinIO (R2 in prod) · Better Auth
+1.6.26. Caddy fronts production.
 
-The brief said PostgreSQL 16; 18 is the one deviation, for its built-in `uuidv7()`. **No
-dependency has been added since Phase 3** — Next 15 → 16 upgrades one already there, and
-Turbopack is now the bundler for `next build` as well as `next dev`. Exact arithmetic is a
-hand-written BigInt module; uploads use the `FileInterceptor` in `@nestjs/platform-express` and
-the `@aws-sdk/client-s3` present since Phase 1; mail is Resend's HTTP API over `fetch`, which is
-why there is no nodemailer and no SMTP container.
+PostgreSQL 18 against the brief's 16 is the one deviation, for `uuidv7()`. **No dependency added
+since Phase 3**: exact arithmetic is a hand-written BigInt module, uploads use
+`@nestjs/platform-express`'s `FileInterceptor` and the Phase-1 `@aws-sdk/client-s3`, and mail is
+Resend's HTTP API over `fetch` — hence no nodemailer and no SMTP container.
