@@ -1,4 +1,10 @@
-import { createPrismaClient, withActor, type ExtendedPrismaClient, testUuid } from '@eztruckr/db';
+import {
+  createPrismaClient,
+  withActor,
+  type ExtendedPrismaClient,
+  testUuid,
+  withTriggersSuspended,
+} from '@eztruckr/db';
 import {
   LiquidationStatus,
   shipmentNumberDatePart,
@@ -30,23 +36,18 @@ const PREFIX = '00000003-';
 const id = (name: string) => testUuid('00000003', name);
 
 async function cleanup(): Promise<void> {
-  await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
-  try {
+  await withTriggersSuspended(prisma, async (tx) => {
     // Child rows are matched through the shipment rather than by id prefix:
     // the services generate cuids, so nothing below the shipment carries one.
-    await prisma.$executeRawUnsafe(
+    await tx.$executeRawUnsafe(
       `DELETE FROM "liquidation" WHERE "shipmentId" IN (SELECT id FROM "shipment" WHERE "clientId"::text LIKE '${PREFIX}%')`,
     );
-    await prisma.$executeRawUnsafe(
-      `DELETE FROM "shipment" WHERE "clientId"::text LIKE '${PREFIX}%'`,
-    );
+    await tx.$executeRawUnsafe(`DELETE FROM "shipment" WHERE "clientId"::text LIKE '${PREFIX}%'`);
     // After the shipments, which name it. The rate-chain correction tests
     // create one, and its id and its name are both unique.
-    await prisma.$executeRawUnsafe(`DELETE FROM "third_party" WHERE id::text LIKE '${PREFIX}%'`);
-    await prisma.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
-  } finally {
-    await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
-  }
+    await tx.$executeRawUnsafe(`DELETE FROM "third_party" WHERE id::text LIKE '${PREFIX}%'`);
+    await tx.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
+  });
 }
 
 beforeAll(async () => {

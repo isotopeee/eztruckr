@@ -1,4 +1,10 @@
-import { createPrismaClient, withActor, type ExtendedPrismaClient, testUuid } from '@eztruckr/db';
+import {
+  createPrismaClient,
+  withActor,
+  type ExtendedPrismaClient,
+  testUuid,
+  withTriggersSuspended,
+} from '@eztruckr/db';
 import { ShipmentStatus } from '@eztruckr/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { PrismaService } from '../prisma/prisma.service';
@@ -48,14 +54,11 @@ const CLEANUP_STATEMENTS = [
 ];
 
 async function cleanup(): Promise<void> {
-  await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
-  try {
+  await withTriggersSuspended(prisma, async (tx) => {
     for (const statement of CLEANUP_STATEMENTS) {
-      await prisma.$executeRawUnsafe(statement);
+      await tx.$executeRawUnsafe(statement);
     }
-  } finally {
-    await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
-  }
+  });
 }
 
 beforeAll(async () => {

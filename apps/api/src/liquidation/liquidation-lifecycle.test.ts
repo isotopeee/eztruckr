@@ -5,6 +5,7 @@ import {
   withDeleted,
   type ExtendedPrismaClient,
   testUuid,
+  withTriggersSuspended,
 } from '@eztruckr/db';
 import {
   CommissionMethod,
@@ -160,14 +161,11 @@ const CLEANUP_STATEMENTS = [
 async function cleanup(): Promise<void> {
   // Triggers off for teardown only. Application code cannot reach a hard
   // delete at all — the soft-delete extension refuses it.
-  await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
-  try {
+  await withTriggersSuspended(prisma, async (tx) => {
     for (const statement of CLEANUP_STATEMENTS) {
-      await prisma.$executeRawUnsafe(statement);
+      await tx.$executeRawUnsafe(statement);
     }
-  } finally {
-    await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
-  }
+  });
 }
 
 beforeAll(async () => {

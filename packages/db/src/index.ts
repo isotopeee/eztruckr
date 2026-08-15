@@ -23,3 +23,6 @@ export { liveOne, liveOneOrThrow, MissingLiveRowError, MultipleLiveRowsError } f
 export { uuidv7, testUuid } from './uuid';
 
 export { testDatabaseUrl, prepareTestDatabase } from './test-database';
+// Test scaffolding, exported because the api suites need the same guarantee and
+// hand-rolling it is what caused the leak documented on the function itself.
+export { withTriggersSuspended } from './test-support';

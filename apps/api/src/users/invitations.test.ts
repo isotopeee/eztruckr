@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { GoneException, NotFoundException } from '@nestjs/common';
-import { createPrismaClient, testUuid, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
+import {
+  createPrismaClient,
+  testUuid,
+  withActor,
+  type ExtendedPrismaClient,
+  withTriggersSuspended,
+} from '@eztruckr/db';
 import { INVITATION_TTL_DAYS, UserRole } from '@eztruckr/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { AuthService } from '../auth/auth.service';
@@ -37,18 +43,15 @@ const INVITEE_ID = id('invitee');
 const INVITEE_EMAIL = 'invitee@eztruckr.test';
 
 async function cleanup(): Promise<void> {
-  await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
-  try {
+  await withTriggersSuspended(prisma, async (tx) => {
     // Invitations cascade from the user, but the delete is explicit so a
     // failure here is a failure here rather than a surprise two tests later.
-    await prisma.$executeRawUnsafe(
+    await tx.$executeRawUnsafe(
       `DELETE FROM "staff_invitation" WHERE "userId"::text LIKE '${PREFIX}%'`,
     );
-    await prisma.$executeRawUnsafe(`DELETE FROM "account" WHERE "userId"::text LIKE '${PREFIX}%'`);
-    await prisma.$executeRawUnsafe(`DELETE FROM "user" WHERE id::text LIKE '${PREFIX}%'`);
-  } finally {
-    await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
-  }
+    await tx.$executeRawUnsafe(`DELETE FROM "account" WHERE "userId"::text LIKE '${PREFIX}%'`);
+    await tx.$executeRawUnsafe(`DELETE FROM "user" WHERE id::text LIKE '${PREFIX}%'`);
+  });
 }
 
 /**

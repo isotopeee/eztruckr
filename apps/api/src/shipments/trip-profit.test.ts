@@ -1,5 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
-import { createPrismaClient, withActor, type ExtendedPrismaClient, testUuid } from '@eztruckr/db';
+import {
+  createPrismaClient,
+  withActor,
+  type ExtendedPrismaClient,
+  testUuid,
+  withTriggersSuspended,
+} from '@eztruckr/db';
 import { CrewRole, LiquidationStatus, ShipmentStatus } from '@eztruckr/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { LIQUIDATION_INCLUDE, toLiquidation } from '../liquidation/liquidation.service';
@@ -69,31 +75,22 @@ const CHILD_TABLES = [
 ];
 
 async function cleanup(): Promise<void> {
-  await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
-  try {
+  await withTriggersSuspended(prisma, async (tx) => {
     // Matched through the shipment, not by id prefix: the services generate
     // cuids, so nothing below the shipment carries the prefix.
-    await prisma.$executeRawUnsafe(
+    await tx.$executeRawUnsafe(
       `DELETE FROM "liquidation_line" WHERE "liquidationId" IN (SELECT id FROM "liquidation" WHERE "shipmentId" = '${SHIPMENT_ID}')`,
     );
-    await prisma.$executeRawUnsafe(
-      `DELETE FROM "liquidation" WHERE "shipmentId" = '${SHIPMENT_ID}'`,
-    );
+    await tx.$executeRawUnsafe(`DELETE FROM "liquidation" WHERE "shipmentId" = '${SHIPMENT_ID}'`);
 
     for (const table of CHILD_TABLES) {
-      await prisma.$executeRawUnsafe(
-        `DELETE FROM "${table}" WHERE "shipmentId" = '${SHIPMENT_ID}'`,
-      );
+      await tx.$executeRawUnsafe(`DELETE FROM "${table}" WHERE "shipmentId" = '${SHIPMENT_ID}'`);
     }
 
-    await prisma.$executeRawUnsafe(`DELETE FROM "shipment" WHERE id = '${SHIPMENT_ID}'`);
-    await prisma.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
-    await prisma.$executeRawUnsafe(
-      `DELETE FROM "expense_category" WHERE id::text LIKE '${PREFIX}%'`,
-    );
-  } finally {
-    await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
-  }
+    await tx.$executeRawUnsafe(`DELETE FROM "shipment" WHERE id = '${SHIPMENT_ID}'`);
+    await tx.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
+    await tx.$executeRawUnsafe(`DELETE FROM "expense_category" WHERE id::text LIKE '${PREFIX}%'`);
+  });
 }
 
 beforeAll(async () => {

@@ -1,6 +1,12 @@
 import { createPrismaClient, type ExtendedPrismaClient } from './prisma-client';
 import { testUuid } from './uuid';
 
+/** The client Prisma hands an interactive transaction: no nested `$transaction`. */
+type TransactionClient = Omit<
+  ExtendedPrismaClient,
+  '$connect' | '$disconnect' | '$on' | '$transaction' | '$extends'
+>;
+
 /**
  * Helpers shared by the integration tests. Not exported from the package
  * index — this is test scaffolding, not part of the public surface.
@@ -70,16 +76,50 @@ const CLEANUP_ORDER = [
  * teardown only; application code can never reach a hard delete at all.
  */
 export async function cleanupTestRows(client: ExtendedPrismaClient): Promise<void> {
-  await client.$executeRawUnsafe(`SET session_replication_role = replica`);
-  try {
+  await withTriggersSuspended(client, async (tx) => {
     for (const table of CLEANUP_ORDER) {
-      await client.$executeRawUnsafe(
-        `DELETE FROM "${table}" WHERE id::text LIKE '${TEST_PREFIX}%'`,
-      );
+      await tx.$executeRawUnsafe(`DELETE FROM "${table}" WHERE id::text LIKE '${TEST_PREFIX}%'`);
     }
-  } finally {
-    await client.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
-  }
+  });
+}
+
+/**
+ * Run `fn` with the payout guards suspended, on ONE connection, reverting even
+ * if it throws.
+ *
+ * `session_replication_role` is a per-CONNECTION setting, and Prisma hands each
+ * query whichever pooled connection is free. Issuing the three statements
+ * separately —
+ *
+ *     SET session_replication_role = replica     -- lands on connection A
+ *     DELETE ...                                 -- lands on B, C, D
+ *     SET session_replication_role = DEFAULT     -- lands on B
+ *
+ * — leaves connection A with triggers disabled for the rest of the run. Every
+ * later query routed to it silently skips every trigger in the schema, so
+ * `softDelete` on a paid commission succeeds, PAID stops being terminal, and a
+ * debt can be over-recovered. Nothing fails loudly; the guards simply are not
+ * there, and only for the queries unlucky enough to land on that connection.
+ *
+ * That is not hypothetical — it is what made `payout-idempotency.test.ts` fail
+ * in CI while passing locally. Sequential use keeps the pool at one connection,
+ * so a laptop run never fans out far enough to split the pair.
+ *
+ * Two things fix it, and both are needed. The interactive transaction pins
+ * every statement to a single connection; `SET LOCAL` scopes the change to that
+ * transaction, so it reverts on commit AND on rollback, with no `finally` to
+ * forget. CHECK constraints and unique indexes are unaffected either way —
+ * `replica` suspends triggers only, which is why constraint-backed assertions
+ * kept passing while every trigger-backed one broke.
+ */
+export async function withTriggersSuspended<T>(
+  client: ExtendedPrismaClient,
+  fn: (tx: TransactionClient) => Promise<T>,
+): Promise<T> {
+  return client.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = replica`);
+    return fn(tx as TransactionClient);
+  });
 }
 
 export function createTestClient(): ExtendedPrismaClient {

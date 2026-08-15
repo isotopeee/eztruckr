@@ -1,5 +1,11 @@
 import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
-import { createPrismaClient, testUuid, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
+import {
+  createPrismaClient,
+  testUuid,
+  withActor,
+  type ExtendedPrismaClient,
+  withTriggersSuspended,
+} from '@eztruckr/db';
 import { UserRole } from '@eztruckr/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { PrismaService } from '../prisma/prisma.service';
@@ -120,15 +126,12 @@ function usersStub(): UsersService {
 }
 
 async function cleanup(): Promise<void> {
-  await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
-  try {
-    await prisma.$executeRawUnsafe(
+  await withTriggersSuspended(prisma, async (tx) => {
+    await tx.$executeRawUnsafe(
       `DELETE FROM "staff_invitation" WHERE "userId"::text LIKE '${PREFIX}%'`,
     );
-    await prisma.$executeRawUnsafe(`DELETE FROM "user" WHERE id::text LIKE '${PREFIX}%'`);
-  } finally {
-    await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
-  }
+    await tx.$executeRawUnsafe(`DELETE FROM "user" WHERE id::text LIKE '${PREFIX}%'`);
+  });
 }
 
 /**

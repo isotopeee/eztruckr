@@ -1,5 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
-import { createPrismaClient, testUuid, withActor, type ExtendedPrismaClient } from '@eztruckr/db';
+import {
+  createPrismaClient,
+  testUuid,
+  withActor,
+  type ExtendedPrismaClient,
+  withTriggersSuspended,
+} from '@eztruckr/db';
 import { ShipmentStatus, StaffRole } from '@eztruckr/types';
 import { StaffService } from '../master-data/staff.service';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -42,14 +48,11 @@ const CLEANUP_STATEMENTS = [
 ];
 
 async function cleanup(): Promise<void> {
-  await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
-  try {
+  await withTriggersSuspended(prisma, async (tx) => {
     for (const statement of CLEANUP_STATEMENTS) {
-      await prisma.$executeRawUnsafe(statement);
+      await tx.$executeRawUnsafe(statement);
     }
-  } finally {
-    await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
-  }
+  });
 }
 
 /** A day either side of now, so "expired" needs no fixed date in the file. */

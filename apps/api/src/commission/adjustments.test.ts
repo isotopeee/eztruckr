@@ -1,4 +1,10 @@
-import { createPrismaClient, withActor, type ExtendedPrismaClient, testUuid } from '@eztruckr/db';
+import {
+  createPrismaClient,
+  withActor,
+  type ExtendedPrismaClient,
+  testUuid,
+  withTriggersSuspended,
+} from '@eztruckr/db';
 import {
   AdjustmentDirection,
   CrewRole,
@@ -44,24 +50,17 @@ const id = (name: string) => testUuid('00000006', name);
 const SHIPMENT_ID = id('shipment');
 
 async function cleanup(): Promise<void> {
-  await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
-  try {
+  await withTriggersSuspended(prisma, async (tx) => {
     for (const table of ['adjustment', 'commission']) {
-      await prisma.$executeRawUnsafe(
-        `DELETE FROM "${table}" WHERE "shipmentId" = '${SHIPMENT_ID}'`,
-      );
+      await tx.$executeRawUnsafe(`DELETE FROM "${table}" WHERE "shipmentId" = '${SHIPMENT_ID}'`);
     }
-    await prisma.$executeRawUnsafe(
+    await tx.$executeRawUnsafe(
       `DELETE FROM "adjustment" WHERE "shipmentId" IS NULL AND "staffId" IN ('${driverId ?? ''}', '${helperId ?? ''}')`,
     );
-    await prisma.$executeRawUnsafe(
-      `DELETE FROM "liquidation" WHERE "shipmentId" = '${SHIPMENT_ID}'`,
-    );
-    await prisma.$executeRawUnsafe(`DELETE FROM "shipment" WHERE id = '${SHIPMENT_ID}'`);
-    await prisma.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
-  } finally {
-    await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
-  }
+    await tx.$executeRawUnsafe(`DELETE FROM "liquidation" WHERE "shipmentId" = '${SHIPMENT_ID}'`);
+    await tx.$executeRawUnsafe(`DELETE FROM "shipment" WHERE id = '${SHIPMENT_ID}'`);
+    await tx.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
+  });
 }
 
 beforeAll(async () => {
@@ -196,16 +195,16 @@ async function payoutLine(suffix: string): Promise<string> {
 }
 
 async function dropPayout(suffix: string): Promise<void> {
-  await prisma.$executeRawUnsafe(`SET session_replication_role = replica`);
-  await prisma.$executeRawUnsafe(
-    `UPDATE "adjustment" SET "payoutLineId" = NULL WHERE "payoutLineId" = '${id(`line-${suffix}`)}'`,
-  );
-  await prisma.$executeRawUnsafe(
-    `UPDATE "commission" SET "payoutLineId" = NULL WHERE "payoutLineId" = '${id(`line-${suffix}`)}'`,
-  );
-  await prisma.$executeRawUnsafe(`DELETE FROM "payout_line" WHERE id = '${id(`line-${suffix}`)}'`);
-  await prisma.$executeRawUnsafe(`DELETE FROM "payout_run" WHERE id = '${id(`run-${suffix}`)}'`);
-  await prisma.$executeRawUnsafe(`SET session_replication_role = DEFAULT`);
+  await withTriggersSuspended(prisma, async (tx) => {
+    await tx.$executeRawUnsafe(
+      `UPDATE "adjustment" SET "payoutLineId" = NULL WHERE "payoutLineId" = '${id(`line-${suffix}`)}'`,
+    );
+    await tx.$executeRawUnsafe(
+      `UPDATE "commission" SET "payoutLineId" = NULL WHERE "payoutLineId" = '${id(`line-${suffix}`)}'`,
+    );
+    await tx.$executeRawUnsafe(`DELETE FROM "payout_line" WHERE id = '${id(`line-${suffix}`)}'`);
+    await tx.$executeRawUnsafe(`DELETE FROM "payout_run" WHERE id = '${id(`run-${suffix}`)}'`);
+  });
 }
 
 const adjust = (overrides: Record<string, unknown> = {}) =>
