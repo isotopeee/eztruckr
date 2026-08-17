@@ -372,10 +372,10 @@ throughout, because `replica` suspends triggers only.
   rate-chain correction form and the dispatch manager's transition buttons. The build is now the
   Phase 9 one everywhere (production runs it), so this is unexercised UI rather than a stale
   container.
-- **R2 has never taken a real receipt upload.** `/api/health` reports `storage: up` in production,
-  which is `HeadBucket` succeeding — it carries no body, so it does not exercise the checksum path
-  that `WHEN_REQUIRED` exists for. The first upload is the proof.
-- **`backup.sh` has never run to completion against R2.** Cron is installed; nothing has fired.
+- **R2 writes are proven, not just `HeadBucket`.** 17 real receipts uploaded through the app
+  (verified: object listing matches `receipt` rows, filenames are forwarded phone photos) and
+  `backup.sh` has completed against production (verified: 211 KB landed and was listed back).
+  `WHEN_REQUIRED` and the scoped token are confirmed correct in both directions, not assumed.
 - **Known flake, open.** `adjustments.test.ts > survives a recompute…` and one whole api-suite
   run, neither reproducible since. Both smell like cross-suite interference through global master
   data in the shared test database.
