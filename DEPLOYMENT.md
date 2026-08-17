@@ -199,7 +199,7 @@ Cloudflare shows the certificate and the key **exactly once**. Copy both — the
 > This certificate is trusted by Cloudflare and by nothing else, which is the point: the only
 > client that should ever reach the droplet directly is Cloudflare.
 
-**Record the expiry date here when you create it:** `____________` (about 15 years out).
+**Expiry: `2041-08-11`.** Confirmed live via `-enddate` below.
 
 Read it back off the running server at any time:
 
