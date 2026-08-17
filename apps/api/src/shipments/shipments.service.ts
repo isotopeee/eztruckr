@@ -7,8 +7,10 @@ import {
 import { Prisma, withDeleted } from '@eztruckr/db';
 import {
   allowedManualTransitions,
+  areBookingDetailsCorrectable,
   areChargesEditable,
   CrewRole,
+  draftOnlyFieldsIn,
   hasBrokerForTpc,
   hasUnambiguousTpc,
   isAllowedManualTransition,
@@ -257,20 +259,55 @@ export class ShipmentsService {
   }
 
   /**
-   * The rate chain is only editable in DRAFT.
+   * The booking edit, which is really two edits under one route.
    *
-   * Once a shipment is dispatched the crew are on the road against an agreed
-   * figure, and the gross rate has stopped being a proposal. Allowing an edit
-   * after that would silently move the commission base of work already done.
+   * THE RATE CHAIN AND WHAT WAS CARRIED still shut at DRAFT: once a shipment
+   * is dispatched the crew are on the road against an agreed figure, and the
+   * gross rate has stopped being a proposal. Allowing an edit after that would
+   * silently move the commission base of work already done.
+   *
+   * THE FACTS THAT IDENTIFY THE TRIP do not — client, date, route, lane and
+   * container number stay correctable until LIQUIDATED, because they are
+   * transcription of paperwork that arrives after the booking rather than terms
+   * anybody committed to. See `areBookingDetailsCorrectable` for why that is a
+   * third rule rather than a relaxation of the first.
+   *
+   * SPLIT BY BODY HERE, not by route, and the difference from `updateRateChain`
+   * is deliberate: that one is split by route because it carries a NARROWER
+   * ROLE LIST, and `RolesGuard` cannot read a payload. Both halves of this one
+   * are `CAN_WRITE_SHIPMENTS`, so there is no decision the guard needs to see
+   * and a second endpoint would only duplicate every field on this one.
    */
   async update(id: string, input: UpdateShipmentInput): Promise<Shipment> {
     const current = await this.load(id);
     const status = this.statusOf(current);
 
-    if (!isRateChainEditable(status)) {
+    if (!areBookingDetailsCorrectable(status)) {
       throw new ConflictException(
-        `Shipment ${current.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; its rate chain can only be changed while it is a draft.`,
+        `Shipment ${current.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; its booking is part of the settled record.`,
       );
+    }
+
+    const draftOnly = draftOnlyFieldsIn(input);
+
+    if (draftOnly.length > 0 && !isRateChainEditable(status)) {
+      throw new ConflictException(
+        `Shipment ${current.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; ${draftOnly.join(', ')} can only be changed while it is a draft. Its client, date, route, lane and container number are still correctable, and the rate chain has a correction of its own.`,
+      );
+    }
+
+    /**
+     * The client and the route are not just labels: `resolveCommissionRule`
+     * scopes rules by both, so moving either can hand the crew a different
+     * rate. Compared against what is stored rather than merely present, so
+     * re-saving an unchanged form is not treated as a change.
+     */
+    const ruleScopeMoves =
+      (input.clientId !== undefined && input.clientId !== current.clientId) ||
+      (input.routeId !== undefined && input.routeId !== current.routeId);
+
+    if (ruleScopeMoves) {
+      await this.assertNothingPaid(current, 'Changing the client or the route');
     }
 
     const merged = {
@@ -326,6 +363,20 @@ export class ShipmentsService {
       data.tpcAmount = rates.tpcAmount;
       data.netRate = rates.netRate;
       data.appliedTpcRate = rates.appliedTpcRate;
+    }
+
+    /**
+     * A moved rule scope goes through the same staleness channel a corrected
+     * gross does, and for the same reason: the stored commissions were resolved
+     * against the old client or route and no longer follow from the shipment
+     * beside them. The column is named for the rate chain because that was the
+     * only thing that could move it; what it actually records is the instant
+     * the commission INPUTS last changed, which this is. The shipment's own
+     * `updatedAt` still cannot stand in — correcting a container number moves
+     * that, and must not report anybody's pay stale.
+     */
+    if (ruleScopeMoves) {
+      data.rateChainUpdatedAt = new Date();
     }
 
     return toShipment(
@@ -711,7 +762,9 @@ export class ShipmentsService {
    * THE RATE CHAIN COUNTS TOO, and did not have to until it became correctable
    * — it was frozen at dispatch, so no computation could fall behind it. A
    * corrected gross moves the base for every crew member on the trip, which is
-   * precisely what this flag exists to announce.
+   * precisely what this flag exists to announce. A corrected CLIENT OR ROUTE
+   * stamps the same column, because it re-scopes which commission rule applies
+   * and so falsifies a computation just as thoroughly.
    */
   async isComputationStale(shipmentId: string): Promise<boolean> {
     const shipment = await this.load(shipmentId);

@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { SHIPMENT_STATUS_LABELS, UserRole } from '@eztruckr/types';
 import { ArrowLeft } from 'lucide-react';
 import { AllowancesCard } from '@/components/shipments/allowances-card';
+import { BookingDetailsDialog } from '@/components/shipments/booking-details-dialog';
 import { ChargesCard } from '@/components/shipments/charges-card';
 import { CommissionsCard } from '@/components/shipments/commissions-card';
 import { CompanyExpensesCard } from '@/components/shipments/company-expenses-card';
@@ -62,6 +63,10 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
           </div>
           <p className="text-muted-foreground text-sm">
             {formatDate(data.shipmentDate)} · {data.clientName} · {data.origin} → {data.destination}
+            {/* Named beside the lane it filled in, now that it is editable
+                here: a route swap that left the lane behind would otherwise be
+                invisible on the screen it happened on. */}
+            {data.routeName ? ` · ${data.routeName}` : ''}
             {data.thirdPartyName ? ` · via ${data.thirdPartyName}` : ''}
             {/* Beside the lane rather than in a card of its own: it is how
                 somebody on the phone identifies the trip, so it belongs where
@@ -69,6 +74,9 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
             {data.containerNumber ? ` · container ${data.containerNumber}` : ''}
           </p>
         </div>
+        {/* Office-only and status-gated, both decided inside the component so a
+            crew session cannot be shown an edit it would be refused. */}
+        {isCrew ? null : <BookingDetailsDialog shipment={data} />}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">

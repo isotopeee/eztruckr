@@ -18,6 +18,7 @@ import type {
   Shipment,
   ShipmentStatus,
   UpdateRateChainInput,
+  UpdateShipmentInput,
 } from '@eztruckr/types';
 import { apiFetch, queryString } from './api-client';
 
@@ -67,6 +68,22 @@ export function getShipment(id: string): Promise<Shipment> {
 
 export function createShipment(input: CreateShipmentInput): Promise<Shipment> {
   return apiFetch<Shipment>('/shipments', { method: 'POST', body: JSON.stringify(input) });
+}
+
+/**
+ * Correcting the trip's own details: client, date, route, lane, container.
+ *
+ * The same endpoint as the DRAFT booking edit, because both halves are
+ * `CAN_WRITE_SHIPMENTS` — what differs is WHEN each field closes, and the
+ * service decides that from the body. Send only the fields above once a trip
+ * has left DRAFT; the rate chain and the cargo are refused there, and have
+ * `updateRateChain` and the truck endpoint respectively.
+ */
+export function updateShipment(id: string, input: UpdateShipmentInput): Promise<Shipment> {
+  return apiFetch<Shipment>(`/shipments/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
 }
 
 /**

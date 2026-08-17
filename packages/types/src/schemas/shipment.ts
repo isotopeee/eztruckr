@@ -279,6 +279,36 @@ export const updateShipmentSchema = shipmentFields.partial();
 export type UpdateShipmentInput = z.infer<typeof updateShipmentSchema>;
 
 /**
+ * The booking fields that still shut at DRAFT — the complement of the ones
+ * `areBookingDetailsCorrectable` keeps open.
+ *
+ * Stated as the SMALLER, stricter list on purpose. A new field added to
+ * `shipmentFields` and forgotten here would fall into the correctable set, so
+ * the failure mode of forgetting is an editable field rather than a frozen one
+ * — the direction a person can notice and fix, rather than one that silently
+ * refuses a correction nobody understands.
+ *
+ * `grossRate`, `tpcRate` and `tpcAmount` are the rate chain, which has its own
+ * correction route once the trip has left DRAFT; `thirdPartyId` is here because
+ * the broker and the cut are one fact, so it goes with them. `truckId` has its
+ * own endpoint with its own rule, and `cargoDescription` describes the load
+ * rather than identifying the trip.
+ */
+export const DRAFT_ONLY_BOOKING_FIELDS = [
+  'thirdPartyId',
+  'truckId',
+  'cargoDescription',
+  'grossRate',
+  'tpcRate',
+  'tpcAmount',
+] as const satisfies readonly (keyof UpdateShipmentInput)[];
+
+/** Which of the DRAFT-only fields a patch actually touches, for the refusal. */
+export function draftOnlyFieldsIn(input: UpdateShipmentInput): string[] {
+  return DRAFT_ONLY_BOOKING_FIELDS.filter((field) => input[field] !== undefined);
+}
+
+/**
  * Correcting the rate chain after the trip has left DRAFT.
  *
  * ITS OWN ENDPOINT, not a relaxation of `updateShipmentSchema`, and the reason

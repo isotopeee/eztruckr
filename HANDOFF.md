@@ -148,16 +148,19 @@ One predicate, `shipmentStatusAfterLiquidationMilestone`, called from both sides
 
 ### What locks when — the distinction that keeps being got wrong
 
-| Thing                | Locked by                              | Because                                             |
-| -------------------- | -------------------------------------- | --------------------------------------------------- |
-| Rate chain (booking) | leaving DRAFT                          | the crew are on the road against an agreed figure   |
-| Rate chain (fixing)  | LIQUIDATED, or any **paid** commission | it feeds the commission base, exactly like a charge |
-| Charges              | LIQUIDATED, or any **paid** commission | they feed the commission base                       |
-| Crew assignment      | any **paid** commission                | the voucher names them                              |
-| Truck assignment     | CLOSED only                            | a truck is paid nothing and feeds no figure         |
-| Company-paid expense | CLOSED only                            | same reason as the truck                            |
-| Liquidation contents | its own APPROVED                       | approval freezes that account's variance            |
-| An adjustment        | its **own** payout line                | not the commission's — a late correction is normal  |
+| Thing                 | Locked by                              | Because                                              |
+| --------------------- | -------------------------------------- | ---------------------------------------------------- |
+| Rate chain (booking)  | leaving DRAFT                          | the crew are on the road against an agreed figure    |
+| Rate chain (fixing)   | LIQUIDATED, or any **paid** commission | it feeds the commission base, exactly like a charge  |
+| Cargo description     | leaving DRAFT                          | it describes the load, agreed at booking             |
+| Date, lane, container | LIQUIDATED                             | transcribed paperwork; feeds no figure at all        |
+| Client, route         | LIQUIDATED, or any **paid** commission | `RuleScope` — they select which commission rule pays |
+| Charges               | LIQUIDATED, or any **paid** commission | they feed the commission base                        |
+| Crew assignment       | any **paid** commission                | the voucher names them                               |
+| Truck assignment      | CLOSED only                            | a truck is paid nothing and feeds no figure          |
+| Company-paid expense  | CLOSED only                            | same reason as the truck                             |
+| Liquidation contents  | its own APPROVED                       | approval freezes that account's variance             |
+| An adjustment         | its **own** payout line                | not the commission's — a late correction is normal   |
 
 Copying a guard without its reason is the recurring failure here; `truck-assignment.test.ts` and
 `trip-profit.test.ts` pin two of these in **both** directions so "making it consistent" fails
@@ -168,6 +171,14 @@ the booking edit: every dispatcher, closed at DRAFT. `PATCH /shipments/:id/rate-
 figure recorded wrong, restricted to `CAN_EDIT_RATE_CHAIN` and bounded by `assertNothingPaid`.
 It stamps `shipment.rateChainUpdatedAt`, the only reason `commissionsStale` can still be told the
 truth — `updatedAt` moves when the truck is swapped.
+
+**The three booking rows are one endpoint, split by body.** `PATCH /shipments/:id` carries all
+three: `DRAFT_ONLY_BOOKING_FIELDS` shuts at DRAFT, the rest stays correctable to LIQUIDATED, and
+client/route additionally call `assertNothingPaid` and stamp `rateChainUpdatedAt` because
+`ruleMatches` scopes rules by them. Split by body and not by route precisely because both halves
+are `CAN_WRITE_SHIPMENTS` — `updateRateChain` is a separate route only because its **role list**
+is narrower, and `RolesGuard` cannot read a payload. The stricter list is the one written out, so
+a field added to `shipmentFields` and forgotten lands in the editable set, which someone notices.
 
 ### Who may do what
 
@@ -480,6 +491,8 @@ Kept so a later session sees what was decided rather than reopening it.
 | May a dispatcher keep clients, trucks, payees?          | **No** — their manager does. Routes are the exception.          |
 | May either dispatch role edit `staff`?                  | **No.** It decides who may hold cash.                           |
 | May the gross rate be corrected after DRAFT?            | **Yes**, until a commission is paid, by admin or DM.            |
+| May client, date, route or container be fixed after it? | **Yes**, to LIQUIDATED — client and route also stop at paid.    |
+| Cargo description too, since it is the same form?       | **No.** Not asked for, and it is a term of the booking.         |
 | Should `Payee` replace `ThirdParty`?                    | **No.** Opposite sides of the ledger — see below.               |
 | Can a payee be a member of staff?                       | **No.** External only; cash to crew is an `Allowance`.          |
 | Is `payeeId` required on an expense?                    | **The category decides.** `ExpenseCategory.requiresPayee`.      |

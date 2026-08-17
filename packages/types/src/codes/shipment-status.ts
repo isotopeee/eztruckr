@@ -151,6 +151,29 @@ export function isRateChainCorrectable(status: ShipmentStatus): boolean {
 }
 
 /**
+ * Statuses at which the facts that IDENTIFY the trip may still be corrected:
+ * the client, the date it ran, the route, the lane and the container number.
+ *
+ * A THIRD RULE ALONGSIDE THE TWO ABOVE, because it answers a third question.
+ * `isRateChainEditable` is about a figure that stops being a proposal at
+ * dispatch; `isRateChainCorrectable` is about fixing a figure that was agreed
+ * and recorded wrong. These fields are neither — they are transcription of
+ * paperwork that mostly arrives AFTER the booking, and the container number in
+ * particular is what a client quotes down the phone. A trip filed under the
+ * wrong client is one nobody can find, and refusing the correction does not
+ * make the record true, it just makes it permanently false.
+ *
+ * SAME BOUND AS THE CHARGES, because LIQUIDATED is where the trip's record
+ * closes for good. And as with the rate chain, the status is not the only
+ * bound: changing the client or the route moves which commission RULE applies
+ * (see `ruleMatches`), so those two are additionally refused once a commission
+ * has been paid — a fact about the payout that no status can express.
+ */
+export function areBookingDetailsCorrectable(status: ShipmentStatus): boolean {
+  return !shipmentStatusAtLeast(status, ShipmentStatus.LIQUIDATED);
+}
+
+/**
  * Charges and billable expenses stay open until the trip is liquidated —
  * port fees and detention are discovered en route, not at booking. Once
  * commissions are computed the base is frozen, so a later charge would make

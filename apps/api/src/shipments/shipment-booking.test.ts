@@ -6,6 +6,7 @@ import {
   withTriggersSuspended,
 } from '@eztruckr/db';
 import {
+  CrewRole,
   LiquidationStatus,
   shipmentNumberDatePart,
   ShipmentStatus,
@@ -39,10 +40,21 @@ async function cleanup(): Promise<void> {
   await withTriggersSuspended(prisma, async (tx) => {
     // Child rows are matched through the shipment rather than by id prefix:
     // the services generate cuids, so nothing below the shipment carries one.
+    //
+    // The commission and the payout line behind it come first and in that
+    // order: the commission is what stands in for money already handed over
+    // (see the client-change test), and every foreign key here is Restrict.
+    await tx.$executeRawUnsafe(
+      `DELETE FROM "commission" WHERE "shipmentId" IN (SELECT id FROM "shipment" WHERE "clientId"::text LIKE '${PREFIX}%')`,
+    );
+    await tx.$executeRawUnsafe(`DELETE FROM "payout_line" WHERE id::text LIKE '${PREFIX}%'`);
+    await tx.$executeRawUnsafe(`DELETE FROM "payout_run" WHERE id::text LIKE '${PREFIX}%'`);
     await tx.$executeRawUnsafe(
       `DELETE FROM "liquidation" WHERE "shipmentId" IN (SELECT id FROM "shipment" WHERE "clientId"::text LIKE '${PREFIX}%')`,
     );
     await tx.$executeRawUnsafe(`DELETE FROM "shipment" WHERE "clientId"::text LIKE '${PREFIX}%'`);
+    // After the shipments and the commissions, both of which name them.
+    await tx.$executeRawUnsafe(`DELETE FROM "staff" WHERE id::text LIKE '${PREFIX}%'`);
     // After the shipments, which name it. The rate-chain correction tests
     // create one, and its id and its name are both unique.
     await tx.$executeRawUnsafe(`DELETE FROM "third_party" WHERE id::text LIKE '${PREFIX}%'`);
@@ -115,6 +127,62 @@ function booking(overrides: Partial<CreateShipmentInput> = {}): CreateShipmentIn
 
 const book = (overrides?: Partial<CreateShipmentInput>) =>
   withActor({ userId: adminId }, () => shipments.create(booking(overrides)));
+
+/**
+ * Cash actually handed to somebody for this trip.
+ *
+ * Written straight to the tables rather than driven through the payout service,
+ * because payout RUNS are not built yet and what every guard reads is the
+ * `payoutLineId` column, never a run's status — the same stand-in the
+ * adjustment tests use. The run is left DRAFT: reaching PAID would arm the
+ * triggers that refuse to unlink it, and the cleanup has to be able to.
+ */
+async function payACommissionOn(shipmentId: string): Promise<void> {
+  await withActor({ userId: adminId }, async () => {
+    const driver = await prisma.staff.create({
+      data: {
+        id: id('driver'),
+        firstName: 'Paid',
+        lastName: 'Driver',
+        eligibleRoles: [CrewRole.DRIVER],
+      },
+    });
+
+    const run = await prisma.payoutRun.create({
+      data: {
+        id: id('run'),
+        runNumber: id('run').toUpperCase(),
+        periodStart: new Date('2026-08-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-08-31T00:00:00.000Z'),
+      },
+    });
+
+    const line = await prisma.payoutLine.create({
+      data: {
+        id: id('line'),
+        payoutRunId: run.id,
+        staffId: driver.id,
+        grossAmount: '1000.0000',
+        netAmount: '1000.0000',
+      },
+    });
+
+    await prisma.commission.create({
+      data: {
+        shipmentId,
+        staffId: driver.id,
+        role: CrewRole.DRIVER,
+        commissionableBase: '20000.0000',
+        amount: '1000.0000',
+        // The default method is PERCENT_OF_BASE, and
+        // `commission_rate_based_needs_rate` insists a rate-based row carries
+        // the rate it was computed at. 5% of the base is the amount above.
+        appliedRate: '0.0500',
+        payoutLineId: line.id,
+      },
+    });
+  });
+}
 
 describe('the shipment number is generated', () => {
   it('is today’s Manila date followed by 001 for the day’s first trip', async () => {
@@ -293,11 +361,13 @@ describe('the rate chain stays correctable after dispatch', () => {
   });
 
   /**
-   * The booking edit is NOT what moved. A dispatcher correcting the cargo
-   * description of a trip on the road still gets the same refusal it always
-   * got, and the two rules stay legible only while this passes.
+   * The MONEY half of the booking edit is NOT what moved. A dispatcher
+   * correcting the cargo description of a trip on the road still gets the same
+   * refusal it always got — the trip's identifying details opened up around it
+   * (see the describe below), and the three rules stay legible only while this
+   * and those pass together.
    */
-  it('leaves the booking edit shut at DRAFT', async () => {
+  it('leaves the money half of the booking edit shut at DRAFT', async () => {
     if (!available) return;
 
     const shipment = await dispatched();
@@ -307,6 +377,12 @@ describe('the rate chain stays correctable after dispatch', () => {
         shipments.update(shipment.id, { cargoDescription: 'Rice' }),
       ),
     ).rejects.toThrow(/can only be changed while it is a draft/i);
+
+    // Named in the refusal, so the person reading it knows which field of the
+    // several they submitted was the one that closed.
+    await expect(
+      withActor({ userId: adminId }, () => shipments.update(shipment.id, { grossRate: '9.00' })),
+    ).rejects.toThrow(/grossRate/);
   });
 
   /**
@@ -397,5 +473,181 @@ describe('the rate chain stays correctable after dispatch', () => {
     );
 
     expect(await shipments.isComputationStale(shipment.id)).toBe(true);
+  });
+});
+
+/**
+ * The facts that IDENTIFY the trip stay correctable after dispatch.
+ *
+ * A THIRD RULE, not a relaxation of either of the two above. The client, the
+ * date the trip ran, the route, the lane and the container number are
+ * transcribed from paperwork that mostly arrives after the booking — nobody
+ * committed to them the way they committed to a gross rate, and a trip filed
+ * under the wrong client is one nobody can find. Refusing the correction does
+ * not make the record true; it makes it permanently false.
+ *
+ * Two of them are not merely labels, and that is what most of this covers:
+ * `resolveCommissionRule` scopes rules by client and route, so moving either
+ * can hand the crew a different rate.
+ */
+describe('the trip’s own details stay correctable after dispatch', () => {
+  const dispatched = async (overrides?: Partial<CreateShipmentInput>) => {
+    const shipment = await book(overrides);
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { status: ShipmentStatus.IN_TRANSIT },
+      }),
+    );
+
+    return shipment;
+  };
+
+  it('accepts the container number, the date and the lane on a trip on the road', async () => {
+    if (!available) return;
+
+    const shipment = await dispatched();
+
+    const corrected = await withActor({ userId: adminId }, () =>
+      shipments.update(shipment.id, {
+        containerNumber: 'TCLU1234567',
+        shipmentDate: '2026-08-01T00:00:00.000Z',
+        origin: 'Manila South Harbor',
+        destination: 'Batangas Port',
+      }),
+    );
+
+    expect(corrected.containerNumber).toBe('TCLU1234567');
+    expect(corrected.shipmentDate).toBe('2026-08-01T00:00:00.000Z');
+    expect(corrected.origin).toBe('Manila South Harbor');
+  });
+
+  /**
+   * None of those three appears in `RuleScope`, so a computation that has
+   * already run is still reproducible from the shipment beside it. Reporting
+   * them stale would send somebody to recompute a payout that cannot change.
+   */
+  it('does not report computed commissions stale for a container correction', async () => {
+    if (!available) return;
+
+    const shipment = await dispatched();
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { commissionsComputedAt: new Date() },
+      }),
+    );
+
+    await withActor({ userId: adminId }, () =>
+      shipments.update(shipment.id, { containerNumber: 'TCLU7654321' }),
+    );
+
+    expect(await shipments.isComputationStale(shipment.id)).toBe(false);
+  });
+
+  /**
+   * The client DOES appear in `RuleScope`, so this one has to go the other way.
+   * The stored commissions were resolved against the old client and no longer
+   * follow from the shipment, which is exactly what the flag announces.
+   */
+  it('reports them stale when the client moves, because it re-scopes the rules', async () => {
+    if (!available) return;
+
+    const shipment = await dispatched();
+
+    const other = await withActor({ userId: adminId }, async () =>
+      prisma.client.create({ data: { id: id('client2'), name: 'Corrected Client' } }),
+    );
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { commissionsComputedAt: new Date() },
+      }),
+    );
+
+    await withActor({ userId: adminId }, () =>
+      shipments.update(shipment.id, { clientId: other.id }),
+    );
+
+    expect(await shipments.isComputationStale(shipment.id)).toBe(true);
+  });
+
+  /**
+   * Re-saving a form nobody changed is not a change. Without the comparison
+   * against what is stored, opening the dialog and pressing save would report
+   * every computed commission on the trip stale.
+   */
+  it('leaves the computation alone when the client is re-sent unchanged', async () => {
+    if (!available) return;
+
+    const shipment = await dispatched();
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { commissionsComputedAt: new Date() },
+      }),
+    );
+
+    await withActor({ userId: adminId }, () =>
+      shipments.update(shipment.id, { clientId, routeId: null, containerNumber: 'ABCD1234567' }),
+    );
+
+    expect(await shipments.isComputationStale(shipment.id)).toBe(false);
+  });
+
+  /**
+   * The bound that is not a status. A paid commission names a voucher that has
+   * to keep reconciling, so the client cannot move underneath it — the same
+   * line that governs a late charge and a rate correction.
+   */
+  it('refuses a client change once a commission has been paid', async () => {
+    if (!available) return;
+
+    const shipment = await dispatched();
+
+    const other = await withActor({ userId: adminId }, async () =>
+      prisma.client.create({ data: { id: id('client3'), name: 'Too Late Client' } }),
+    );
+
+    await payACommissionOn(shipment.id);
+
+    await expect(
+      withActor({ userId: adminId }, () => shipments.update(shipment.id, { clientId: other.id })),
+    ).rejects.toThrow(/already been paid/i);
+
+    // The container number is not scoped by any rule, so the paid commission
+    // has no claim on it and the correction still lands.
+    const corrected = await withActor({ userId: adminId }, () =>
+      shipments.update(shipment.id, { containerNumber: 'PAID1234567' }),
+    );
+
+    expect(corrected.containerNumber).toBe('PAID1234567');
+  });
+
+  /**
+   * LIQUIDATED closes the trip's record for good — the same bound as the
+   * charges and the rate correction, because it is the same reason.
+   */
+  it('is refused once the trip is liquidated', async () => {
+    if (!available) return;
+
+    const shipment = await book();
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { status: ShipmentStatus.LIQUIDATED },
+      }),
+    );
+
+    await expect(
+      withActor({ userId: adminId }, () =>
+        shipments.update(shipment.id, { containerNumber: 'LATE1234567' }),
+      ),
+    ).rejects.toThrow(/part of the settled record/i);
   });
 });
