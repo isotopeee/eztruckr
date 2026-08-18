@@ -1,9 +1,12 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatRate, grossProfitCaveats, type Shipment } from '@eztruckr/types';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ApiError } from '@/lib/api-client';
 import { formatMoney } from '@/lib/format';
 import { getGrossProfit, shipmentKeys } from '@/lib/shipment-api';
 
@@ -25,10 +28,49 @@ import { getGrossProfit, shipmentKeys } from '@/lib/shipment-api';
  * the note and the banner all say which it is.
  */
 export function GrossProfitCard({ shipment }: { shipment: Shipment }) {
+  const queryClient = useQueryClient();
   const grossProfit = useQuery({
     queryKey: shipmentKeys.grossProfit(shipment.id),
     queryFn: () => getGrossProfit(shipment.id),
   });
+
+  /**
+   * Ask the API for the figure again.
+   *
+   * NOT A CACHE BUST DRESSED UP AS ARITHMETIC: the sum is done server-side on
+   * every request, so this button is the only way a reader can be sure the
+   * number in front of them counts the charge somebody else added a minute
+   * ago. Queries here go stale after 30s and do not refetch on focus, so a
+   * card left open can sit on a figure that has since moved.
+   *
+   * THE LINES REFRESH WITH THE TOTAL, and that is the whole point rather than
+   * a courtesy. The charges and company expenses above are separate queries
+   * over the same figures this breakdown itemises, so refreshing the total
+   * alone would leave it counting a charge the list above it does not yet
+   * show — a total that cannot be followed back to its lines, which is the one
+   * thing this card exists to prevent. The total is refetched directly for its
+   * error result; the siblings are invalidated around it.
+   *
+   * The failure is announced rather than swallowed. A refetch that errors
+   * leaves the previous data on screen, so a silent one would answer "is this
+   * current?" with an unchanged number that means the opposite.
+   */
+  const recompute = async () => {
+    const [result] = await Promise.all([
+      grossProfit.refetch(),
+      queryClient.invalidateQueries({
+        queryKey: shipmentKeys.detail(shipment.id),
+        predicate: (query) => query.queryKey.at(-1) !== 'gross-profit',
+      }),
+    ]);
+
+    if (result.isError) {
+      toast.error('Could not recompute gross profit', {
+        description:
+          result.error instanceof ApiError ? result.error.displayMessage : String(result.error),
+      });
+    }
+  };
 
   const data = grossProfit.data;
 
@@ -41,12 +83,23 @@ export function GrossProfitCard({ shipment }: { shipment: Shipment }) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Gross profit</CardTitle>
-        <CardDescription>
-          Revenue on this trip, less what it cost to run — derived from the lines below every time
-          it is asked for, never stored.
-        </CardDescription>
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div className="space-y-1.5">
+          <CardTitle className="text-base">Gross profit</CardTitle>
+          <CardDescription>
+            Revenue on this trip, less what it cost to run — derived from the lines below every time
+            it is asked for, never stored.
+          </CardDescription>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void recompute()}
+          disabled={grossProfit.isFetching}
+        >
+          <RefreshCw className={`h-4 w-4 ${grossProfit.isFetching ? 'animate-spin' : ''}`} />
+          Recompute
+        </Button>
       </CardHeader>
       <CardContent className="space-y-4">
         {caveats.length > 0 ? (

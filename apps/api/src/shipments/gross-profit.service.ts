@@ -5,7 +5,6 @@ import {
   money,
   sum,
   toDecimalString,
-  zero,
   type GrossProfit,
 } from '@eztruckr/types';
 import { PrismaService } from '../prisma/prisma.service';
@@ -45,7 +44,7 @@ export class GrossProfitService {
   async forShipment(shipmentId: string): Promise<GrossProfit> {
     const shipment = await this.shipments.load(shipmentId);
 
-    const [billable, additional, companyPaid, commissions, liquidation, commissionsStale] =
+    const [billable, additional, companyPaid, commissions, liquidations, commissionsStale] =
       await Promise.all([
         this.prisma.client.billableExpense.findMany({
           where: { shipmentId },
@@ -63,7 +62,7 @@ export class GrossProfitService {
           where: { shipmentId },
           select: { amount: true },
         }),
-        this.prisma.client.liquidation.findFirst({
+        this.prisma.client.liquidation.findMany({
           where: { shipmentId },
           select: { status: true, totalLiquidated: true },
         }),
@@ -78,13 +77,27 @@ export class GrossProfitService {
     const netRate = money(shipment.netRate);
     const revenue = netRate.add(billableExpenses).add(additionalCharges);
 
+    // EVERY ACCOUNT, not any one of them. A trip carries one liquidation per
+    // cash holder, so reading a single row counted the driver's claims and
+    // dropped the helper's — a cost understated by exactly one custodian's
+    // spending, on the trips most likely to have a lot of it. The same
+    // correction was already made where a trip closes; this was the copy of
+    // the old one-account assumption that outlived it.
+    //
     // THE RUNNING TOTAL, not just the approved one. `totalLiquidated` is
-    // refreshed on every line change while the liquidation is open and frozen
-    // at approval, so this one column is the right read in both states — and
+    // refreshed on every line change while a liquidation is open and frozen at
+    // approval, so this one column is the right read in both states — and
     // reading it rather than re-summing the lines means an approved figure is
     // the figure that was actually approved.
-    const costsRecognised = liquidation?.status === LiquidationStatus.APPROVED;
-    const liquidatedExpenses = liquidation ? money(liquidation.totalLiquidated) : zero();
+    const liquidatedExpenses = sum(liquidations.map((row) => row.totalLiquidated));
+
+    // APPROVED EVERYWHERE, or the cost is still moving. The driver squaring up
+    // says nothing about the helper still holding change, and `every` on an
+    // empty list is true — hence the guard, or a trip with no account at all
+    // would report its costs as settled.
+    const costsRecognised =
+      liquidations.length > 0 &&
+      liquidations.every((row) => row.status === LiquidationStatus.APPROVED);
 
     const companyPaidExpenses = sum(companyPaid.map((row) => row.amount));
     const crewCommissions = sum(commissions.map((row) => row.amount));

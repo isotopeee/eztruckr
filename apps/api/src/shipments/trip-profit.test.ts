@@ -542,6 +542,53 @@ describe('a billable expense carries what a company-paid one does', () => {
 });
 
 describe('gross profit', () => {
+  /**
+   * One custodian's account, with a single line on it.
+   *
+   * `totalLiquidated` is written alongside the line because the service reads
+   * that column rather than re-summing — the same thing the liquidation
+   * service does on every line change.
+   */
+  async function addLiquidation(custodianId: string | null, amount: string) {
+    const liquidation = await act(async () =>
+      prisma.liquidation.create({
+        data: { shipmentId: SHIPMENT_ID, custodianId, status: LiquidationStatus.PENDING },
+      }),
+    );
+
+    await act(async () =>
+      prisma.liquidationLine.create({
+        data: {
+          liquidationId: liquidation.id,
+          expenseCategoryId: fuelCategoryId,
+          payeeId,
+          amount,
+          spentAt: new Date('2026-08-11T00:00:00.000Z'),
+        },
+      }),
+    );
+
+    await prisma.liquidation.update({
+      where: { id: liquidation.id },
+      data: { totalLiquidated: amount },
+    });
+
+    return liquidation.id;
+  }
+
+  /** Approved with the history the database's CHECKs require to believe it. */
+  async function approve(liquidationId: string): Promise<void> {
+    await prisma.liquidation.update({
+      where: { id: liquidationId },
+      data: {
+        status: LiquidationStatus.APPROVED,
+        submittedAt: new Date(),
+        approvedAt: new Date(),
+        approvedBy: adminId,
+      },
+    });
+  }
+
   async function addCompanyExpense(amount: string): Promise<void> {
     await act(() =>
       companyExpenses.add(SHIPMENT_ID, {
@@ -669,6 +716,64 @@ describe('gross profit', () => {
     expect(approved.liquidatedExpenses).toBe('9000.00');
     expect(approved.grossProfit).toBe('36000.00');
     expect(approved.costsRecognised).toBe(true);
+  });
+
+  /**
+   * THE BUG THIS SUITE COULD NOT SEE. Every other case here builds one
+   * liquidation, which is what a trip used to have; the service read one row
+   * with `findFirst` and stayed correct for exactly as long as that held. A
+   * trip now carries an account per cash holder, so the read silently dropped
+   * every account but one — understating cost, overstating profit, and doing it
+   * worst on the long trips that put a second custodian on the truck.
+   *
+   * Two accounts, because one is what hid it.
+   */
+  it('counts every custodian’s account, not just the first', async () => {
+    if (!available) return;
+
+    // The trip's own account, created at booking before anybody is assigned,
+    // and the driver's. Both hold cash; both spent it.
+    const unassigned = await addLiquidation(null, '9000.0000');
+    const driver = await addLiquidation(staffId, '4000.0000');
+
+    const both = await grossProfits.forShipment(SHIPMENT_ID);
+
+    expect(both.liquidatedExpenses).toBe('13000.00');
+    expect(both.grossProfit).toBe('32000.00');
+    expect(both.costsRecognised).toBe(false);
+
+    // One custodian squaring up settles nothing on its own: the driver's
+    // paperwork says nothing about the cash still out on the other account.
+    await approve(unassigned);
+
+    const halfApproved = await grossProfits.forShipment(SHIPMENT_ID);
+
+    expect(halfApproved.liquidatedExpenses).toBe('13000.00');
+    expect(halfApproved.costsRecognised).toBe(false);
+    expect(halfApproved.isProvisional).toBe(true);
+
+    await approve(driver);
+
+    const settled = await grossProfits.forShipment(SHIPMENT_ID);
+
+    // Again the figure does not move on approval — only its standing does.
+    expect(settled.liquidatedExpenses).toBe('13000.00');
+    expect(settled.grossProfit).toBe('32000.00');
+    expect(settled.costsRecognised).toBe(true);
+  });
+
+  /**
+   * A trip with no account at all has not settled its costs — it has no costs
+   * to settle. `every` on an empty list is true, so this is the case that says
+   * the guard in front of it is load-bearing.
+   */
+  it('does not call an account-less trip’s costs recognised', async () => {
+    if (!available) return;
+
+    const profit = await grossProfits.forShipment(SHIPMENT_ID);
+
+    expect(profit.liquidatedExpenses).toBe('0.00');
+    expect(profit.costsRecognised).toBe(false);
   });
 
   /**
