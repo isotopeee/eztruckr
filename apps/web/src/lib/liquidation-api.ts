@@ -16,6 +16,7 @@ import type {
   Receipt,
   RecordSettlementInput,
   SetCustodianInput,
+  UpdateAllowanceRequestInput,
   SetLiquidationReferenceInput,
   Settlement,
 } from '@eztruckr/types';
@@ -79,7 +80,7 @@ export function removeAllowance(shipmentId: string, id: string): Promise<void> {
 /**
  * Dispatch asking accounting to release cash, and accounting's answer.
  *
- * ADDRESSED FROM BOTH ENDS, exactly as the API is. Raising and withdrawing take
+ * ADDRESSED FROM BOTH ENDS, exactly as the API is. Raising, correcting and withdrawing take
  * a `shipmentId`, because the trip is the screen you are on; deciding takes the
  * request's own id, because accounting works a queue and the trip is incidental
  * to the decision.
@@ -107,6 +108,17 @@ export function createAllowanceRequest(
 ): Promise<AllowanceRequest> {
   return apiFetch<AllowanceRequest>(`/shipments/${shipmentId}/allowance-requests`, {
     method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateAllowanceRequest(
+  shipmentId: string,
+  id: string,
+  input: UpdateAllowanceRequestInput,
+): Promise<AllowanceRequest> {
+  return apiFetch<AllowanceRequest>(`/shipments/${shipmentId}/allowance-requests/${id}`, {
+    method: 'PATCH',
     body: JSON.stringify(input),
   });
 }

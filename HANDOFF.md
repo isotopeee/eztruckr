@@ -3,7 +3,7 @@
 Trucking operations system. Turborepo monorepo, Philippine haulage domain (₱, Asia/Manila).
 
 **LIVE** at `https://eztruckr.optimuslogisticscorp.com`, phase 9 shipped. `pnpm run check` green
-(118 types + 273 api + 61 db), no schema drift. **No default logins** — every install starts empty
+(140 types + 314 api + 63 db), no schema drift. **No default logins** — every install starts empty
 and is set up at `/setup`.
 
 ```
@@ -140,6 +140,17 @@ exists. `allowance` gained no column; the join is `allowance_request.allowanceId
   that helper collapses a blank to null and would have admitted an empty one. The approval's own
   `remarks` stays optional and annotates the PAYMENT; a release inherits the purpose when it is
   left blank.
+- **A PENDING ask can be corrected; a decided one never can.** `update` is `.partial()` and
+  re-runs the create's guards for whichever fields moved — an account can be approved and a crew
+  member swapped between raising and correcting. Editing a decided request would rewrite what
+  accounting answered: an approved one has a release beside it that would then disagree, and a
+  declined one would leave its reason attached to a figure nobody refused.
+- **`editedAfterRaising` is derived from `updatedBy`, not from the clocks.** Approval carries no
+  amount of its own, so an approver who read the queue before an edit has nothing to check
+  against; the flag is what tells them. `updatedAt` vs `requestedAt` was the obvious derivation
+  and is a guess — one is Prisma's clock, the other Postgres's, and they disagree by milliseconds
+  on an untouched row. The audit extension forces `updatedBy` to null on create, which makes it
+  exact. PENDING-only, since deciding is an update too.
 - **No CANCELLED code.** Withdrawing a pending ask is a soft delete; `deletedBy`/`deletedAt`
   already answer the only question a fourth status would.
 - **Approval is terminal, with no reversal.** There is nothing to reverse — the money moved, and

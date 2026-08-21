@@ -4,6 +4,7 @@ import {
   approveAllowanceRequestSchema,
   createAllowanceRequestSchema,
   declineAllowanceRequestSchema,
+  updateAllowanceRequestSchema,
 } from './allowance-request';
 
 const id = '01931f4c-0000-7000-8000-000000000001';
@@ -117,5 +118,47 @@ describe('an ask names an account, a recipient, a positive amount and a purpose'
       createAllowanceRequestSchema.safeParse({ staffId: id, amount: '1.00', purpose: 'Fuel' })
         .success,
     ).toBe(false);
+  });
+});
+
+describe('editing an ask is partial, but never a way to empty it', () => {
+  it('accepts a single field on its own', () => {
+    const parsed = updateAllowanceRequestSchema.parse({ amount: '6000.00' });
+
+    expect(parsed.amount).toBe('6000.00');
+    // Absent, not null — an omitted field is untouched, and the service only
+    // writes the keys that are actually present.
+    expect(parsed.purpose).toBeUndefined();
+    expect(parsed.liquidationId).toBeUndefined();
+  });
+
+  it('accepts an empty body, which changes nothing', () => {
+    expect(updateAllowanceRequestSchema.safeParse({}).success).toBe(true);
+  });
+
+  /**
+   * THE TRAP `.partial()` SETS. It makes a field omittable, not blankable — so
+   * `purpose` keeps its `requiredText` refusal the moment it IS sent. Without
+   * this an edit would be a back door to the empty ask the create refuses.
+   */
+  it.each(['', '   '])('still refuses a purpose sent as %p', (purpose) => {
+    expect(updateAllowanceRequestSchema.safeParse({ purpose }).success).toBe(false);
+  });
+
+  it('still refuses an amount that is not a release', () => {
+    expect(updateAllowanceRequestSchema.safeParse({ amount: '0' }).success).toBe(false);
+    expect(updateAllowanceRequestSchema.safeParse({ amount: '-1.00' }).success).toBe(false);
+  });
+
+  /** Status and the decision columns are the server's; a body cannot reach them. */
+  it('strips anything that is not one of the four editable fields', () => {
+    const parsed = updateAllowanceRequestSchema.parse({
+      amount: '1.00',
+      status: 2,
+      decidedBy: 'someone',
+      allowanceId: 'something',
+    });
+
+    expect(parsed).toEqual({ amount: '1.00' });
   });
 });

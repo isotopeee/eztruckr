@@ -15,7 +15,7 @@ import {
   type Liquidation,
   type Shipment,
 } from '@eztruckr/types';
-import { Check, Loader2, X } from 'lucide-react';
+import { Check, Loader2, Pencil, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { ConfirmDeleteButton } from '@/components/confirm-delete-button';
 import { Badge } from '@/components/ui/badge';
@@ -48,6 +48,7 @@ import {
   liquidationKeys,
   listAllowanceRequests,
   listShipmentLiquidations,
+  updateAllowanceRequest,
   withdrawAllowanceRequest,
 } from '@/lib/liquidation-api';
 import { shipmentKeys } from '@/lib/shipment-api';
@@ -149,11 +150,13 @@ export function AllowanceRequestsCard({ shipment }: { shipment: Shipment }) {
               <RequestRow
                 key={request.id}
                 request={request}
+                shipment={shipment}
+                accounts={accounts.data ?? []}
                 canDecide={canDecide}
-                canWithdraw={canRequest}
+                canEdit={canRequest}
                 withdrawing={withdraw.isPending}
                 onWithdraw={() => withdraw.mutate(request.id)}
-                onDecided={invalidate}
+                onChanged={invalidate}
               />
             ))}
           </ul>
@@ -173,18 +176,23 @@ export function AllowanceRequestsCard({ shipment }: { shipment: Shipment }) {
 
 function RequestRow({
   request,
+  shipment,
+  accounts,
   canDecide,
-  canWithdraw,
+  canEdit,
   withdrawing,
   onWithdraw,
-  onDecided,
+  onChanged,
 }: {
   request: AllowanceRequest;
+  shipment: Shipment;
+  accounts: Liquidation[];
   canDecide: boolean;
-  canWithdraw: boolean;
+  /** Raising, correcting and withdrawing are one permission — see the API. */
+  canEdit: boolean;
   withdrawing: boolean;
   onWithdraw: () => void;
-  onDecided: () => void;
+  onChanged: () => void;
 }) {
   const pending = request.status === AllowanceRequestStatus.PENDING;
 
@@ -206,6 +214,16 @@ function RequestRow({
                 : 'the unassigned account'}
             </span>
             {request.requestedByName ? <span>asked by {request.requestedByName}</span> : null}
+            {/* Said out loud, because approval carries no amount of its own to
+                check against: accounting reads a figure, walks to the safe, and
+                clicks. If dispatch revised it in between, this is the only
+                thing on the row that says so. */}
+            {request.editedAfterRaising ? (
+              <span className="inline-flex items-center gap-1 text-amber-600">
+                <Pencil className="h-3 w-3" />
+                Edited since it was raised
+              </span>
+            ) : null}
             {request.decidedByName ? (
               <span>
                 {request.status === AllowanceRequestStatus.APPROVED ? 'released' : 'declined'} by{' '}
@@ -225,7 +243,15 @@ function RequestRow({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <span className="tabular-nums">{formatMoney(request.amount)}</span>
-          {pending && canWithdraw ? (
+          {pending && canEdit ? (
+            <EditDialog
+              request={request}
+              shipment={shipment}
+              accounts={accounts}
+              onEdited={onChanged}
+            />
+          ) : null}
+          {pending && canEdit ? (
             <ConfirmDeleteButton
               label="Withdraw request"
               title="Withdraw this request?"
@@ -242,11 +268,198 @@ function RequestRow({
 
       {pending && canDecide ? (
         <div className="flex flex-wrap gap-2">
-          <ApproveDialog request={request} onDecided={onDecided} />
-          <DeclineDialog request={request} onDecided={onDecided} />
+          <ApproveDialog request={request} onDecided={onChanged} />
+          <DeclineDialog request={request} onDecided={onChanged} />
         </div>
       ) : null}
     </li>
+  );
+}
+
+/**
+ * Correcting an ask nobody has answered yet.
+ *
+ * THE SAME FOUR FIELDS THE REQUEST FORM ASKS FOR, seeded from the row. Not a
+ * subset: the commonest correction is the one that changes which account it
+ * lands on, and a dialog that only let you retype the amount would send people
+ * back to withdraw-and-re-raise for the case they most need it.
+ *
+ * SENDS THE WHOLE SET rather than a diff. The endpoint is `.partial()`, so a
+ * diff would work — but the form already holds every current value, and
+ * computing which of four changed is an opportunity to get it wrong for no gain.
+ *
+ * ONLY WHILE PENDING. The row hides this once a decision exists, and the API
+ * refuses it there regardless: editing a decided request would rewrite what
+ * accounting answered.
+ */
+function EditDialog({
+  request,
+  shipment,
+  accounts,
+  onEdited,
+}: {
+  request: AllowanceRequest;
+  shipment: Shipment;
+  accounts: Liquidation[];
+  onEdited: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const crew = useTripCashHolders(shipment);
+
+  const [draft, setDraft] = useState({
+    liquidationId: request.liquidationId,
+    staffId: request.staffId,
+    amount: request.amount,
+    purpose: request.purpose,
+  });
+
+  // The account it is ALREADY on stays offered even if it has since been
+  // approved, so the dropdown never silently swaps the answer out from under
+  // somebody who only wanted to fix a typo. The API refuses the save with a
+  // sentence, which is a better place to learn it than a field that changed
+  // itself.
+  const selectable = accounts.filter(
+    (account) =>
+      account.status !== LiquidationStatus.APPROVED || account.id === request.liquidationId,
+  );
+
+  const save = useMutation({
+    mutationFn: () =>
+      updateAllowanceRequest(shipment.id, request.id, {
+        liquidationId: draft.liquidationId,
+        staffId: draft.staffId,
+        amount: draft.amount,
+        purpose: draft.purpose,
+      }),
+    onSuccess: () => {
+      setOpen(false);
+      onEdited();
+    },
+    onError: (error: unknown) =>
+      toast.error('Could not save that change', {
+        description: error instanceof ApiError ? error.displayMessage : String(error),
+      }),
+  });
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label="Edit request"
+        onClick={() => setOpen(true)}
+      >
+        <Pencil className="h-4 w-4" />
+      </Button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit this request</DialogTitle>
+            <DialogDescription>
+              Nobody has answered it yet, so it can still be corrected. The row will show that it
+              was changed, because accounting may already have read the original.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor={`edit-account-${request.id}`} className="text-xs">
+                Booked against
+              </Label>
+              <Select
+                value={draft.liquidationId}
+                onValueChange={(value) =>
+                  setDraft((current) => ({ ...current, liquidationId: value }))
+                }
+              >
+                <SelectTrigger id={`edit-account-${request.id}`}>
+                  <SelectValue placeholder="Account" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectable.map((account) => (
+                    <SelectItem key={account.id} value={account.id}>
+                      {account.custodianName ?? 'Unassigned account'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label htmlFor={`edit-crew-${request.id}`} className="text-xs">
+                  Cash goes to
+                </Label>
+                <Select
+                  value={draft.staffId}
+                  onValueChange={(value) => setDraft((current) => ({ ...current, staffId: value }))}
+                >
+                  <SelectTrigger id={`edit-crew-${request.id}`}>
+                    <SelectValue placeholder="Crew member" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {crew.map((member) => (
+                      <SelectItem key={member.id} value={member.id}>
+                        {member.name}
+                        {member.note ? ` · ${member.note}` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor={`edit-amount-${request.id}`} className="text-xs">
+                  Amount
+                </Label>
+                <Input
+                  id={`edit-amount-${request.id}`}
+                  inputMode="decimal"
+                  required
+                  value={draft.amount}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, amount: event.target.value }))
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor={`edit-purpose-${request.id}`} className="text-xs">
+                What it is for
+              </Label>
+              <Input
+                id={`edit-purpose-${request.id}`}
+                required
+                value={draft.purpose}
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, purpose: event.target.value }))
+                }
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                save.isPending ||
+                draft.purpose.trim().length === 0 ||
+                draft.amount.trim().length === 0
+              }
+              onClick={() => save.mutate()}
+            >
+              {save.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

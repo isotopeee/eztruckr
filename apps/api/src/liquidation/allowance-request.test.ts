@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import {
   createPrismaClient,
   testUuid,
@@ -681,6 +681,173 @@ describe('an undecided ask keeps its trip and its account reachable', () => {
     );
 
     expect(closed.status).toBe(ShipmentStatus.CLOSED);
+  });
+});
+
+describe('editing an ask nobody has answered', () => {
+  it('corrects every field, and the approval then releases the corrected figure', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await trip('edit');
+    const request = await ask(shipmentId, liquidationId, '10000.00');
+
+    const edited = await withActor({ userId: adminId }, () =>
+      requests.update(shipmentId, request.id, {
+        staffId: officeId,
+        amount: '6000.00',
+        purpose: 'Reduced after checking the lane',
+      }),
+    );
+
+    expect(edited.amount).toBe('6000');
+    expect(edited.staffId).toBe(officeId);
+    expect(edited.purpose).toBe('Reduced after checking the lane');
+    expect(edited.status).toBe(AllowanceRequestStatus.PENDING);
+
+    // THE POINT OF THE FEATURE: the release follows the correction, not the
+    // original ask. Approval carries no amount of its own, so if the edit had
+    // not landed on the row the old figure would have been paid.
+    await withActor({ userId: adminId }, () => requests.approve(request.id, cash, accountant));
+
+    const summary = await allowances.summary(shipmentId, null);
+    expect(summary.allowances[0]?.amount).toBe('6000');
+    expect(summary.allowances[0]?.staffId).toBe(officeId);
+    expect(summary.allowances[0]?.remarks).toBe('Reduced after checking the lane');
+  });
+
+  it('leaves omitted fields alone', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await trip('edit-partial');
+    const request = await ask(shipmentId, liquidationId, '1000.00');
+
+    const edited = await withActor({ userId: adminId }, () =>
+      requests.update(shipmentId, request.id, { amount: '1200.00' }),
+    );
+
+    expect(edited.amount).toBe('1200');
+    expect(edited.staffId).toBe(request.staffId);
+    expect(edited.purpose).toBe(request.purpose);
+    expect(edited.liquidationId).toBe(request.liquidationId);
+  });
+
+  /**
+   * The flag exists because approval carries no amount to check against: the
+   * approver read a figure, and this is the only thing that says it moved.
+   * Derived from `updatedBy`, which the audit extension forces to null on
+   * create — a freshly raised ask must therefore report false, and would not
+   * have under a comparison of Prisma's clock against Postgres's.
+   */
+  it('reports itself edited only once it actually has been', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await trip('edit-flag');
+    const request = await ask(shipmentId, liquidationId, '1000.00');
+
+    expect(request.editedAfterRaising).toBe(false);
+    expect((await requests.get(request.id)).editedAfterRaising).toBe(false);
+
+    await withActor({ userId: adminId }, () =>
+      requests.update(shipmentId, request.id, { amount: '1100.00' }),
+    );
+
+    expect((await requests.get(request.id)).editedAfterRaising).toBe(true);
+
+    // Deciding is an update too. Reporting every approved request as "edited"
+    // would make the marker mean nothing, so it goes quiet once answered.
+    await withActor({ userId: adminId }, () => requests.approve(request.id, cash, accountant));
+    expect((await requests.get(request.id)).editedAfterRaising).toBe(false);
+  });
+
+  it('refuses to edit anything already decided', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await trip('edit-decided');
+    const approved = await ask(shipmentId, liquidationId, '100.00');
+    const declined = await ask(shipmentId, liquidationId, '200.00');
+
+    await withActor({ userId: adminId }, () => requests.approve(approved.id, cash, accountant));
+    await withActor({ userId: adminId }, () =>
+      requests.decline(declined.id, { reason: 'No' }, accountant),
+    );
+
+    for (const id of [approved.id, declined.id]) {
+      await expect(
+        withActor({ userId: adminId }, () => requests.update(shipmentId, id, { amount: '5.00' })),
+      ).rejects.toBeInstanceOf(ConflictException);
+    }
+  });
+
+  /**
+   * RE-VALIDATED, NOT JUST REWRITTEN. The answers can have changed since the ask
+   * was raised, so an edit faces the same questions the create did — otherwise
+   * it is a way to reach a state the create would have refused.
+   */
+  it('refuses to move an ask onto an account belonging to another trip', async () => {
+    if (!available) return;
+
+    const mine = await trip('edit-wrong-a');
+    const theirs = await trip('edit-wrong-b');
+    const request = await ask(mine.shipmentId, mine.liquidationId, '1000.00');
+
+    await expect(
+      withActor({ userId: adminId }, () =>
+        requests.update(mine.shipmentId, request.id, { liquidationId: theirs.liquidationId }),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('refuses to point an ask at somebody the trip’s money could not reach', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await trip('edit-stranger');
+    const request = await ask(shipmentId, liquidationId, '1000.00');
+
+    const stranger = await withActor({ userId: adminId }, async () =>
+      prisma.staff.create({
+        data: {
+          id: id('edit-stranger-staff'),
+          firstName: 'Still',
+          lastName: 'NotOnThisTrip',
+          eligibleRoles: [CrewRole.HELPER],
+        },
+      }),
+    );
+
+    await expect(
+      withActor({ userId: adminId }, () =>
+        requests.update(shipmentId, request.id, { staffId: stranger.id }),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('refuses an edit once the account it sits on has been approved', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await trip('edit-frozen');
+    const request = await ask(shipmentId, liquidationId, '1000.00');
+
+    await freezeAccount(liquidationId);
+
+    await expect(
+      withActor({ userId: adminId }, () =>
+        requests.update(shipmentId, request.id, { amount: '900.00' }),
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('refuses an edit against another trip’s request', async () => {
+    if (!available) return;
+
+    const mine = await trip('edit-belongs-a');
+    const theirs = await trip('edit-belongs-b');
+    const request = await ask(theirs.shipmentId, theirs.liquidationId, '1000.00');
+
+    await expect(
+      withActor({ userId: adminId }, () =>
+        requests.update(mine.shipmentId, request.id, { amount: '5.00' }),
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });
 

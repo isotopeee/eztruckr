@@ -16,6 +16,7 @@ import {
   setLiquidationReferenceSchema,
   submitLiquidationSchema,
   sweepOrphanReceiptsQuerySchema,
+  updateAllowanceRequestSchema,
   updateAllowanceSchema,
   updateLiquidationLineSchema,
 } from '@eztruckr/types';
@@ -34,6 +35,7 @@ export class UpdateAllowanceDto extends createZodDto(updateAllowanceSchema) {}
 
 export class CreateAllowanceRequestDto extends createZodDto(createAllowanceRequestSchema) {}
 export class ApproveAllowanceRequestDto extends createZodDto(approveAllowanceRequestSchema) {}
+export class UpdateAllowanceRequestDto extends createZodDto(updateAllowanceRequestSchema) {}
 export class DeclineAllowanceRequestDto extends createZodDto(declineAllowanceRequestSchema) {}
 export class AllowanceRequestListQueryDto extends createZodDto(allowanceRequestListQuerySchema) {}
 

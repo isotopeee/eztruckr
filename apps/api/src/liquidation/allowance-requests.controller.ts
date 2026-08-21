@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import type { AllowanceRequest } from '@eztruckr/types';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
@@ -13,6 +13,7 @@ import {
   ApproveAllowanceRequestDto,
   CreateAllowanceRequestDto,
   DeclineAllowanceRequestDto,
+  UpdateAllowanceRequestDto,
 } from './liquidation.dto';
 import { ShipmentAccessService } from './shipment-access.service';
 
@@ -21,7 +22,7 @@ import { ShipmentAccessService } from './shipment-access.service';
  *
  * BOTH SHAPES OF ROUTE, in one controller because there are five endpoints and
  * splitting them would put the ask and its answer in different files. Raising
- * and withdrawing hang off the SHIPMENT, because that is what the cash is for
+ * correcting and withdrawing hang off the SHIPMENT, because that is what the cash is for
  * and the trip is the screen you are looking at. Deciding is addressed by the
  * REQUEST'S OWN ID, because accounting works a queue across trips and the
  * shipment is incidental to the decision.
@@ -79,6 +80,26 @@ export class AllowanceRequestsController {
     @CurrentUser() user: RequestUser,
   ): Promise<AllowanceRequest> {
     return this.requests.create(shipmentId, dto, user);
+  }
+
+  /**
+   * Correcting an ask nobody has answered yet.
+   *
+   * `CAN_REQUEST_ALLOWANCE`, the same list that raised it and the same list
+   * that may withdraw it — deliberately not narrowed to the individual who
+   * typed it. Dispatch managers cover for each other, and a correction that has
+   * to wait for one named person to come back from the yard is a correction
+   * that gets made by withdrawing and re-raising instead. `updatedBy` records
+   * who actually made it.
+   */
+  @Patch('shipments/:shipmentId/allowance-requests/:id')
+  @Roles(...CAN_REQUEST_ALLOWANCE)
+  update(
+    @Param('shipmentId') shipmentId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateAllowanceRequestDto,
+  ): Promise<AllowanceRequest> {
+    return this.requests.update(shipmentId, id, dto);
   }
 
   /**

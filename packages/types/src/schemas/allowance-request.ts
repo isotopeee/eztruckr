@@ -74,6 +74,29 @@ export const allowanceRequestSchema = auditFieldsSchema.extend({
    * traceable.
    */
   allowanceId: z.string().nullable(),
+
+  /**
+   * The ask was changed after it was raised, and is still waiting.
+   *
+   * REPORTED, NEVER REFUSED — the same call as `referenceNumberIsDuplicated`,
+   * and here it closes a hole that editing would otherwise open. Accounting
+   * approves a figure they read off a screen; if dispatch may revise a pending
+   * request, the figure can move between the reading and the click, and
+   * approval carries no amount of its own to check against. Saying so on the
+   * row is what lets the approver notice.
+   *
+   * DERIVED FROM `updatedBy` rather than stored, so it cannot disagree with the
+   * row it describes — the same argument as `Shipment.commissionsStale`. Not
+   * from the timestamps: `updatedAt` is Prisma's clock and `requestedAt` is
+   * Postgres's, and on an untouched row they differ by milliseconds in
+   * whichever direction they fall. The audit extension forces `updatedBy` to
+   * null on create and stamps it on every update, which makes the question
+   * exact.
+   *
+   * Only meaningful while PENDING: deciding a request is an update too, so it
+   * is false for anything decided rather than quietly true for all of them.
+   */
+  editedAfterRaising: z.boolean().default(false),
 });
 
 export type AllowanceRequest = z.infer<typeof allowanceRequestSchema>;
@@ -108,6 +131,30 @@ export const createAllowanceRequestSchema = z.object({
 });
 
 export type CreateAllowanceRequestInput = z.infer<typeof createAllowanceRequestSchema>;
+
+/**
+ * Correcting an ask nobody has answered yet.
+ *
+ * PARTIAL, like `updateAllowanceSchema` beside it, so a caller may move the
+ * amount without restating the account. `purpose` keeps its `requiredText`
+ * refusal when it IS sent — partial makes a field omittable, not blankable, so
+ * there is no way to edit an ask down to having no reason in it.
+ *
+ * WHILE PENDING ONLY, which the service enforces. A decided request is the
+ * record of a decision: editing an approved one would rewrite what accounting
+ * agreed to and leave the release beside it saying something else, and editing
+ * a declined one would erase the ask the reason was written about. That is the
+ * same argument that makes `decline` terminal — "₱10,000, declined, too much"
+ * followed by "₱6,000, approved" is two facts worth keeping.
+ *
+ * What it fixes is narrow and entirely real: the wrong recipient, a digit too
+ * many, a purpose that reads badly. The only route before was to withdraw and
+ * raise it again — the same edit performed clumsily, and one that resets the
+ * request's age, which is the order accounting's queue is worked in.
+ */
+export const updateAllowanceRequestSchema = createAllowanceRequestSchema.partial();
+
+export type UpdateAllowanceRequestInput = z.infer<typeof updateAllowanceRequestSchema>;
 
 /**
  * Approving one: the details of the release accounting is about to record.

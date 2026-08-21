@@ -16,6 +16,7 @@ import {
   type ApproveAllowanceRequestInput,
   type CreateAllowanceRequestInput,
   type DeclineAllowanceRequestInput,
+  type UpdateAllowanceRequestInput,
 } from '@eztruckr/types';
 import type { RequestUser } from '../auth/request-user';
 import { auditFields, dateToIso } from '../master-data/serialize';
@@ -145,6 +146,52 @@ export class AllowanceRequestsService {
   }
 
   /**
+   * Correcting an ask nobody has answered yet.
+   *
+   * RE-VALIDATED, NOT JUST REWRITTEN. Every field this can move is one the
+   * create checked, and the answers can have changed since: an account can be
+   * approved and a crew member swapped between raising and correcting. Only the
+   * fields actually supplied are re-asked, so moving an amount does not pay for
+   * a lookup on an account nobody touched.
+   *
+   * WHAT IT DOES NOT DO IS HIDE ITSELF. The row's `updatedAt` moves, and
+   * `editedAfterRaising` reports that on every read while the request is still
+   * waiting — see the schema for why that matters when the person approving is
+   * not the person who typed it.
+   */
+  async update(
+    shipmentId: string,
+    id: string,
+    input: UpdateAllowanceRequestInput,
+  ): Promise<AllowanceRequest> {
+    const request = await this.assertBelongs(shipmentId, id);
+
+    this.assertPending(request, 'edited');
+    await this.assertShipmentOpen(shipmentId);
+
+    // The account it is moving TO, when it is moving — and the one it is
+    // already on otherwise, because an ask sitting on an account that has since
+    // been approved cannot be corrected into payability.
+    await this.assertAccountAccepts(shipmentId, input.liquidationId ?? request.liquidationId);
+
+    if (input.staffId !== undefined) {
+      await this.assertMayReceiveCash(shipmentId, input.staffId);
+    }
+
+    await this.prisma.client.allowanceRequest.update({
+      where: { id },
+      data: {
+        ...(input.liquidationId === undefined ? {} : { liquidationId: input.liquidationId }),
+        ...(input.staffId === undefined ? {} : { staffId: input.staffId }),
+        ...(input.amount === undefined ? {} : { amount: input.amount }),
+        ...(input.purpose === undefined ? {} : { purpose: input.purpose }),
+      },
+    });
+
+    return this.get(id);
+  }
+
+  /**
    * Approving: the cash actually moves, and this row records that it did.
    *
    * ONE TRANSACTION, and it has to be. The decision CHECK requires an approved
@@ -233,9 +280,11 @@ export class AllowanceRequestsService {
   /**
    * Refusing, with the reason that makes it actionable.
    *
-   * Terminal. Dispatch raises a new request rather than editing this one —
-   * "₱10,000, declined, too much" followed by "₱6,000, approved" is two facts
-   * worth keeping, and an editable request would have kept neither.
+   * Terminal, and it stays terminal now that a PENDING ask can be edited:
+   * `update` refuses a decided one. Dispatch raises a new request rather than
+   * rewriting this one — "₱10,000, declined, too much" followed by "₱6,000,
+   * approved" is two facts worth keeping, and an editable decision keeps
+   * neither.
    */
   async decline(
     id: string,
@@ -436,6 +485,17 @@ export function toAllowanceRequest(row: RequestRow): AllowanceRequest {
     decidedAt: dateToIso(row.decidedAt),
     decisionReason: row.decisionReason,
     allowanceId: row.allowanceId,
+    // Derived, never stored, so it cannot disagree with the row. Pending only:
+    // FROM `updatedBy`, NOT FROM THE CLOCKS. The audit extension forces this
+    // column to null on create and stamps it on every update, so "has this row
+    // been modified" is exact. Comparing `updatedAt` to `requestedAt` was the
+    // obvious alternative and is a guess: one is Prisma's clock and the other
+    // is Postgres's `CURRENT_TIMESTAMP`, so they disagree by milliseconds on a
+    // row nobody has touched, in whichever direction the two happen to fall.
+    //
+    // Still gated on PENDING: deciding is an update too, and reporting every
+    // approved request as "edited" would make the marker mean nothing.
+    editedAfterRaising: row.status === AllowanceRequestStatus.PENDING && row.updatedBy !== null,
     ...auditFields(row),
   };
 }
