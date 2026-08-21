@@ -3,7 +3,7 @@
 Trucking operations system. Turborepo monorepo, Philippine haulage domain (₱, Asia/Manila).
 
 **LIVE** at `https://eztruckr.optimuslogisticscorp.com`, phase 9 shipped. `pnpm run check` green
-(100 types + 237 api + 60 db), no schema drift. **No default logins** — every install starts empty
+(118 types + 273 api + 61 db), no schema drift. **No default logins** — every install starts empty
 and is set up at `/setup`.
 
 ```
@@ -48,9 +48,9 @@ Ports are deliberately non-standard: postgres **5433**, minio **9010/9011**, api
 - **Derived, not stored**: `recognisedCost`, `commissionsStale`, `totalAdvanced`, `grossProfit`,
   crew-pay net.
 
-**Counts (verified live):** 32 tables (29 business + 3 Better Auth), 27 `_created_by_required`,
-29 `_soft_delete_consistent`, 24 partial uniques, 9 payout triggers, 11 functions, 67
-column comments, 178 `uuid` columns, **7 migrations**. `code-constraints.test.ts` asserts
+**Counts (verified live):** 33 tables (30 business + 3 Better Auth), 28 `_created_by_required`,
+30 `_soft_delete_consistent`, 25 partial uniques, 9 payout triggers, 11 functions, 72
+column comments, 188 `uuid` columns, **8 migrations**. `code-constraints.test.ts` asserts
 the table count and reads every code CHECK back out of the catalog, so both a new table and a
 code appended without a migration fail there rather than at the first write.
 
@@ -88,6 +88,7 @@ driver slot refuses to dispatch against it.
 Shipment ──┬── Liquidation (one per CUSTODIAN) ──┬── LiquidationLine     what they spent
            │                                     ├── LiquidationHistory  submissions + returns
            │                                     ├── Allowance           releases booked to it
+           │                                     ├── AllowanceRequest    dispatch asking for one
            │                                     └── Settlement          what came back
            ├── BillableExpense      rebilled to the client → revenue
            ├── CompanyPaidExpense   the company paid directly → cost
@@ -113,6 +114,36 @@ Every action takes a **liquidation id**; only the lists and the create take a sh
   accounts; ADMINISTRATOR and ACCOUNTING act on any and hold none. The **unnamed** account admits
   whoever is in a slot and nobody else — an office cash holder holds nothing until somebody with
   `CAN_WRITE_SHIPMENT_MONEY` names them to it.
+
+**An `AllowanceRequest` is the ask; the `Allowance` is still the money.** Dispatch may not
+release cash — that control is `CAN_WRITE_SHIPMENT_MONEY` and it stays — so a dispatch manager
+raises a request and accounting approves it. Approval writes an **ordinary allowance**, on the
+same account, in the same `totalAdvanced`: nothing downstream of a release knows this table
+exists. `allowance` gained no column; the join is `allowance_request.allowanceId`, partial-unique.
+
+- **Approve as requested, or decline with a reason.** There is no amount on the approval payload.
+  Releasing less is a refusal of _this_ ask, not an approval of a different one, and "approved"
+  beside a figure nobody agreed to is what the record exists to prevent.
+- **Proof is REQUIRED for a transfer or an e-wallet payment**, optional for cash —
+  `expectsProofOfRelease`. Deliberately stricter than the direct-release path and deliberately
+  unlike `expectsReferenceNumber`: a reference is _typed_, so requiring one yields "N/A"; a
+  receipt is _uploaded_, so requiring one yields the document or a refusal. It applies here
+  because the person who asked and the person who paid are two people.
+- **The decision shape is a CHECK**, `allowance_request_decision_matches_status`: PENDING carries
+  no decision at all, APPROVED must name its release, DECLINED must say why. In the database
+  because an approved request pointing at no release is untraceable cash, and no amount of care in
+  a service reliably prevents it. `allowance-request.test.ts` proves it with raw SQL.
+- **`purpose` is NOT NULL — the only mandatory free text in the system.** Every other such column
+  is `remarks`: an optional note on something that already happened. This one IS the ask, and
+  accounting decides on it without running the trip. `requiredText`, not `optionalText`, because
+  that helper collapses a blank to null and would have admitted an empty one. The approval's own
+  `remarks` stays optional and annotates the PAYMENT; a release inherits the purpose when it is
+  left blank.
+- **No CANCELLED code.** Withdrawing a pending ask is a soft delete; `deletedBy`/`deletedAt`
+  already answer the only question a fourth status would.
+- **Approval is terminal, with no reversal.** There is nothing to reverse — the money moved, and
+  unwinding it is the `Allowance`'s own removal. A reversible approval would be a second, quieter
+  way to undo a cash release.
 
 **Merging any pair is the tempting mistake.** An allowance is a receivable, never a cost; a
 billable expense is revenue whose cost lands wherever the money left, so counting both
@@ -184,14 +215,14 @@ a field added to `shipmentFields` and forgotten lands in the editable set, which
 
 Declared once in `apps/api/src/auth/role-policy.ts`; `RolesGuard` **fails closed**.
 
-| Role             | Reads | Dispatches | Submits liquidations | Decides money |
-| ---------------- | ----- | ---------- | -------------------- | ------------- |
-| ADMINISTRATOR    | ✓     | ✓          | any                  | ✓             |
-| OPERATIONS       | ✓     | ✓          | **own**              | ✗             |
-| ACCOUNTING       | ✓     | ✗          | any                  | ✓             |
-| MANAGEMENT       | ✓     | ✗          | ✗                    | ✗             |
-| DISPATCH_MANAGER | ✓     | ✓          | **own**              | **✗**         |
-| CREW             | own   | ✗          | **own**              | ✗             |
+| Role             | Reads | Dispatches | Submits liquidations | Requests cash | Decides money |
+| ---------------- | ----- | ---------- | -------------------- | ------------- | ------------- |
+| ADMINISTRATOR    | ✓     | ✓          | any                  | ✓             | ✓             |
+| OPERATIONS       | ✓     | ✓          | **own**              | ✗             | ✗             |
+| ACCOUNTING       | ✓     | ✗          | any                  | **✗**         | ✓             |
+| MANAGEMENT       | ✓     | ✗          | ✗                    | ✗             | ✗             |
+| DISPATCH_MANAGER | ✓     | ✓          | **own**              | **✓**         | **✗**         |
+| CREW             | own   | ✗          | **own**              | ✗             | ✗             |
 
 "Submits liquidations" is `CAN_SUBMIT_LIQUIDATION`; "decides money" is
 `CAN_WRITE_SHIPMENT_MONEY`, which `CAN_DECIDE_LIQUIDATION` is defined as.
@@ -199,6 +230,12 @@ Declared once in `apps/api/src/auth/role-policy.ts`; `RolesGuard` **fails closed
 releasing would let them pay themselves and approving would sign off their own float.
 `role-policy.test.ts` asserts it for every role in `ROLES_CONFINED_TO_THEIR_OWN_FLOAT` — "the
 dispatcher obviously needs to approve things" is the change somebody will propose.
+
+**"Requests cash" is `CAN_REQUEST_ALLOWANCE` — the ask, not the payment**, and it is how the
+control above stopped costing what it used to. ACCOUNTING is absent by design: they release
+directly, and a request they raised and approved themselves is a second path through a control
+that exists to have one. The dispatcher is absent for the payee reason — they are routinely the
+float's recipient.
 
 **Master data is per resource.** OPERATIONS keeps routes and nothing else; `staff` is the
 administrator's alone, because `eligibleRoles` decides who may hold cash. **Reads stay wide**
@@ -435,6 +472,19 @@ inverse DDL in one transaction ending with
 first, so kill it, run `prisma migrate deploy`, and confirm with
 `prisma migrate diff … --exit-code`.
 
+**`incremental` and `deleteOutDir` were fundamentally incompatible on the api**, and it presented
+as `Cannot find module './auth/auth.module'` from `pnpm dev` — a runtime error, never a build one.
+`nest start --watch` wipes `dist` on every start; the build state sat at the package root and
+survived, so tsc was asked to emit into an empty directory while holding a record saying every
+file was already up to date. **It emitted nothing and exited 0.** Fixed by moving
+`tsBuildInfoFile` INTO `dist` (`apps/api/tsconfig.json`), so deleting the output deletes the
+record of having produced it. If a stale one is ever suspected, `find . -name '*.tsbuildinfo'`
+and delete — a build that emits zero files and succeeds is always this.
+
+**`.dockerignore` already excluded `**/*.tsbuildinfo` for the same reason**, in a comment
+describing the same silent no-emit. The image path was defended and the local one was not, which
+is the recurring shape here: **the guard sat where somebody had already been burned.**
+
 **Housekeeping — and it does not look like a disk problem.** The Docker VM has run out of disk
 **five** times, most recently with postgres crash-looping on
 `PANIC: could not write to file … No space left on device`. That presented as _"sign-in fails
@@ -598,6 +648,13 @@ own `issuedAt` finally offered on the form, and `BillableExpense` given the fiel
 `ConfirmDeleteButton` that renders its own trigger so a card cannot place the button without the
 question — each had wired a bin icon straight to its mutation while master data and users had
 confirmed all along.
+
+**11** — allowance requests: dispatch asks, accounting releases and attaches the proof. One new
+table, no column on `allowance`, and nothing downstream of a release changed. The design notes are
+under _The cash trail of a trip_; the two calls worth restating are **approve-as-requested** (a
+smaller release is a decline, not an approval) and **proof required for transfer and e-wallet**,
+which is the first rule in this codebase to demand an attachment — justified because the ask and
+the payment are made by different people.
 
 ---
 

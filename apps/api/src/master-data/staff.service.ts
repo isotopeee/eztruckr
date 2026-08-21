@@ -155,6 +155,17 @@ export class StaffService {
           count: () => client.allowance.count({ where: { staffId: id } }),
         },
         {
+          // Cash asked for on their behalf and not yet released. Its own probe
+          // rather than folded into the one above, for the same reason that one
+          // is separate from `liquidations held`: this list is enumerated by
+          // hand and a soft delete does not fire ON DELETE RESTRICT, so a
+          // relation with no probe is a person quietly removed from a row that
+          // still names them. A pending request is the sharper case — accounting
+          // would be approving a release to somebody the picker no longer offers.
+          entity: 'allowance requests',
+          count: () => client.allowanceRequest.count({ where: { staffId: id } }),
+        },
+        {
           entity: 'deductions',
           count: () => client.crewDeduction.count({ where: { staffId: id } }),
         },

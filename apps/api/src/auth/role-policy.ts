@@ -156,6 +156,35 @@ export const CAN_WRITE_SHIPMENTS = [
 export const CAN_WRITE_SHIPMENT_MONEY = [UserRole.ADMINISTRATOR, UserRole.ACCOUNTING] as const;
 
 /**
+ * Asking accounting to release a trip's cash.
+ *
+ * THE MIRROR IMAGE OF THE LIST ABOVE, and it exists because of it. Dispatch is
+ * kept out of `CAN_WRITE_SHIPMENT_MONEY` so that a dispatch manager cannot pay
+ * their own float — a real control, and the price of it was that the person who
+ * knows the truck leaves at five had no way to say so inside the system. This
+ * gives them the ask and nothing more: accounting still decides, still pays and
+ * still attaches the proof.
+ *
+ * THE DISPATCH MANAGER, NOT THE DISPATCHER, on the same reasoning that puts
+ * payees and the rate chain with the manager. A dispatcher is routinely the
+ * recipient of the float, and the person who receives cash should not also be
+ * the person who requests it — the supervisor sitting next to them can, which
+ * is one desk away rather than two floors.
+ *
+ * ACCOUNTING IS ABSENT, which is not an oversight. They release cash directly;
+ * a request they raised and then approved themselves would be a longer route to
+ * the same row, and would put a second, quieter path through a control that
+ * exists to have exactly one.
+ */
+export const CAN_REQUEST_ALLOWANCE = [UserRole.ADMINISTRATOR, UserRole.DISPATCH_MANAGER] as const;
+
+/**
+ * Deciding one: the same hands that release the cash, because that is what an
+ * approval does. Derived rather than repeated so the two cannot part company.
+ */
+export const CAN_DECIDE_ALLOWANCE_REQUEST = CAN_WRITE_SHIPMENT_MONEY;
+
+/**
  * Correcting the gross rate or the broker cut after the trip has left DRAFT.
  *
  * A SEPARATE LIST FROM BOTH ITS NEIGHBOURS, and it has to be. The rate chain

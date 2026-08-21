@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '@eztruckr/db';
 import {
+  AllowanceRequestStatus,
   isAllowedLiquidationTransition,
   isConfinedToTheirOwnFloat,
   isCostRecognised,
@@ -305,11 +306,22 @@ export class LiquidationService {
       throw new ConflictException(`${describe(current)} is approved and can no longer be removed.`);
     }
 
-    const releases = await this.prisma.client.allowance.count({ where: { liquidationId } });
+    const [releases, waiting] = await Promise.all([
+      this.prisma.client.allowance.count({ where: { liquidationId } }),
+      // PENDING ONLY, and the narrowness is the point. An undecided ask against
+      // an account that is about to disappear would sit in accounting's queue
+      // permanently un-approvable — the account it names would no longer be
+      // findable. A DECIDED one is closed and harmless, and counting those too
+      // would make an account that was ever declined impossible to remove,
+      // since a decided request cannot be withdrawn either.
+      this.prisma.client.allowanceRequest.count({
+        where: { liquidationId, status: AllowanceRequestStatus.PENDING },
+      }),
+    ]);
 
-    if (releases > 0 || current.lines.length > 0) {
+    if (releases > 0 || current.lines.length > 0 || waiting > 0) {
       throw new ConflictException(
-        `${describe(current)} has ${releases} release(s) and ${current.lines.length} claimed expense(s) against it. Move or remove those first.`,
+        `${describe(current)} has ${releases} release(s), ${current.lines.length} claimed expense(s) and ${waiting} allowance request(s) awaiting a decision against it. Move, decide or remove those first.`,
       );
     }
 

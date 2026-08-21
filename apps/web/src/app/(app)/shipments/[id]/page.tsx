@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { SHIPMENT_STATUS_LABELS, UserRole } from '@eztruckr/types';
 import { ArrowLeft } from 'lucide-react';
+import { AllowanceRequestsCard } from '@/components/shipments/allowance-requests-card';
 import { AllowancesCard } from '@/components/shipments/allowances-card';
 import { BookingDetailsDialog } from '@/components/shipments/booking-details-dialog';
 import { ChargesCard } from '@/components/shipments/charges-card';
@@ -98,6 +99,10 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
           {isCrew ? null : (
             <>
               <CrewAndLifecycleCard shipment={data} />
+              {/* Above the releases because that is the order it happens in:
+                  dispatch asks here, accounting approves, and the approval
+                  appears below as an ordinary release on the same account. */}
+              <AllowanceRequestsCard shipment={data} />
               <AllowancesCard shipment={data} />
               <SettlementCard shipment={data} />
               <GasRateOverrideCard shipment={data} />

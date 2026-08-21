@@ -7,6 +7,7 @@ import {
 import { Prisma, withDeleted } from '@eztruckr/db';
 import {
   allowedManualTransitions,
+  AllowanceRequestStatus,
   areBookingDetailsCorrectable,
   areChargesEditable,
   CrewRole,
@@ -836,6 +837,21 @@ export class ShipmentsService {
     if (shipment.commissionsComputedAt === null) {
       throw new ConflictException(
         `Shipment ${shipment.shipmentNumber} has no computed commissions, so closing it would strand the crew's pay.`,
+      );
+    }
+
+    // BEFORE THE EARLY RETURN BELOW, because a trip can carry an undecided ask
+    // and no advances at all — which is exactly the case that would slip
+    // through. Closing on top of one strands it in accounting's queue forever:
+    // approving it afterwards is refused by the closed shipment, and nothing
+    // else clears it. Deciding is one click, and declining is a decision.
+    const undecided = await this.prisma.client.allowanceRequest.count({
+      where: { shipmentId: shipment.id, status: AllowanceRequestStatus.PENDING },
+    });
+
+    if (undecided > 0) {
+      throw new ConflictException(
+        `Shipment ${shipment.shipmentNumber} has ${undecided} allowance request(s) still awaiting accounting. Approve or decline them before closing the trip — a closed trip can no longer release cash, so the ask could never be answered.`,
       );
     }
 

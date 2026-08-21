@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AdjustmentDirection,
+  AllowanceRequestStatus,
   CommissionMethod,
   CrewRole,
   DisbursementMode,
@@ -76,6 +77,10 @@ describe('code sets are permanent', () => {
 
   it('pins every LiquidationHistoryAction code', () => {
     expect(LiquidationHistoryAction).toEqual({ SUBMITTED: 1, RETURNED: 2 });
+  });
+
+  it('pins every AllowanceRequestStatus code', () => {
+    expect(AllowanceRequestStatus).toEqual({ PENDING: 1, APPROVED: 2, DECLINED: 3 });
   });
 
   it('pins every DisbursementMode code', () => {
@@ -166,6 +171,7 @@ describe('code sets are permanent', () => {
       ShipmentStatus,
       LiquidationStatus,
       LiquidationHistoryAction,
+      AllowanceRequestStatus,
       DisbursementMode,
       SettlementStatus,
       CrewRole,

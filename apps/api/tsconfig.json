@@ -3,7 +3,25 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "baseUrl": "."
+    "baseUrl": ".",
+
+    // INSIDE `dist`, and this is load-bearing rather than tidiness.
+    //
+    // The base config sets `incremental: true`; `nest-cli.json` sets
+    // `deleteOutDir: true`. Left at its default the build state sits at the
+    // package root and SURVIVES the wipe, so tsc is asked to emit into an empty
+    // `dist` while holding a record saying every file is already up to date —
+    // and it emits nothing, exits 0, and leaves an app that cannot resolve its
+    // own modules. `nest start --watch` does exactly that wipe on every start,
+    // which is why it surfaces as "Cannot find module './auth/auth.module'"
+    // rather than as a build failure.
+    //
+    // Putting the file here makes the two settings consistent: deleting the
+    // output deletes the record of having produced it, so a wiped `dist` always
+    // forces a full emit. Incremental builds still work between ordinary runs.
+    //
+    // Only this package needs it — it is the only one with `deleteOutDir`.
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]

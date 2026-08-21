@@ -183,6 +183,10 @@ model User {
   allowancesUpdated Allowance[] @relation("AllowanceUpdatedBy")
   allowancesDeleted Allowance[] @relation("AllowanceDeletedBy")
 
+  allowanceRequestsCreated AllowanceRequest[] @relation("AllowanceRequestCreatedBy")
+  allowanceRequestsUpdated AllowanceRequest[] @relation("AllowanceRequestUpdatedBy")
+  allowanceRequestsDeleted AllowanceRequest[] @relation("AllowanceRequestDeletedBy")
+
   liquidationsCreated Liquidation[] @relation("LiquidationCreatedBy")
   liquidationsUpdated Liquidation[] @relation("LiquidationUpdatedBy")
   liquidationsDeleted Liquidation[] @relation("LiquidationDeletedBy")
@@ -246,6 +250,8 @@ model User {
   // --- workflow actor back-relations -------------------------------------
   auditLogsActed       AuditLog[]           @relation("AuditLogActor")
   allowancesReleased   Allowance[]          @relation("AllowanceReleasedBy")
+  allowancesRequested  AllowanceRequest[]   @relation("AllowanceRequestRequestedBy")
+  allowancesDecided    AllowanceRequest[]   @relation("AllowanceRequestDecidedBy")
   liquidationsApproved Liquidation[]        @relation("LiquidationApprovedBy")
   liquidationHistory   LiquidationHistory[] @relation("LiquidationHistoryActor")
   settlementsRecorded  Settlement[]         @relation("SettlementRecordedBy")
@@ -497,15 +503,17 @@ model Staff {
   /// At most one live login, enforced by a partial unique index on user.
   logins User[] @relation("StaffLogin")
 
-  drivenShipments Shipment[]      @relation("ShipmentDriver")
-  helpedShipments Shipment[]      @relation("ShipmentHelper")
-  commissions     Commission[]
-  allowances      Allowance[]
+  drivenShipments   Shipment[]         @relation("ShipmentDriver")
+  helpedShipments   Shipment[]         @relation("ShipmentHelper")
+  commissions       Commission[]
+  allowances        Allowance[]
+  /// Cash asked for on this person's behalf, decided or still waiting.
+  allowanceRequests AllowanceRequest[]
   /// Trips whose cash this person is answerable for accounting for.
-  custodyOf       Liquidation[]   @relation("LiquidationCustodian")
-  deductions      CrewDeduction[]
-  adjustments     Adjustment[]
-  payoutLines     PayoutLine[]
+  custodyOf         Liquidation[]      @relation("LiquidationCustodian")
+  deductions        CrewDeduction[]
+  adjustments       Adjustment[]
+  payoutLines       PayoutLine[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -1013,6 +1021,7 @@ model Shipment {
   rateChainUpdatedAt DateTime? @db.Timestamptz(6)
 
   allowances          Allowance[]
+  allowanceRequests   AllowanceRequest[]
   liquidations        Liquidation[]
   settlements         Settlement[]
   billableExpenses    BillableExpense[]
@@ -1100,6 +1109,17 @@ model Allowance {
   receiptId String?  @db.Uuid
   receipt   Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
 
+  /// The request this release answered, when somebody asked for it.
+  ///
+  /// AN ARRAY BECAUSE THE UNIQUENESS IS PARTIAL — at most one LIVE request may
+  /// name a given release. Read it through `liveOne()`, the same way as every
+  /// other partial-unique relation in this schema; a second survivor means the
+  /// index is missing, not that a release answered two asks.
+  ///
+  /// Empty on a release accounting recorded directly, which stays the ordinary
+  /// case: this table describes the money, not how it came to be asked for.
+  requests AllowanceRequest[]
+
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
   createdBy     String?   @db.Uuid
@@ -1116,6 +1136,108 @@ model Allowance {
   @@index([releasedBy])
   @@index([deletedAt])
   @@map("allowance")
+}
+
+/// Dispatch asking accounting to release trip cash, and what accounting decided.
+///
+/// WHY THE ASK IS A ROW. A dispatch manager knows the truck leaves at five and
+/// the driver needs ₱10,000; accounting holds the money and is the only desk
+/// that may release it — see `CAN_WRITE_SHIPMENT_MONEY`, which keeps both
+/// dispatch roles out precisely because they hold floats themselves. Those are
+/// two people, and before this table the conversation between them lived in a
+/// chat thread. A release nobody could account for was then indistinguishable
+/// from a release nobody had asked for.
+///
+/// AN APPROVAL PRODUCES AN ORDINARY `Allowance`. There is no second kind of
+/// trip cash and nothing downstream needs to know this table exists:
+/// `totalAdvanced`, the variance and the settlement all read allowances exactly
+/// as they did. This row is the ASK and the DECISION; `allowanceId` is the
+/// join between them.
+///
+/// THE DECISION SHAPE IS A CHECK, not a service rule. PENDING carries no
+/// decision at all, APPROVED must name the release it produced, DECLINED must
+/// state why — `allowance_request_decision_matches_status`. Written into the
+/// database because an approved request pointing at no release would be a
+/// record of cash authorised and then untraceable, and that is not a state any
+/// amount of care in a service reliably prevents.
+model AllowanceRequest {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  shipmentId String   @db.Uuid
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  /// WHICH ACCOUNT the release would land on — whose variance it would move.
+  ///
+  /// Same composite foreign key as `Allowance.liquidationId`, and for the same
+  /// reason: `(liquidationId, shipmentId)` references `liquidation (id,
+  /// shipmentId)`, so an ask can never name an account on a different trip. The
+  /// redundant `shipmentId` is what makes that structural rather than
+  /// remembered.
+  liquidationId String      @db.Uuid
+  liquidation   Liquidation @relation(fields: [liquidationId, shipmentId], references: [id, shipmentId], onDelete: Restrict)
+
+  /// Who the cash is for. Independent of the account's custodian, exactly as on
+  /// a release: a helper can be sent ferry money the driver still answers for.
+  staffId String @db.Uuid
+  staff   Staff  @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  amount Decimal @db.Decimal(15, 4)
+
+  /// What the cash is for, in the requester's words.
+  ///
+  /// NOT NULL, and the only free-text column in this schema that is. Every
+  /// other one — `allowance.remarks`, `liquidation.remarks` — annotates a
+  /// record of something that already happened, and is fairly left blank. This
+  /// one IS the ask: accounting is being asked to release money and this is the
+  /// sentence they decide on. An optional version would be left empty exactly
+  /// when it matters most, on the unplanned top-up phoned in from the road.
+  purpose String
+
+  /// Code set: AllowanceRequestStatus (1 PENDING, 2 APPROVED, 3 DECLINED).
+  status Int @default(1) @db.SmallInt
+
+  /// The user who asked. Distinct from `createdBy` on the same argument the
+  /// allowance's `releasedBy` makes: the person who decides the truck needs
+  /// cash and the person who types the request in need not be the same one.
+  requestedBy     String   @db.Uuid
+  requestedByUser User     @relation("AllowanceRequestRequestedBy", fields: [requestedBy], references: [id], onDelete: Restrict)
+  requestedAt     DateTime @default(now()) @db.Timestamptz(6)
+
+  /// Null while PENDING; both stamped together the moment accounting answers.
+  decidedBy     String?   @db.Uuid
+  decidedByUser User?     @relation("AllowanceRequestDecidedBy", fields: [decidedBy], references: [id], onDelete: Restrict)
+  decidedAt     DateTime? @db.Timestamptz(6)
+
+  /// Required on a DECLINE and forbidden otherwise, by CHECK. A refusal with no
+  /// reason is dispatch being told to try again with no idea what to change.
+  decisionReason String?
+
+  /// The release an approval produced. Non-null exactly when APPROVED.
+  ///
+  /// `SetNull` would be wrong here and is not used: the CHECK requires this
+  /// column on an approved row, so a nulled-out link would leave a row the
+  /// database itself refuses. Releases are soft-deleted anyway, which keeps the
+  /// link readable while recording that the cash came back off the account.
+  allowanceId String?    @db.Uuid
+  allowance   Allowance? @relation(fields: [allowanceId], references: [id], onDelete: Restrict)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?   @db.Uuid
+  createdByUser User?     @relation("AllowanceRequestCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?   @db.Uuid
+  updatedByUser User?     @relation("AllowanceRequestUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?   @db.Uuid
+  deletedByUser User?     @relation("AllowanceRequestDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([shipmentId])
+  @@index([liquidationId])
+  @@index([staffId])
+  @@index([requestedBy])
+  /// The cross-trip queue reads this: every request at one status, newest last.
+  @@index([status])
+  @@index([deletedAt])
+  @@map("allowance_request")
 }
 
 /// The crew accounting for what they spent the trip's cash on.
@@ -1194,10 +1316,11 @@ model Liquidation {
   /// genuinely carry the same reference.
   referenceNumber String?
 
-  lines       LiquidationLine[]
-  history     LiquidationHistory[]
-  allowances  Allowance[]
-  settlements Settlement[]
+  lines             LiquidationLine[]
+  history           LiquidationHistory[]
+  allowances        Allowance[]
+  allowanceRequests AllowanceRequest[]
+  settlements       Settlement[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)

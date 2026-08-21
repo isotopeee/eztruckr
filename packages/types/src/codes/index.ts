@@ -4,6 +4,7 @@ export type { CodeMap, CodeSetMeta } from './code-set';
 export * from './shipment-status';
 export * from './liquidation-status';
 export * from './liquidation-history-action';
+export * from './allowance-request-status';
 export * from './disbursement-mode';
 export * from './settlement-status';
 export * from './staff-role';

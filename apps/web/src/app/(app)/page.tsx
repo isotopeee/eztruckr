@@ -3,18 +3,24 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
+  AllowanceRequestStatus,
   SETTLEMENT_STATUS_LABELS,
   USER_ROLE_LABELS,
   UserRole,
   type Page as ApiPage,
 } from '@eztruckr/types';
-import { AlertTriangle, Undo2 } from 'lucide-react';
+import { AlertTriangle, HandCoins, Undo2 } from 'lucide-react';
 import { HealthStatusCard } from '@/components/health-status-card';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { apiFetch } from '@/lib/api-client';
 import { formatMoney } from '@/lib/format';
-import { getOutstandingAllowances, liquidationKeys, listLiquidations } from '@/lib/liquidation-api';
+import {
+  getOutstandingAllowances,
+  liquidationKeys,
+  listAllowanceRequestQueue,
+  listLiquidations,
+} from '@/lib/liquidation-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 
 /** The counts an office user can actually see, keyed to a screen they can open. */
@@ -57,6 +63,9 @@ export default function DashboardPage() {
         </Card>
       ) : (
         <>
+          {/* First, because it is the only card here that somebody is waiting
+              on: a truck does not leave until the cash does. */}
+          <PendingAllowanceRequestsCard role={user?.role} />
           <OutstandingAllowancesCard />
           <ReturnedForCorrectionCard />
 
@@ -70,6 +79,85 @@ export default function DashboardPage() {
 
       <HealthStatusCard />
     </div>
+  );
+}
+
+/**
+ * Cash dispatch has asked for and accounting has not answered.
+ *
+ * ONE LIST READ FROM TWO SIDES, which is why it is one card and not two.
+ * Accounting sees a queue of decisions to make; a dispatch manager sees what
+ * they are waiting on. Splitting it would mean two endpoints returning the same
+ * rows and two definitions of "pending" free to drift apart.
+ *
+ * MANAGEMENT AND THE DISPATCHER ARE NOT SHOWN IT, though the API would serve
+ * them: neither can act on a request, and a work queue nobody can work is a
+ * notification, not a dashboard. Both still see every one of these on the trip
+ * itself.
+ *
+ * DISAPPEARS WHEN EMPTY, like the two cards below it. An always-present card
+ * reading "nothing pending" trains people to stop looking at that part of the
+ * screen.
+ */
+function PendingAllowanceRequestsCard({ role }: { role: UserRole | undefined }) {
+  const decides = role === UserRole.ADMINISTRATOR || role === UserRole.ACCOUNTING;
+  const asks = role === UserRole.ADMINISTRATOR || role === UserRole.DISPATCH_MANAGER;
+
+  const requests = useQuery({
+    queryKey: liquidationKeys.allowanceRequestQueue(AllowanceRequestStatus.PENDING),
+    queryFn: () => listAllowanceRequestQueue({ status: AllowanceRequestStatus.PENDING }),
+    enabled: decides || asks,
+  });
+
+  const rows = requests.data ?? [];
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <Card className={decides ? 'border-amber-500/40' : undefined}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <HandCoins
+            className={decides ? 'h-4 w-4 text-amber-600' : 'text-muted-foreground h-4 w-4'}
+          />
+          {decides ? 'Allowance requests to decide' : 'Allowance requests awaiting accounting'}
+        </CardTitle>
+        <CardDescription>
+          {rows.length} request{rows.length === 1 ? '' : 's'} raised by dispatch and not yet
+          {decides ? ' answered — approving one releases the cash.' : ' answered.'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="divide-y text-sm">
+          {rows.map((request) => (
+            <li key={request.id} className="flex items-start justify-between gap-3 py-2">
+              <div className="min-w-0">
+                {/* The decision itself is taken on the trip, where the account,
+                    the crew and every other release are visible. A queue that
+                    let you approve cash without looking at the trip is a queue
+                    that gets clicked through. */}
+                <Link
+                  href={`/shipments/${request.shipmentId}`}
+                  className="font-medium underline-offset-4 hover:underline"
+                >
+                  {request.shipmentNumber ?? 'Trip'}
+                </Link>
+                <p className="text-muted-foreground truncate text-xs">
+                  For {request.staffName ?? 'crew'}
+                  {request.requestedByName ? ` · asked by ${request.requestedByName}` : ''}
+                </p>
+                {/* Never conditional — a request always states its purpose,
+                    which is most of why this queue is worth reading at all. */}
+                <p className="text-muted-foreground truncate text-xs">{request.purpose}</p>
+              </div>
+              <span className="shrink-0 tabular-nums">{formatMoney(request.amount)}</span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
   );
 }
 

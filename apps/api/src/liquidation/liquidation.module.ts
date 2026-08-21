@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
+import { AllowanceRequestsController } from './allowance-requests.controller';
+import { AllowanceRequestsService } from './allowance-requests.service';
 import { AllowancesController } from './allowances.controller';
 import { AllowancesService } from './allowances.service';
 import { LiquidationController } from './liquidation.controller';
@@ -30,6 +32,7 @@ import { ShipmentAccessService } from './shipment-access.service';
   imports: [PrismaModule],
   controllers: [
     AllowancesController,
+    AllowanceRequestsController,
     LiquidationController,
     LiquidationsController,
     SettlementController,
@@ -40,6 +43,7 @@ import { ShipmentAccessService } from './shipment-access.service';
     ReceiptsService,
     LiquidationService,
     AllowancesService,
+    AllowanceRequestsService,
     SettlementService,
   ],
   exports: [LiquidationService, SettlementService],

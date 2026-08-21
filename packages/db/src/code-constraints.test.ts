@@ -1,5 +1,6 @@
 import {
   AdjustmentDirection,
+  AllowanceRequestStatus,
   CommissionMethod,
   CrewRole,
   DisbursementMode,
@@ -54,6 +55,10 @@ const EXPECTED: ReadonlyArray<{ constraint: string; codes: readonly number[] }> 
   {
     constraint: 'liquidation_history_action_code_valid',
     codes: Object.values(LiquidationHistoryAction),
+  },
+  {
+    constraint: 'allowance_request_status_code_valid',
+    codes: Object.values(AllowanceRequestStatus),
   },
   { constraint: 'settlement_status_code_valid', codes: Object.values(SettlementStatus) },
   {
@@ -153,6 +158,7 @@ describe('database CHECK constraints match the TypeScript code sets', () => {
       'shipment.status',
       'liquidation.status',
       'liquidation_history.action',
+      'allowance_request.status',
       'settlement.status',
       'allowance.disbursementMode',
       'settlement.disbursementMode',
@@ -192,13 +198,13 @@ describe('createdBy stays mandatory in the database', () => {
          AND conname LIKE '%_created_by_required'
     `;
 
-    // 29 business tables, minus user and user_profile. The most recent is
-    // staff_invitation; before it, payee.
+    // 30 business tables, minus user and user_profile. The most recent is
+    // allowance_request; before it, staff_invitation.
     //
     // Bumping this number is the intended way to add a table — the assertion
     // exists so that forgetting the CHECK fails here rather than surfacing
     // years later as a row nobody can attribute.
-    expect(rows).toHaveLength(27);
+    expect(rows).toHaveLength(28);
     expect(rows.some((row) => row.conname.startsWith('user_'))).toBe(false);
   });
 });

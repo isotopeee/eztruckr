@@ -1,9 +1,14 @@
 import type {
   Allowance,
+  AllowanceRequest,
+  AllowanceRequestListQuery,
   AllowanceSummary,
+  ApproveAllowanceRequestInput,
   CarrySettlementToPayoutInput,
+  CreateAllowanceRequestInput,
   CreateLiquidationInput,
   CreateLiquidationLineInput,
+  DeclineAllowanceRequestInput,
   IssueAllowanceInput,
   Liquidation,
   LiquidationLine,
@@ -39,6 +44,11 @@ export const liquidationKeys = {
   /** Plural: every custodian's account on the trip. */
   liquidations: (shipmentId: string) => ['liquidation', shipmentId, 'liquidations'] as const,
   settlements: (shipmentId: string) => ['liquidation', shipmentId, 'settlements'] as const,
+  /** Dispatch's asks on one trip, decided and undecided alike. */
+  allowanceRequests: (shipmentId: string) =>
+    ['liquidation', shipmentId, 'allowance-requests'] as const,
+  /** The queue across every trip, keyed by the status it is showing. */
+  allowanceRequestQueue: (status: number) => ['liquidation', 'allowance-requests', status] as const,
   list: (filter: string) => ['liquidation', 'list', filter] as const,
   outstanding: ['liquidation', 'outstanding'] as const,
 };
@@ -62,6 +72,67 @@ export function issueAllowance(shipmentId: string, input: IssueAllowanceInput): 
 
 export function removeAllowance(shipmentId: string, id: string): Promise<void> {
   return apiFetch<void>(`/shipments/${shipmentId}/allowances/${id}`, { method: 'DELETE' });
+}
+
+// --- allowance requests ----------------------------------------------------
+
+/**
+ * Dispatch asking accounting to release cash, and accounting's answer.
+ *
+ * ADDRESSED FROM BOTH ENDS, exactly as the API is. Raising and withdrawing take
+ * a `shipmentId`, because the trip is the screen you are on; deciding takes the
+ * request's own id, because accounting works a queue and the trip is incidental
+ * to the decision.
+ *
+ * An approval returns the REQUEST, not the release it produced. The release is
+ * an ordinary allowance and shows up in the ordinary summary — the caller
+ * invalidates both, and neither has to know about the other.
+ */
+export function listAllowanceRequests(shipmentId: string): Promise<AllowanceRequest[]> {
+  return apiFetch<AllowanceRequest[]>(`/shipments/${shipmentId}/allowance-requests`);
+}
+
+/** The cross-trip queue. Defaults to PENDING server-side — what is waiting. */
+export function listAllowanceRequestQueue(
+  query: Partial<AllowanceRequestListQuery> = {},
+): Promise<AllowanceRequest[]> {
+  return apiFetch<AllowanceRequest[]>(
+    `/allowance-requests${queryString({ status: query.status })}`,
+  );
+}
+
+export function createAllowanceRequest(
+  shipmentId: string,
+  input: CreateAllowanceRequestInput,
+): Promise<AllowanceRequest> {
+  return apiFetch<AllowanceRequest>(`/shipments/${shipmentId}/allowance-requests`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function withdrawAllowanceRequest(shipmentId: string, id: string): Promise<void> {
+  return apiFetch<void>(`/shipments/${shipmentId}/allowance-requests/${id}`, { method: 'DELETE' });
+}
+
+export function approveAllowanceRequest(
+  id: string,
+  input: ApproveAllowanceRequestInput,
+): Promise<AllowanceRequest> {
+  return apiFetch<AllowanceRequest>(`/allowance-requests/${id}/approve`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function declineAllowanceRequest(
+  id: string,
+  input: DeclineAllowanceRequestInput,
+): Promise<AllowanceRequest> {
+  return apiFetch<AllowanceRequest>(`/allowance-requests/${id}/decline`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }
 
 // --- the accounts on a trip ------------------------------------------------

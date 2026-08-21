@@ -1,8 +1,12 @@
 import {
+  allowanceRequestListQuerySchema,
+  approveAllowanceRequestSchema,
   approveLiquidationSchema,
   createLiquidationSchema,
   carrySettlementToPayoutSchema,
+  createAllowanceRequestSchema,
   createLiquidationLineSchema,
+  declineAllowanceRequestSchema,
   issueAllowanceSchema,
   liquidationListQuerySchema,
   recordSettlementSchema,
@@ -27,6 +31,11 @@ import { createZodDto } from '../common/create-zod-dto';
 
 export class IssueAllowanceDto extends createZodDto(issueAllowanceSchema) {}
 export class UpdateAllowanceDto extends createZodDto(updateAllowanceSchema) {}
+
+export class CreateAllowanceRequestDto extends createZodDto(createAllowanceRequestSchema) {}
+export class ApproveAllowanceRequestDto extends createZodDto(approveAllowanceRequestSchema) {}
+export class DeclineAllowanceRequestDto extends createZodDto(declineAllowanceRequestSchema) {}
+export class AllowanceRequestListQueryDto extends createZodDto(allowanceRequestListQuerySchema) {}
 
 export class LiquidationListQueryDto extends createZodDto(liquidationListQuerySchema) {}
 export class CreateLiquidationLineDto extends createZodDto(createLiquidationLineSchema) {}

@@ -25,5 +25,6 @@ export * from './schemas/commission';
 export * from './schemas/adjustment';
 export * from './schemas/receipt';
 export * from './schemas/allowance';
+export * from './schemas/allowance-request';
 export * from './schemas/liquidation';
 export * from './schemas/settlement';

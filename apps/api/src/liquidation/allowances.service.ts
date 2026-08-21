@@ -33,7 +33,12 @@ import { assertMayHoldTripCash } from './trip-cash-participants';
  * along with its date, its mode and whoever handed it over.
  */
 
-const ALLOWANCE_INCLUDE = {
+/**
+ * Exported because approving an allowance request creates a release too, and
+ * has to hand back the same shape. Two spellings of this include is how one of
+ * them starts returning a null custodian name.
+ */
+export const ALLOWANCE_INCLUDE = {
   staff: { select: { firstName: true, lastName: true } },
   liquidation: { select: { custodian: { select: { firstName: true, lastName: true } } } },
   releasedByUser: { select: { name: true } },
@@ -156,13 +161,9 @@ export class AllowancesService {
     input: IssueAllowanceInput,
     user: RequestUser,
   ): Promise<Allowance> {
-    await this.assertShipmentOpen(shipmentId);
-    await this.assertAccountAccepts(shipmentId, input.liquidationId);
-    await this.assertMayReceiveCash(shipmentId, input.staffId);
-    await this.receipts.assertExists(input.receiptId);
-
     const releasedBy = input.releasedBy ?? user.id;
-    await this.assertUserExists(releasedBy);
+
+    await this.assertMayRelease(shipmentId, { ...input, releasedBy });
 
     const row = await this.prisma.client.allowance.create({
       data: {
@@ -255,6 +256,37 @@ export class AllowancesService {
   }
 
   // -------------------------------------------------------------------------
+
+  /**
+   * Everything that has to be true before cash leaves — asked once, here.
+   *
+   * PUBLIC BECAUSE THERE ARE TWO DOORS NOW. Accounting records a release
+   * directly, and accounting approves a dispatch manager's request, which
+   * produces a release of its own. The second door writes its own row inside
+   * its own transaction — it has a request to stamp APPROVED in the same
+   * statement — so what it borrows is the policy rather than the create. Five
+   * checks copied into a second service is how one of them ends up subtly more
+   * generous, which is the failure this codebase keeps having.
+   *
+   * `releasedBy` is resolved by the caller, not defaulted here: the acting user
+   * is who Nest hands to the controller, and this method deliberately knows
+   * nothing about sessions.
+   */
+  async assertMayRelease(
+    shipmentId: string,
+    release: {
+      liquidationId: string;
+      staffId: string;
+      receiptId: string | null;
+      releasedBy: string;
+    },
+  ): Promise<void> {
+    await this.assertShipmentOpen(shipmentId);
+    await this.assertAccountAccepts(shipmentId, release.liquidationId);
+    await this.assertMayReceiveCash(shipmentId, release.staffId);
+    await this.receipts.assertExists(release.receiptId);
+    await this.assertUserExists(release.releasedBy);
+  }
 
   /**
    * Whether the screen should offer the form at all.
