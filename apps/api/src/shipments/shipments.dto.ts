@@ -3,8 +3,10 @@ import {
   assignTruckSchema,
   createAdditionalChargeSchema,
   createBillableExpenseSchema,
+  clientPaymentListQuerySchema,
   createCompanyPaidExpenseSchema,
   createShipmentSchema,
+  returnClientPaymentSchema,
   recordClientPaymentSchema,
   setGasRateOverrideSchema,
   shipmentListQuerySchema,
@@ -46,6 +48,8 @@ export class UpdateCompanyPaidExpenseDto extends createZodDto(updateCompanyPaidE
 
 export class RecordClientPaymentDto extends createZodDto(recordClientPaymentSchema) {}
 export class UpdateClientPaymentDto extends createZodDto(updateClientPaymentSchema) {}
+export class ReturnClientPaymentDto extends createZodDto(returnClientPaymentSchema) {}
+export class ClientPaymentListQueryDto extends createZodDto(clientPaymentListQuerySchema) {}
 
 /** Horizon for the proactive rule-coverage check, in days. */
 export const ruleCoverageQuerySchema = z.object({

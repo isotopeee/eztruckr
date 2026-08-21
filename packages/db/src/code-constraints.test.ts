@@ -8,6 +8,7 @@ import {
   LiquidationStatus,
   PayeeType,
   PaymentMethod,
+  PaymentVerificationStatus,
   PayoutRunStatus,
   SettlementStatus,
   ShipmentStatus,
@@ -77,6 +78,10 @@ const EXPECTED: ReadonlyArray<{ constraint: string; codes: readonly number[] }> 
   {
     constraint: 'client_payment_method_code_valid',
     codes: Object.values(PaymentMethod),
+  },
+  {
+    constraint: 'client_payment_verification_status_code_valid',
+    codes: Object.values(PaymentVerificationStatus),
   },
   { constraint: 'adjustment_direction_code_valid', codes: Object.values(AdjustmentDirection) },
   { constraint: 'commission_role_is_a_crew_role', codes: Object.values(CrewRole) },
@@ -172,6 +177,7 @@ describe('database CHECK constraints match the TypeScript code sets', () => {
       'allowance.disbursementMode',
       'settlement.disbursementMode',
       'client_payment.paymentMethod',
+      'client_payment.verificationStatus',
       'adjustment.direction',
       'commission.role',
       'commission.appliedMethod',

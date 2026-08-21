@@ -3,7 +3,9 @@ import type {
   Adjustment,
   BillableExpense,
   ClientPayment,
+  ClientPaymentListQuery,
   ClientPaymentSummary,
+  UpdateClientPaymentInput,
   Commission,
   CommissionComputation,
   CreateAdjustmentInput,
@@ -44,6 +46,8 @@ export const shipmentKeys = {
   companyExpenses: (id: string) => ['shipments', id, 'company-expenses'] as const,
   /** What the client has paid, and what is still outstanding. */
   payments: (id: string) => ['shipments', id, 'payments'] as const,
+  /** Accounting's queue across every trip, keyed by the status it is showing. */
+  paymentQueue: (status: number) => ['shipments', 'payments', 'queue', status] as const,
   grossProfit: (id: string) => ['shipments', id, 'gross-profit'] as const,
   commissions: (id: string) => ['shipments', id, 'commissions'] as const,
   crewPay: (id: string) => ['shipments', id, 'crew-pay'] as const,
@@ -230,9 +234,59 @@ export function recordClientPayment(
   });
 }
 
+/**
+ * Correcting one.
+ *
+ * THE OTHER HALF OF "RETURN FOR CORRECTION", and without it that decision is a
+ * dead end: accounting hands a payment back saying the date is wrong and the
+ * person who recorded it has nowhere to fix it. The server decides what the
+ * edit does to the verification state — a recorder's edit puts the row back in
+ * accounting's queue and clears the note it was answering, an accountant's
+ * re-stamps it — so nothing here has to know that rule.
+ */
+export function updateClientPayment(
+  id: string,
+  paymentId: string,
+  input: UpdateClientPaymentInput,
+): Promise<ClientPayment> {
+  return apiFetch<ClientPayment>(`/shipments/${id}/payments/${paymentId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
 /** A refund or a bounced check: the removal of a receipt that did not happen. */
 export function removeClientPayment(id: string, paymentId: string): Promise<void> {
   return apiFetch<void>(`/shipments/${id}/payments/${paymentId}`, { method: 'DELETE' });
+}
+
+/**
+ * Accounting's side: what is waiting to be checked, and the two answers.
+ *
+ * ADDRESSED BY THE PAYMENT'S OWN ID rather than through the trip, because
+ * accounting works a queue across trips and the shipment is incidental to the
+ * decision — the same split the allowance request endpoints make.
+ */
+export function listClientPaymentQueue(query: ClientPaymentListQuery): Promise<ClientPayment[]> {
+  return apiFetch<ClientPayment[]>(
+    `/client-payments${queryString({ verificationStatus: query.verificationStatus })}`,
+  );
+}
+
+/** Confirming one matches the bank. No payload: see `verifyClientPaymentSchema`. */
+export function verifyClientPayment(paymentId: string): Promise<ClientPayment> {
+  return apiFetch<ClientPayment>(`/client-payments/${paymentId}/verify`, { method: 'POST' });
+}
+
+/** Handing one back for correction, with the reason that makes it actionable. */
+export function returnClientPaymentForCorrection(
+  paymentId: string,
+  reason: string,
+): Promise<ClientPayment> {
+  return apiFetch<ClientPayment>(`/client-payments/${paymentId}/return`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
 }
 
 export function getGrossProfit(id: string): Promise<GrossProfit> {

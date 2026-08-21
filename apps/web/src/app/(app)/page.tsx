@@ -4,12 +4,13 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
   AllowanceRequestStatus,
+  PaymentVerificationStatus,
   SETTLEMENT_STATUS_LABELS,
   USER_ROLE_LABELS,
   UserRole,
   type Page as ApiPage,
 } from '@eztruckr/types';
-import { AlertTriangle, HandCoins, Undo2 } from 'lucide-react';
+import { AlertTriangle, BadgeCheck, HandCoins, Undo2 } from 'lucide-react';
 import { HealthStatusCard } from '@/components/health-status-card';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -21,6 +22,7 @@ import {
   listAllowanceRequestQueue,
   listLiquidations,
 } from '@/lib/liquidation-api';
+import { listClientPaymentQueue, shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 
 /** The counts an office user can actually see, keyed to a screen they can open. */
@@ -66,6 +68,7 @@ export default function DashboardPage() {
           {/* First, because it is the only card here that somebody is waiting
               on: a truck does not leave until the cash does. */}
           <PendingAllowanceRequestsCard role={user?.role} />
+          <PaymentsToVerifyCard role={user?.role} />
           <OutstandingAllowancesCard />
           <ReturnedForCorrectionCard />
 
@@ -153,6 +156,91 @@ function PendingAllowanceRequestsCard({ role }: { role: UserRole | undefined }) 
                 <p className="text-muted-foreground truncate text-xs">{request.purpose}</p>
               </div>
               <span className="shrink-0 tabular-nums">{formatMoney(request.amount)}</span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Client payments dispatch has recorded and accounting has not checked.
+ *
+ * THE SAME LIST READ FROM TWO SIDES, and one card for the same reason as the
+ * allowance requests above: accounting sees work to do, the dispatch manager
+ * sees what they are waiting on. Two endpoints returning the same rows would be
+ * two definitions of "unverified" free to drift.
+ *
+ * WITHOUT THIS THE CONTROL IS UNWORKABLE, not merely inconvenient. Accounting
+ * has no way to know WHICH trips picked up a payment this morning, so a
+ * per-trip card alone would mean checking by memory or not at all.
+ *
+ * NOBODY ELSE IS SHOWN IT, though the API would serve any office reader:
+ * neither dispatch nor management can act on one, and a work queue nobody can
+ * work is a notification. Both still see every payment on the trip itself.
+ *
+ * DISAPPEARS WHEN EMPTY, like its neighbours — an always-present card reading
+ * "nothing pending" trains people to stop looking at that part of the screen.
+ */
+function PaymentsToVerifyCard({ role }: { role: UserRole | undefined }) {
+  const verifies = role === UserRole.ADMINISTRATOR || role === UserRole.ACCOUNTING;
+  const records = verifies || role === UserRole.DISPATCH_MANAGER;
+
+  const payments = useQuery({
+    queryKey: shipmentKeys.paymentQueue(PaymentVerificationStatus.UNVERIFIED),
+    queryFn: () =>
+      listClientPaymentQueue({ verificationStatus: PaymentVerificationStatus.UNVERIFIED }),
+    enabled: records,
+  });
+
+  const rows = payments.data ?? [];
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <Card className={verifies ? 'border-amber-500/40' : undefined}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <BadgeCheck
+            className={verifies ? 'h-4 w-4 text-amber-600' : 'text-muted-foreground h-4 w-4'}
+          />
+          {verifies ? 'Payments to verify' : 'Payments awaiting accounting'}
+        </CardTitle>
+        <CardDescription>
+          {rows.length} payment{rows.length === 1 ? '' : 's'} recorded and not yet matched against
+          the bank
+          {verifies ? ' — they already count toward what each trip has collected.' : '.'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="divide-y text-sm">
+          {rows.map((payment) => (
+            <li key={payment.id} className="flex items-start justify-between gap-3 py-2">
+              <div className="min-w-0">
+                {/* Verified on the trip, where the invoice, the balance and the
+                    other payments are visible. A queue that let you tick money
+                    off without looking at what it was for is a queue that gets
+                    clicked through. */}
+                <Link
+                  href={`/shipments/${payment.shipmentId}`}
+                  className="font-medium underline-offset-4 hover:underline"
+                >
+                  {payment.shipmentNumber ?? 'Trip'}
+                </Link>
+                <p className="text-muted-foreground truncate text-xs">
+                  {payment.clientName ?? 'Client'}
+                  {payment.recordedByName ? ` · recorded by ${payment.recordedByName}` : ''}
+                </p>
+                {payment.referenceNumber ? (
+                  <p className="text-muted-foreground truncate text-xs">
+                    Ref {payment.referenceNumber}
+                  </p>
+                ) : null}
+              </div>
+              <span className="shrink-0 tabular-nums">{formatMoney(payment.amount)}</span>
             </li>
           ))}
         </ul>

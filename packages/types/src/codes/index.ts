@@ -7,6 +7,7 @@ export * from './liquidation-history-action';
 export * from './allowance-request-status';
 export * from './disbursement-mode';
 export * from './payment-method';
+export * from './payment-verification-status';
 export * from './settlement-status';
 export * from './staff-role';
 export * from './crew-role';

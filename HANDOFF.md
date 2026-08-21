@@ -49,8 +49,8 @@ Ports are deliberately non-standard: postgres **5433**, minio **9010/9011**, api
   crew-pay net.
 
 **Counts (verified live):** 34 tables (31 business + 3 Better Auth), 29 `_created_by_required`,
-31 `_soft_delete_consistent`, 25 partial uniques, 9 payout triggers, 11 functions, 76
-column comments, 194 `uuid` columns, **9 migrations**. `code-constraints.test.ts` asserts
+31 `_soft_delete_consistent`, 25 partial uniques, 9 payout triggers, 11 functions, 79
+column comments, 195 `uuid` columns, **10 migrations**. `code-constraints.test.ts` asserts
 the table count and reads every code CHECK back out of the catalog, so both a new table and a
 code appended without a migration fail there rather than at the first write.
 
@@ -191,135 +191,57 @@ deduction.
   proof is likewise absent from `ATTACHMENT_INCLUDE` — but present in `referenceCount`, or the
   orphan sweep would hard-delete it. That asymmetry is the point and is commented on both.
 
-**`BillableExpense` and `CompanyPaidExpense` carry the same fields**, `isCommissionable` aside —
-one act of spending seen from two sides. Both resolve the payee rule through
-`resolvePayeeRequirement` and freeze it under a `*_payee_required` CHECK; billable's category
-stays nullable for rows that predate it, so an uncategorised row freezes the rule **false**,
-which is the only value that CHECK accepts with no payee.
+### Recording a payment, and checking it
 
-**Every reference number is optional and never unique** — allowance, liquidation and both
-expenses. A reference is what somebody wrote on a piece of paper, and one transfer covering two
-crew members legitimately repeats. Repetition is therefore **reported, not refused**:
-`AllowanceSummary` derives `referenceNumberIsDuplicated` per request, case-insensitively, across
-every live allowance rather than the trip's. Trimming is the request schema's job
-(`optionalText`), so the comparison only has to survive case.
+**DISPATCH_MANAGER records; ACCOUNTING verifies.** The person who moved the freight is routinely the
+first to hear the client paid for it; the person holding the bank statement is somebody else.
+`CAN_RECORD_CLIENT_PAYMENT` is the one write list here wider than `CAN_WRITE_SHIPMENT_MONEY`, because
+a client's payment is not DECIDED by anybody — it happened. `role-policy.test.ts` asserts the two
+lists stay disjoint on at least one role; without that, nothing ever enters the queue and the state
+is decorative.
 
-### Statuses
+**This is not the float control being relaxed**, and it looks enough like it to be worth saying. A
+dispatch manager is kept out of `CAN_WRITE_SHIPMENT_MONEY` because they hold trip cash and releasing
+it would let them pay themselves — a rule about money going OUT to the crew. A client's payment comes
+IN, reaches nobody's pocket, moves no variance, and is unverified until accounting says otherwise.
+OPERATIONS is absent on the payee/rate-chain reasoning: the supervisor answers for what was sold.
 
-`ShipmentStatus` 1 DRAFT · 2 DISPATCHED · 3 IN_TRANSIT · 4 DELIVERED · 5 PENDING_LIQUIDATION ·
-6 LIQUIDATED · 7 CLOSED. **DELIVERED is a transition, not a resting place** — recording delivery
-writes PENDING_LIQUIDATION in the same statement.
+`PaymentVerificationStatus` 1 UNVERIFIED · 2 VERIFIED · 3 RETURNED, on the payment row rather than in a
+second table. **The liquidation's shape, not the allowance request's**: there is no ask preceding the
+money — the cash arrived, and what is in question is the RECORD of it.
 
-`LiquidationStatus` 1 PENDING · 2 SUBMITTED · 3 APPROVED. **No RETURNED, no FINALIZED**: a return
-puts the row back at PENDING and the append-only `LiquidationHistory` says who, when and why.
-_A status that behaves identically to another is not a status._
-
-LIQUIDATED is **earned, not requested** — every liquidation approved AND commissions computed.
-One predicate, `shipmentStatusAfterLiquidationMilestone`, called from both sides and running
-**backwards** on reversal.
-
-### What locks when — the distinction that keeps being got wrong
-
-| Thing                 | Locked by                              | Because                                              |
-| --------------------- | -------------------------------------- | ---------------------------------------------------- |
-| Rate chain (booking)  | leaving DRAFT                          | the crew are on the road against an agreed figure    |
-| Rate chain (fixing)   | LIQUIDATED, or any **paid** commission | it feeds the commission base, exactly like a charge  |
-| Cargo description     | leaving DRAFT                          | it describes the load, agreed at booking             |
-| Date, lane, container | LIQUIDATED                             | transcribed paperwork; feeds no figure at all        |
-| Client, route         | LIQUIDATED, or any **paid** commission | `RuleScope` — they select which commission rule pays |
-| Charges               | LIQUIDATED, or any **paid** commission | they feed the commission base                        |
-| Crew assignment       | any **paid** commission                | the voucher names them                               |
-| Truck assignment      | CLOSED only                            | a truck is paid nothing and feeds no figure          |
-| Company-paid expense  | CLOSED only                            | same reason as the truck                             |
-| Liquidation contents  | its own APPROVED                       | approval freezes that account's variance             |
-| An adjustment         | its **own** payout line                | not the commission's — a late correction is normal   |
-
-Copying a guard without its reason is the recurring failure here; `truck-assignment.test.ts` and
-`trip-profit.test.ts` pin two of these in **both** directions so "making it consistent" fails
-loudly.
-
-**The two rate-chain rows are two endpoints, not one relaxed rule.** `PATCH /shipments/:id` is
-the booking edit: every dispatcher, closed at DRAFT. `PATCH /shipments/:id/rate-chain` corrects a
-figure recorded wrong, restricted to `CAN_EDIT_RATE_CHAIN` and bounded by `assertNothingPaid`.
-It stamps `shipment.rateChainUpdatedAt`, the only reason `commissionsStale` can still be told the
-truth — `updatedAt` moves when the truck is swapped.
-
-**The three booking rows are one endpoint, split by body.** `PATCH /shipments/:id` carries all
-three: `DRAFT_ONLY_BOOKING_FIELDS` shuts at DRAFT, the rest stays correctable to LIQUIDATED, and
-client/route additionally call `assertNothingPaid` and stamp `rateChainUpdatedAt` because
-`ruleMatches` scopes rules by them. Split by body and not by route precisely because both halves
-are `CAN_WRITE_SHIPMENTS` — `updateRateChain` is a separate route only because its **role list**
-is narrower, and `RolesGuard` cannot read a payload. The stricter list is the one written out, so
-a field added to `shipmentFields` and forgotten lands in the editable set, which someone notices.
-
-### Who may do what
-
-Declared once in `apps/api/src/auth/role-policy.ts`; `RolesGuard` **fails closed**.
-
-| Role             | Reads | Dispatches | Submits liquidations | Requests cash | Decides money |
-| ---------------- | ----- | ---------- | -------------------- | ------------- | ------------- |
-| ADMINISTRATOR    | ✓     | ✓          | any                  | ✓             | ✓             |
-| OPERATIONS       | ✓     | ✓          | **own**              | ✗             | ✗             |
-| ACCOUNTING       | ✓     | ✗          | any                  | **✗**         | ✓             |
-| MANAGEMENT       | ✓     | ✗          | ✗                    | ✗             | ✗             |
-| DISPATCH_MANAGER | ✓     | ✓          | **own**              | **✓**         | **✗**         |
-| CREW             | own   | ✗          | **own**              | ✗             | ✗             |
-
-"Submits liquidations" is `CAN_SUBMIT_LIQUIDATION`; "decides money" is
-`CAN_WRITE_SHIPMENT_MONEY`, which `CAN_DECIDE_LIQUIDATION` is defined as.
-**Both dispatch roles' absence is a control, not a job description**: they are custodians, so
-releasing would let them pay themselves and approving would sign off their own float.
-`role-policy.test.ts` asserts it for every role in `ROLES_CONFINED_TO_THEIR_OWN_FLOAT` — "the
-dispatcher obviously needs to approve things" is the change somebody will propose.
-
-**"Requests cash" is `CAN_REQUEST_ALLOWANCE` — the ask, not the payment**, and it is how the
-control above stopped costing what it used to. ACCOUNTING is absent by design: they release
-directly, and a request they raised and approved themselves is a second path through a control
-that exists to have one. The dispatcher is absent for the payee reason — they are routinely the
-float's recipient.
-
-**Master data is per resource.** OPERATIONS keeps routes and nothing else; `staff` is the
-administrator's alone, because `eligibleRoles` decides who may hold cash. **Reads stay wide**
-(`CAN_READ_MASTER_DATA`) — a picker cannot offer what the session may not fetch — so what closes
-a screen is `PAGE_ROLES` in the web's `nav.ts`, which `ResourcePage` refuses to render against:
-the one place here where a missing link IS the rule.
-
-**Two role lists, two questions, same membership today**, deliberately not aliases since a
-dispatch manager was once linked without being confined. `ROLES_LINKED_TO_STAFF` (CREW,
-OPERATIONS, DISPATCH_MANAGER) is every role holding trip cash; `ROLES_CONFINED_TO_THEIR_OWN_FLOAT`
-is what `assertMayAccountForThisFloat` consults. `GET /liquidations` scopes on the linked list.
-
-### What a CREW session may see
-
-Enforced on the API — the web only mirrors it, because the JSON is one devtools tab away.
-
-| Thing            | Crew see                                  | Enforced by                                   |
-| ---------------- | ----------------------------------------- | --------------------------------------------- |
-| Trips            | only ones they drove or helped on         | `scopeToCaller` + `assertCrewMayRead`         |
-| A trip's money   | **nothing** — no rate chain, no base      | `redactRevenueForCrew` (shipments controller) |
-| The trip's float | **nothing** — `totalAdvanced` zeroed      | `redactRevenueForCrew`                        |
-| Pay & commission | **nothing at all**                        | CREW absent from both routes' `@Roles`        |
-| Liquidations     | only accounts they are **custodian** of\* | `assertMayReadAccount` + list filter          |
-| Releases         | only their own account's, total included  | `accountScopeFor` → allowance summary         |
-| Settlements      | only their own account's                  | `accountScopeFor` → settlements list          |
-| Reference data   | expense categories + payees, read-only    | `CAN_READ_LIQUIDATION_REFERENCE_DATA`         |
-
-\* Custodianship, **not** who received the cash. The account created at booking names nobody, so
-crew never see it.
-
-**A filtered list is not a guard.** Every by-id read once used `assertMayRead` — "did you work
-this trip", the shipment's question, not the account's. `assertMayReadAccount` and
-`accountScopeFor` in `shipment-access.service.ts` state it once, and **reading and editing are
-separate rules**: only CREW is confined for READS, because a dispatcher must see whether the
-driver has liquidated. **"Paid to" is shown to everyone** — only requiredness varies, from
-`ExpenseCategory.requiresPayee`, and "a toll booth has no vendor" is handled by the field
-offering **"Not recorded"**.
-
-**To give crew their pay back**, re-add `UserRole.CREW` to `crewPay` **and filter to
-`user.staffId`** — the roll-up covers every crew member on the trip, and the filters that used to
-do it **were deleted, not left dead**. The cost of the current rule is that a crew member meets
-an adjustment as a short payout. `RateChainCard` returns null for crew **from inside the
-component**, so a new screen cannot forget the check.
+- **An UNVERIFIED payment counts as collected; a RETURNED one does not.** The first is the same call
+  `GrossProfit` makes about a running liquidation — money a client demonstrably sent does not become
+  less sent while it waits for a tick, and a receivables figure lagging accounting's queue has people
+  chasing clients who already paid. The second is the asymmetry: unverified means nobody has looked,
+  returned means somebody looked and said they could not match it. The summary reports
+  `amountVerified` and `amountReturned` beside `amountPaid` so none of the three is read as another.
+- **Who recorded it decides whether it needs checking.** A dispatch manager's entry joins the queue;
+  an accountant's own is VERIFIED on the spot and stamped to them. Not a hole — the queue holds work
+  needing a SECOND pair of eyes, and one padded with self-evident rows gets bulk-cleared without
+  reading. `verificationOnWriteBy` is the single predicate, consulted by create and edit alike.
+- **Verification freezes the row against whoever cannot verify** — a liquidation frozen by its own
+  approval, same shape. Without it the control is theatre: record something unremarkable, wait for the
+  tick, change the amount. Accounting may still edit, and their edit re-stamps the check.
+- **A return goes back to UNVERIFIED when answered**, so accounting sees it again rather than having
+  to remember it, and the amount rejoins `amountPaid`. `client_payment_verification_matches_status` is
+  the CHECK: UNVERIFIED carries no decision, VERIFIED names who and when with no note, RETURNED
+  requires the note. Same verb, same required reason and same endpoint shape as returning a
+  liquidation to the crew — `POST /client-payments/:id/return`.
+- **A returned payment is CORRECTABLE from the screen**, which is what makes the return a loop
+  rather than a dead end — the first cut shipped the decision with no edit affordance, so accounting
+  could hand a payment back and the recorder's only route was delete-and-retype, throwing away the
+  original row. One `PaymentForm` serves both recording and correcting so the two cannot drift, and
+  the API decides what the edit does to the verification state.
+- **Verifying twice is REFUSED, not idempotent.** There is no history table, so a second stamp would
+  not record that two people looked — it would erase the fact that the first one did, with nothing
+  saying so. The screen hides the button and the service throws. Accounting who doubts an earlier
+  check returns the payment for correction, which is recorded.
+- **The dashboard queue is not a nicety.** Accounting has no way to know which trips picked up a
+  payment this morning, so a per-trip card alone would mean checking by memory or not at all.
+- **`CAN_UPLOAD_RECEIPTS` survives as an alias of `CAN_SUBMIT_LIQUIDATION`** only because the dispatch
+  manager was already in it, for their own float. A recorder who was not would have to break the alias
+  rather than be added to it — attaching a document is not submitting somebody's cash account.
 
 ---
 
@@ -704,6 +626,11 @@ both the margin and the invoice, and `repeatedReferenceNumbers()` states the dup
 rule once for both allowances and payments. Fixed in passing: `ReceiptsService.referenceCount`
 omitted `company_paid_expense`, so the orphan sweep could hard-delete a receipt a live expense was
 still showing.
+
+**13** — payment verification. Dispatch records what a client paid; accounting checks it against the
+bank. No new role and no new table — a state on the payment row, in the liquidation's shape. Design
+notes under _Recording a payment, and checking it_; the two calls worth restating are **unverified
+money still counts** and **an accountant's own payment never enters the queue**.
 
 ---
 

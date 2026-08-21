@@ -29,6 +29,12 @@ export const UserRole = {
    * liquidation custodians and deliberately cannot approve a liquidation or
    * release cash — either would let them sign off their own float. See
    * `role-policy.ts`.
+   *
+   * THEY DO RECORD WHAT CLIENTS PAY, which is not a hole in that control and is
+   * worth saying because it looks like one. The float rule keeps them away from
+   * money going OUT to the crew, where they are a recipient; a client's payment
+   * comes IN, reaches nobody's pocket, and is checked by accounting before it
+   * is treated as confirmed. See `CAN_RECORD_CLIENT_PAYMENT`.
    */
   DISPATCH_MANAGER: 6,
 } as const;

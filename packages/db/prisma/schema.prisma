@@ -223,6 +223,8 @@ model User {
   clientPaymentsUpdated ClientPayment[] @relation("ClientPaymentUpdatedBy")
   clientPaymentsDeleted ClientPayment[] @relation("ClientPaymentDeletedBy")
 
+  clientPaymentsVerified ClientPayment[] @relation("ClientPaymentVerifiedBy")
+
   crewDeductionsCreated CrewDeduction[] @relation("CrewDeductionCreatedBy")
   crewDeductionsUpdated CrewDeduction[] @relation("CrewDeductionUpdatedBy")
   crewDeductionsDeleted CrewDeduction[] @relation("CrewDeductionDeletedBy")
@@ -1828,6 +1830,36 @@ model ClientPayment {
 
   remarks String?
 
+  /// Code set: PaymentVerificationStatus (1 UNVERIFIED, 2 VERIFIED, 3 RETURNED).
+  ///
+  /// WHY IT EXISTS. A dispatch manager records what a client paid — they moved
+  /// the freight and are routinely the first to hear the money landed.
+  /// Accounting holds the bank statement. Those are two people, and without this
+  /// the second had no way to say "I found it" or "I cannot find it": a payment
+  /// nobody had matched looked exactly like one somebody had.
+  ///
+  /// AN UNVERIFIED PAYMENT STILL COUNTS as collected, the same call
+  /// `GrossProfit` makes about a running liquidation. A RETURNED one does not —
+  /// somebody looked and stated they could not match it, which is a different
+  /// thing from nobody having looked yet.
+  verificationStatus Int @default(1) @db.SmallInt
+
+  /// Who performed the verification, and when. Both null while UNVERIFIED and
+  /// both stamped together the moment accounting answers.
+  ///
+  /// A RETURNED ROW CARRIES THESE TOO. The column records who looked, not that
+  /// they found it — "which accountant could not match this" is precisely who
+  /// whoever recorded it has to go and talk to.
+  verifiedBy     String?   @db.Uuid
+  verifiedByUser User?     @relation("ClientPaymentVerifiedBy", fields: [verifiedBy], references: [id], onDelete: Restrict)
+  verifiedAt     DateTime? @db.Timestamptz(6)
+
+  /// Why accounting could not match it. Required on a RETURNED row and forbidden
+  /// otherwise, by `client_payment_verification_matches_status`. A return with
+  /// no reason is whoever recorded it being told to look again with no idea what
+  /// to look for.
+  verificationNote String?
+
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
   createdBy     String?   @db.Uuid
@@ -1841,6 +1873,8 @@ model ClientPayment {
   @@index([shipmentId])
   /// Receivables are read by date — what came in this week, what is still out.
   @@index([receivedAt])
+  /// Accounting's queue is "every payment at one status", across every trip.
+  @@index([verificationStatus])
   @@index([deletedAt])
   @@map("client_payment")
 }

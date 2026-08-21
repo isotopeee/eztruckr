@@ -176,6 +176,55 @@ export const CAN_WRITE_SHIPMENT_MONEY = [UserRole.ADMINISTRATOR, UserRole.ACCOUN
  * the same row, and would put a second, quieter path through a control that
  * exists to have exactly one.
  */
+/**
+ * Booking a client's payment against a trip.
+ *
+ * WIDER THAN `CAN_WRITE_SHIPMENT_MONEY`, and the only write list here that is.
+ * Every other figure on a trip is DECIDED by the office: what to charge, what to
+ * release, what to pay the crew. A client's payment is not decided at all — it
+ * happened, and the dispatch manager who moved the freight is routinely the
+ * first person to hear that it did.
+ *
+ * THE DISPATCH MANAGER'S PRESENCE HERE IS NOT A HOLE IN THE FLOAT CONTROL, and
+ * it looks enough like one to be worth stating. They are kept out of
+ * `CAN_WRITE_SHIPMENT_MONEY` because they hold trip cash and releasing it would
+ * let them pay themselves — a rule about money going OUT to the crew. A client's
+ * payment comes IN. It reaches nobody's pocket, it moves no variance, and it is
+ * unverified until accounting says otherwise.
+ *
+ * WHAT KEEPS IT SAFE IS NOT THIS LIST, it is `CAN_VERIFY_CLIENT_PAYMENT` below:
+ * anything recorded by somebody who cannot verify arrives UNVERIFIED and stays
+ * in accounting's queue until a second person matches it to the bank. Widening
+ * this list without that one is the change that makes the control cosmetic,
+ * which is worth knowing before anybody does it.
+ *
+ * OPERATIONS IS ABSENT, on the same reasoning that puts payees and the rate
+ * chain with the manager rather than the dispatcher: the supervisor answers for
+ * what was sold, and is who a client rings about an invoice.
+ */
+export const CAN_RECORD_CLIENT_PAYMENT = [
+  ...CAN_WRITE_SHIPMENT_MONEY,
+  UserRole.DISPATCH_MANAGER,
+] as const;
+
+/**
+ * Checking one against the bank, and querying it back when it does not match.
+ *
+ * `CAN_WRITE_SHIPMENT_MONEY`, derived rather than repeated so the desk that
+ * decides a trip's money is the desk that confirms what came in for it. The
+ * dispatch manager is absent BY CONSTRUCTION: they are the person whose work is
+ * being checked, and a role that could verify its own entries would leave this
+ * state meaning nothing at all.
+ *
+ * ACCOUNTING RECORDING A PAYMENT DIRECTLY does not land in this queue — see
+ * `ClientPaymentsService`, which verifies on the spot and stamps them. That is
+ * not a loophole: the queue exists to hold work that needs a SECOND pair of
+ * eyes, and an accountant who books a payment they are looking at the statement
+ * for has already been both people. A queue padded with self-evident rows is a
+ * queue that gets bulk-cleared without reading.
+ */
+export const CAN_VERIFY_CLIENT_PAYMENT = CAN_WRITE_SHIPMENT_MONEY;
+
 export const CAN_REQUEST_ALLOWANCE = [UserRole.ADMINISTRATOR, UserRole.DISPATCH_MANAGER] as const;
 
 /**
@@ -239,6 +288,12 @@ export const CAN_SUBMIT_LIQUIDATION = [
  * The same list, for the same reason: a receipt photograph is the crew's half
  * of a liquidation. What may be READ back is decided per receipt, against the
  * trip it hangs off.
+ *
+ * IT SURVIVES BEING AN ALIAS through the deposit slips a dispatch manager now
+ * attaches to a client payment, and only because they were already in the list
+ * for their own float. A recorder who was NOT already here would have to break
+ * the alias rather than be added to it — being able to attach a document is not
+ * being able to submit somebody's cash account.
  */
 export const CAN_UPLOAD_RECEIPTS = CAN_SUBMIT_LIQUIDATION;
 

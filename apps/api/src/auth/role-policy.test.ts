@@ -8,7 +8,10 @@ import {
   CAN_READ_LIQUIDATION_REFERENCE_DATA,
   CAN_READ_MASTER_DATA,
   CAN_READ_SHIPMENTS,
+  CAN_RECORD_CLIENT_PAYMENT,
   CAN_SUBMIT_LIQUIDATION,
+  CAN_UPLOAD_RECEIPTS,
+  CAN_VERIFY_CLIENT_PAYMENT,
   CAN_WRITE_PAYEES,
   CAN_TRANSITION_SHIPMENTS,
   CAN_WRITE_FINANCIAL_MASTER_DATA,
@@ -233,5 +236,66 @@ describe('the money lists stay accounting’s', () => {
       expect(may(CAN_DECIDE_LIQUIDATION, role)).toBe(false);
       expect(may(CAN_WRITE_SHIPMENT_MONEY, role)).toBe(false);
     }
+  });
+});
+
+/**
+ * Recording a client payment, and checking it.
+ *
+ * THE SEGREGATION IS THE POINT. A person who could both book a receipt and tick
+ * it as matched against the bank is one person doing a two-person job, which is
+ * the arrangement the verification state exists to prevent. That state is only
+ * worth having while these two lists stay disjoint on at least one role, so it
+ * is asserted here rather than left to be noticed.
+ */
+describe('recording a client payment is wider than deciding a trip’s money', () => {
+  it('lets the dispatch manager record one', () => {
+    expect(may(CAN_RECORD_CLIENT_PAYMENT, UserRole.DISPATCH_MANAGER)).toBe(true);
+    // They already read every trip, so recording needs no read grant of its own.
+    expect(may(CAN_READ_SHIPMENTS, UserRole.DISPATCH_MANAGER)).toBe(true);
+  });
+
+  /**
+   * THE CONTROL. Recording and checking must be two people, and this is the
+   * assertion that fails when somebody "simplifies" the two lists into one.
+   *
+   * It is NOT the float control being relaxed. A dispatch manager stays out of
+   * `CAN_WRITE_SHIPMENT_MONEY` — money going OUT to the crew, where they are a
+   * recipient. A client's payment comes IN and reaches nobody's pocket.
+   */
+  it('does NOT let them verify their own entry', () => {
+    expect(may(CAN_VERIFY_CLIENT_PAYMENT, UserRole.DISPATCH_MANAGER)).toBe(false);
+    expect(may(CAN_WRITE_SHIPMENT_MONEY, UserRole.DISPATCH_MANAGER)).toBe(false);
+
+    expect([...CAN_VERIFY_CLIENT_PAYMENT]).toEqual([...CAN_WRITE_SHIPMENT_MONEY]);
+    // The recorders are the verifiers plus at least one role that is not one,
+    // or nothing ever enters the queue and the state is decorative.
+    expect(
+      [...CAN_RECORD_CLIENT_PAYMENT].some((role) => !may(CAN_VERIFY_CLIENT_PAYMENT, role)),
+    ).toBe(true);
+  });
+
+  /**
+   * The dispatcher is absent, on the same reasoning that puts payees and the
+   * rate chain with the manager: the supervisor answers for what was sold and is
+   * who a client rings about an invoice.
+   */
+  it('keeps the dispatcher and everybody without a desk out', () => {
+    for (const role of [UserRole.OPERATIONS, UserRole.MANAGEMENT, UserRole.CREW]) {
+      expect(may(CAN_RECORD_CLIENT_PAYMENT, role)).toBe(false);
+    }
+  });
+
+  /**
+   * The deposit slip a dispatch manager attaches goes up the one upload path,
+   * and they were already in that list for their own float — which is the only
+   * reason `CAN_UPLOAD_RECEIPTS` survives as an alias of
+   * `CAN_SUBMIT_LIQUIDATION`. A recorder who was not already there would have to
+   * break the alias rather than be added to it: attaching a document is not
+   * submitting somebody's cash account.
+   */
+  it('needs no widening of the upload list to attach proof', () => {
+    expect([...CAN_UPLOAD_RECEIPTS]).toEqual([...CAN_SUBMIT_LIQUIDATION]);
+    expect(may(CAN_UPLOAD_RECEIPTS, UserRole.DISPATCH_MANAGER)).toBe(true);
   });
 });

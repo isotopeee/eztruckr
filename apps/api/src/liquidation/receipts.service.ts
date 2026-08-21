@@ -54,7 +54,9 @@ export interface UploadedFile {
  * is not something a crew member has a claim to because they drove the load.
  * With no entry here, such a receipt has no shipment to widen access through
  * and the crew branch refuses it — which is the right answer, arrived at
- * because the row is missing rather than in spite of it.
+ * because the row is missing rather than in spite of it. Every office role,
+ * including the dispatch manager who attaches these, reads any receipt as it
+ * reads any shipment.
  */
 const ATTACHMENT_INCLUDE = {
   liquidationLines: { select: { liquidation: { select: { shipmentId: true } } } },

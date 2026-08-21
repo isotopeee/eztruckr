@@ -1,5 +1,10 @@
 import { z } from 'zod';
 import { paymentMethodSchema } from '../codes/payment-method';
+import {
+  PaymentVerificationStatus,
+  isPaymentVerificationStatus,
+  paymentVerificationStatusSchema,
+} from '../codes/payment-verification-status';
 import { money } from '../money/money';
 import {
   auditFieldsSchema,
@@ -7,6 +12,7 @@ import {
   isoDateTimeSchema,
   moneyStringSchema,
   optionalText,
+  requiredText,
 } from './common';
 
 /**
@@ -36,6 +42,9 @@ import {
 export const clientPaymentSchema = auditFieldsSchema.extend({
   id: z.string(),
   shipmentId: z.string(),
+  /** Denormalised for the cross-trip queue, which lists trips it never loads. */
+  shipmentNumber: z.string().nullable(),
+  clientName: z.string().nullable(),
 
   amount: z.string(),
   receivedAt: z.string(),
@@ -73,9 +82,77 @@ export const clientPaymentSchema = auditFieldsSchema.extend({
   receiptFileName: z.string().nullable(),
 
   remarks: z.string().nullable(),
+
+  // --- has accounting checked it? -----------------------------------------
+  /**
+   * Whether accounting has matched this against the bank. See
+   * `PaymentVerificationStatus` for what each state means and, in particular,
+   * for why an UNVERIFIED payment still counts as collected and a RETURNED one
+   * does not.
+   */
+  verificationStatus: paymentVerificationStatusSchema,
+
+  /**
+   * Who performed the verification, and when. Both null while UNVERIFIED and
+   * both stamped together the moment accounting answers.
+   *
+   * NAMES WHO LOOKED, not that it succeeded — a RETURNED row carries these too,
+   * because "which accountant could not find this" is exactly who the
+   * person who recorded it needs to go and talk to.
+   */
+  verifiedBy: z.string().nullable(),
+  verifiedByName: z.string().nullable(),
+  verifiedAt: z.string().nullable(),
+
+  /** Why accounting could not match it. Required on a return, absent otherwise. */
+  verificationNote: z.string().nullable(),
+
+  /** Who typed the payment in — the dispatch manager, usually. */
+  recordedByName: z.string().nullable(),
 });
 
 export type ClientPayment = z.infer<typeof clientPaymentSchema>;
+
+/**
+ * Accounting confirming a payment against the bank.
+ *
+ * NO PAYLOAD AT ALL, and that is the point rather than an omission. Verifying
+ * is a statement that the row as it stands matches the statement line — if some
+ * detail is wrong, the honest answer is a query naming it, or a correction made
+ * by the person who may correct it. An amount on this payload would let
+ * "verified" sit beside a figure that was quietly changed at the moment of
+ * verifying, which is the same trap `approveAllowanceRequestSchema` refuses.
+ */
+export const verifyClientPaymentSchema = z.object({});
+export type VerifyClientPaymentInput = z.infer<typeof verifyClientPaymentSchema>;
+
+/**
+ * Accounting handing one back for correction. The reason is the entire content
+ * of the message going to whoever recorded it — the same shape, and the same
+ * argument, as returning a liquidation to the crew.
+ */
+export const returnClientPaymentSchema = z.object({
+  reason: requiredText(400),
+});
+
+export type ReturnClientPaymentInput = z.infer<typeof returnClientPaymentSchema>;
+
+/**
+ * The cross-trip queue.
+ *
+ * Defaults to UNVERIFIED because that is the only state anybody is waiting on;
+ * the rest are read on the trip they belong to. The same shape, and the same
+ * argument, as `allowanceRequestListQuerySchema`.
+ */
+export const clientPaymentListQuerySchema = z.object({
+  verificationStatus: z.coerce
+    .number()
+    .int()
+    .refine(isPaymentVerificationStatus, 'unknown payment verification status')
+    .default(PaymentVerificationStatus.UNVERIFIED),
+});
+
+export type ClientPaymentListQuery = z.infer<typeof clientPaymentListQuerySchema>;
 
 /**
  * A received amount is strictly positive.
@@ -196,7 +273,31 @@ export const clientPaymentSummarySchema = z.object({
   amountDueIsProvisional: z.boolean(),
 
   // --- what has come in ----------------------------------------------------
+  /**
+   * Everything recorded and not queried — UNVERIFIED and VERIFIED together.
+   *
+   * AN UNVERIFIED PAYMENT COUNTS. Money a client demonstrably sent does not
+   * become less sent while it waits for accounting to tick it, and a
+   * receivables figure that lagged their queue would have somebody chasing a
+   * client who had already paid. `amountVerified` below says how much of this
+   * has actually been confirmed, so nobody reads one as the other.
+   *
+   * A RETURNED PAYMENT DOES NOT. Unverified means nobody has looked; returned
+   * means somebody looked and stated they could not match it, and counting a
+   * disputed figure is how a trip reads as settled on a receipt nobody can
+   * find. It rejoins this total the moment the record is corrected.
+   */
   amountPaid: z.string(),
+
+  /** The subset accounting has matched against the bank. */
+  amountVerified: z.string(),
+
+  /** Recorded, then returned for correction — excluded from `amountPaid`. */
+  amountReturned: z.string(),
+
+  /** How many payments are sitting in accounting's queue. */
+  awaitingVerification: z.number().int().nonnegative(),
+
   paymentCount: z.number().int().nonnegative(),
 
   /** Due minus paid. NEGATIVE when the client has overpaid, which is a real

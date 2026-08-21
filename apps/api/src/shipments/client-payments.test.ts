@@ -6,8 +6,14 @@ import {
   testUuid,
   withTriggersSuspended,
 } from '@eztruckr/db';
-import { PaymentMethod, ShipmentStatus } from '@eztruckr/types';
+import {
+  PaymentMethod,
+  PaymentVerificationStatus,
+  ShipmentStatus,
+  UserRole,
+} from '@eztruckr/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { RequestUser } from '../auth/request-user';
 import type { PrismaService } from '../prisma/prisma.service';
 import { ClientPaymentsService } from './client-payments.service';
 import { GrossProfitService } from './gross-profit.service';
@@ -128,19 +134,57 @@ beforeEach(async () => {
 
 const act = <T>(fn: () => Promise<T>): Promise<T> => withActor({ userId: adminId }, fn);
 
-function pay(amount: string, over: Partial<Parameters<typeof payments.record>[1]> = {}) {
+/**
+ * The two sessions this suite is about.
+ *
+ * A dispatch manager's entry needs checking and an accountant's does not, so
+ * almost every assertion below turns on which of these did the writing. Both
+ * carry the same `id` because the audit columns are not what is under test —
+ * the ROLE is.
+ */
+const asAccounting = (): RequestUser => ({
+  id: adminId,
+  email: 'admin@eztruckr.ph',
+  name: 'Accounting',
+  role: UserRole.ACCOUNTING,
+  isActive: true,
+  staffId: null,
+});
+
+const asDispatchManager = (): RequestUser => ({
+  id: adminId,
+  email: 'dispatch@eztruckr.ph',
+  name: 'Dispatch manager',
+  role: UserRole.DISPATCH_MANAGER,
+  isActive: true,
+  staffId: null,
+});
+
+function pay(
+  amount: string,
+  over: Partial<Parameters<typeof payments.record>[1]> = {},
+  user: RequestUser = asAccounting(),
+) {
   return act(() =>
-    payments.record(SHIPMENT_ID, {
-      amount,
-      receivedAt: null,
-      paymentMethod: PaymentMethod.BANK_TRANSFER,
-      referenceNumber: null,
-      receiptId: null,
-      remarks: null,
-      ...over,
-    }),
+    payments.record(
+      SHIPMENT_ID,
+      {
+        amount,
+        receivedAt: null,
+        paymentMethod: PaymentMethod.BANK_TRANSFER,
+        referenceNumber: null,
+        receiptId: null,
+        remarks: null,
+        ...over,
+      },
+      user,
+    ),
   );
 }
+
+/** The same, recorded by the desk whose work needs checking. */
+const collect = (amount: string, over: Partial<Parameters<typeof payments.record>[1]> = {}) =>
+  pay(amount, over, asDispatchManager());
 
 async function setStatus(status: ShipmentStatus): Promise<void> {
   await prisma.shipment.update({ where: { id: SHIPMENT_ID }, data: { status } });
@@ -349,7 +393,7 @@ describe('reversing a payment', () => {
     const payment = await pay('45000.00');
     expect((await payments.summary(SHIPMENT_ID)).status).toBe('PAID');
 
-    await act(() => payments.remove(SHIPMENT_ID, payment.id));
+    await act(() => payments.remove(SHIPMENT_ID, payment.id, asAccounting()));
 
     const summary = await payments.summary(SHIPMENT_ID);
     expect(summary.status).toBe('UNPAID');
@@ -365,19 +409,23 @@ describe('reversing a payment', () => {
     if (!available) return;
 
     const elsewhere = await act(() =>
-      payments.record(OTHER_SHIPMENT_ID, {
-        amount: '1000.00',
-        receivedAt: null,
-        paymentMethod: PaymentMethod.CASH,
-        referenceNumber: null,
-        receiptId: null,
-        remarks: null,
-      }),
+      payments.record(
+        OTHER_SHIPMENT_ID,
+        {
+          amount: '1000.00',
+          receivedAt: null,
+          paymentMethod: PaymentMethod.CASH,
+          referenceNumber: null,
+          receiptId: null,
+          remarks: null,
+        },
+        asAccounting(),
+      ),
     );
 
-    await expect(act(() => payments.remove(SHIPMENT_ID, elsewhere.id))).rejects.toThrow(
-      NotFoundException,
-    );
+    await expect(
+      act(() => payments.remove(SHIPMENT_ID, elsewhere.id, asAccounting())),
+    ).rejects.toThrow(NotFoundException);
   });
 });
 
@@ -393,15 +441,19 @@ describe('a reference number seen twice', () => {
 
     await pay('20000.00', { referenceNumber: 'BPI-004417' });
     await act(() =>
-      payments.record(OTHER_SHIPMENT_ID, {
-        amount: '25000.00',
-        receivedAt: null,
-        paymentMethod: PaymentMethod.CHECK,
-        // Same slip, different case: two people typing one check number.
-        referenceNumber: 'bpi-004417',
-        receiptId: null,
-        remarks: null,
-      }),
+      payments.record(
+        OTHER_SHIPMENT_ID,
+        {
+          amount: '25000.00',
+          receivedAt: null,
+          paymentMethod: PaymentMethod.CHECK,
+          // Same slip, different case: two people typing one check number.
+          referenceNumber: 'bpi-004417',
+          receiptId: null,
+          remarks: null,
+        },
+        asAccounting(),
+      ),
     );
 
     const summary = await payments.summary(SHIPMENT_ID);
@@ -418,5 +470,301 @@ describe('a reference number seen twice', () => {
     const summary = await payments.summary(SHIPMENT_ID);
 
     expect(summary.payments[0]?.referenceNumberIsDuplicated).toBe(false);
+  });
+});
+
+/**
+ * THE CONTROL THE VERIFICATION STATE EXISTS FOR: the person who books a receipt
+ * and the person who confirms it against the bank are two people.
+ */
+describe('a payment recorded by dispatch', () => {
+  it('arrives unverified, and names nobody as having checked it', async () => {
+    if (!available) return;
+
+    const payment = await collect('20000.00');
+
+    expect(payment.verificationStatus).toBe(PaymentVerificationStatus.UNVERIFIED);
+    expect(payment.verifiedBy).toBeNull();
+    expect(payment.verifiedAt).toBeNull();
+    expect((await payments.summary(SHIPMENT_ID)).awaitingVerification).toBe(1);
+  });
+
+  /**
+   * COUNTED WHILE IT WAITS. Money a client demonstrably sent does not become
+   * less sent while accounting works through a queue, and a receivables figure
+   * that lagged would have somebody chasing a client who had already paid.
+   */
+  it('still counts toward what the trip has collected', async () => {
+    if (!available) return;
+
+    await collect('20000.00');
+    const summary = await payments.summary(SHIPMENT_ID);
+
+    expect(summary.amountPaid).toBe('20000.00');
+    expect(summary.balance).toBe('25000.00');
+    expect(summary.status).toBe('PARTIALLY_PAID');
+    // But nobody has confirmed any of it, and the summary says so.
+    expect(summary.amountVerified).toBe('0.00');
+  });
+
+  it('is confirmed by accounting, which names who and when', async () => {
+    if (!available) return;
+
+    const recorded = await collect('20000.00');
+    const verified = await act(() => payments.verify(recorded.id, asAccounting()));
+
+    expect(verified.verificationStatus).toBe(PaymentVerificationStatus.VERIFIED);
+    expect(verified.verifiedBy).toBe(adminId);
+    expect(verified.verifiedAt).not.toBeNull();
+    expect(verified.verificationNote).toBeNull();
+
+    const summary = await payments.summary(SHIPMENT_ID);
+    expect(summary.amountVerified).toBe('20000.00');
+    expect(summary.awaitingVerification).toBe(0);
+  });
+});
+
+/**
+ * An accountant booking a payment off the statement in front of them has
+ * already been both people. Padding the queue with rows nobody can learn
+ * anything from is how a queue starts being bulk-cleared without reading.
+ */
+describe('a payment recorded by accounting', () => {
+  it('is verified on the spot and never joins the queue', async () => {
+    if (!available) return;
+
+    const payment = await pay('20000.00');
+
+    expect(payment.verificationStatus).toBe(PaymentVerificationStatus.VERIFIED);
+    expect(payment.verifiedBy).toBe(adminId);
+    expect((await payments.summary(SHIPMENT_ID)).awaitingVerification).toBe(0);
+  });
+});
+
+describe('a payment accounting cannot match', () => {
+  it('goes back for correction with the reason, and stops counting as collected', async () => {
+    if (!available) return;
+
+    const recorded = await collect('20000.00');
+    const returned = await act(() =>
+      payments.returnForCorrection(
+        recorded.id,
+        { reason: 'No such deposit on the 11th — check the date.' },
+        asAccounting(),
+      ),
+    );
+
+    expect(returned.verificationStatus).toBe(PaymentVerificationStatus.RETURNED);
+    expect(returned.verificationNote).toBe('No such deposit on the 11th — check the date.');
+
+    // Excluded from the total, and reported separately so it cannot just
+    // vanish: somebody looked and said they could not find it, which is not
+    // the same as nobody having looked.
+    const summary = await payments.summary(SHIPMENT_ID);
+    expect(summary.amountPaid).toBe('0.00');
+    expect(summary.amountReturned).toBe('20000.00');
+    expect(summary.status).toBe('UNPAID');
+    expect(summary.paymentCount).toBe(1);
+  });
+
+  /**
+   * The dispatch manager answering the return puts it back in front of
+   * accounting rather than leaving them to remember it.
+   */
+  it('returns to the queue, and to the total, once corrected', async () => {
+    if (!available) return;
+
+    const recorded = await collect('20000.00');
+    await act(() =>
+      payments.returnForCorrection(recorded.id, { reason: 'Wrong date.' }, asAccounting()),
+    );
+
+    const corrected = await act(() =>
+      payments.update(
+        SHIPMENT_ID,
+        recorded.id,
+        { receivedAt: '2026-08-12T00:00:00.000Z' },
+        asDispatchManager(),
+      ),
+    );
+
+    expect(corrected.verificationStatus).toBe(PaymentVerificationStatus.UNVERIFIED);
+    expect(corrected.verificationNote).toBeNull();
+
+    const summary = await payments.summary(SHIPMENT_ID);
+    expect(summary.amountPaid).toBe('20000.00');
+    expect(summary.awaitingVerification).toBe(1);
+  });
+
+  /**
+   * THE SHAPE THE FORM ACTUALLY SENDS. The correction screen submits every
+   * field on every save, not the one that changed — a different path through
+   * the `undefined` / `null` conditionals in `update` than a hand-written
+   * partial patch takes, and the one a person will actually exercise. Clearing
+   * a reference to null is the case worth pinning: it must land as null rather
+   * than being read as "not mentioned".
+   */
+  it('accepts the full field set the correction form submits', async () => {
+    if (!available) return;
+
+    const recorded = await collect('20000.00', {
+      referenceNumber: 'BPI-004417',
+      remarks: 'Downpayment',
+    });
+    await act(() =>
+      payments.returnForCorrection(recorded.id, { reason: 'Wrong amount.' }, asAccounting()),
+    );
+
+    const corrected = await act(() =>
+      payments.update(
+        SHIPMENT_ID,
+        recorded.id,
+        {
+          amount: '22500.00',
+          receivedAt: '2026-08-12T00:00:00.000Z',
+          paymentMethod: PaymentMethod.CHECK,
+          referenceNumber: null,
+          receiptId: null,
+          remarks: null,
+        },
+        asDispatchManager(),
+      ),
+    );
+
+    expect(corrected.amount).toBe('22500.00');
+    expect(corrected.receivedAt).toBe('2026-08-12T00:00:00.000Z');
+    expect(corrected.paymentMethod).toBe(PaymentMethod.CHECK);
+    expect(corrected.referenceNumber).toBeNull();
+    expect(corrected.remarks).toBeNull();
+    // And it is back in front of accounting, with the answered note gone.
+    expect(corrected.verificationStatus).toBe(PaymentVerificationStatus.UNVERIFIED);
+    expect(corrected.verificationNote).toBeNull();
+
+    const summary = await payments.summary(SHIPMENT_ID);
+    expect(summary.amountPaid).toBe('22500.00');
+    expect(summary.amountReturned).toBe('0.00');
+  });
+
+  /**
+   * The database refuses a return with no reason, not only the schema. A refusal
+   * with nothing to act on is whoever recorded it being told to look again with
+   * no idea what to look for.
+   */
+  it('cannot be returned with no reason, even by raw SQL', async () => {
+    if (!available) return;
+
+    const recorded = await collect('20000.00');
+
+    await expect(
+      prisma.$executeRawUnsafe(`
+        UPDATE "client_payment"
+           SET "verificationStatus" = ${PaymentVerificationStatus.RETURNED},
+               "verifiedBy" = '${adminId}', "verifiedAt" = now(), "verificationNote" = NULL
+         WHERE id = '${recorded.id}'
+      `),
+    ).rejects.toThrow(/client_payment_verification_matches_status/i);
+  });
+});
+
+/**
+ * THE LOCK. Without it the control is theatre: record something unremarkable,
+ * wait for the tick, then change the amount.
+ */
+describe('once accounting has verified a payment', () => {
+  it('the desk that recorded it can no longer change it', async () => {
+    if (!available) return;
+
+    const recorded = await collect('20000.00');
+    await act(() => payments.verify(recorded.id, asAccounting()));
+
+    await expect(
+      act(() =>
+        payments.update(SHIPMENT_ID, recorded.id, { amount: '90000.00' }, asDispatchManager()),
+      ),
+    ).rejects.toThrow(/verified by accounting/i);
+  });
+
+  it('the desk that recorded it can no longer reverse it', async () => {
+    if (!available) return;
+
+    const recorded = await collect('20000.00');
+    await act(() => payments.verify(recorded.id, asAccounting()));
+
+    await expect(
+      act(() => payments.remove(SHIPMENT_ID, recorded.id, asDispatchManager())),
+    ).rejects.toThrow(/verified by accounting/i);
+  });
+
+  /**
+   * THE FIRST STAMP IS THE RECORD. There is no history table, so a second
+   * verification would not say two people looked — it would erase the fact that
+   * the first one did. The button is gone from the screen and the API refuses
+   * it, so neither path can quietly overwrite an audit trail.
+   */
+  it('refuses a second verification rather than overwriting the first', async () => {
+    if (!available) return;
+
+    const recorded = await collect('20000.00');
+    const first = await act(() => payments.verify(recorded.id, asAccounting()));
+
+    await expect(act(() => payments.verify(recorded.id, asAccounting()))).rejects.toThrow(
+      /already verified/i,
+    );
+
+    const summary = await payments.summary(SHIPMENT_ID);
+    expect(summary.payments[0]?.verifiedAt).toBe(first.verifiedAt);
+  });
+
+  /** Returning it is how a check somebody now doubts is undone — recorded. */
+  it('can still be returned for correction, which is recorded', async () => {
+    if (!available) return;
+
+    const recorded = await collect('20000.00');
+    await act(() => payments.verify(recorded.id, asAccounting()));
+
+    const returned = await act(() =>
+      payments.returnForCorrection(
+        recorded.id,
+        { reason: 'Duplicate of the 9th.' },
+        asAccounting(),
+      ),
+    );
+
+    expect(returned.verificationStatus).toBe(PaymentVerificationStatus.RETURNED);
+    expect(returned.verificationNote).toBe('Duplicate of the 9th.');
+  });
+
+  it('accounting still can, and their edit re-stamps the check', async () => {
+    if (!available) return;
+
+    const recorded = await collect('20000.00');
+    await act(() => payments.verify(recorded.id, asAccounting()));
+
+    const corrected = await act(() =>
+      payments.update(SHIPMENT_ID, recorded.id, { amount: '21000.00' }, asAccounting()),
+    );
+
+    expect(corrected.amount).toBe('21000.00');
+    expect(corrected.verificationStatus).toBe(PaymentVerificationStatus.VERIFIED);
+  });
+});
+
+describe('accounting’s queue across trips', () => {
+  it('lists what is waiting, oldest first, naming the trip and the client', async () => {
+    if (!available) return;
+
+    await collect('20000.00', { receivedAt: '2026-09-10T00:00:00.000Z' });
+    await collect('5000.00', { receivedAt: '2026-08-11T00:00:00.000Z' });
+    // Accounting's own is verified on the spot, so it is not work for anybody.
+    await pay('1000.00');
+
+    const queue = await payments.list({
+      verificationStatus: PaymentVerificationStatus.UNVERIFIED,
+    });
+
+    const mine = queue.filter((row) => row.shipmentId === SHIPMENT_ID);
+    expect(mine.map((row) => row.amount)).toEqual(['5000.00', '20000.00']);
+    expect(mine[0]?.clientName).toBe('Payment Test Client');
+    expect(mine[0]?.shipmentNumber).not.toBeNull();
   });
 });
