@@ -2,6 +2,8 @@ import type {
   AdditionalCharge,
   Adjustment,
   BillableExpense,
+  ClientPayment,
+  ClientPaymentSummary,
   Commission,
   CommissionComputation,
   CreateAdjustmentInput,
@@ -14,6 +16,7 @@ import type {
   GasRateContext,
   GrossProfit,
   Page,
+  RecordClientPaymentInput,
   RuleCoverageReport,
   Shipment,
   ShipmentStatus,
@@ -39,6 +42,8 @@ export const shipmentKeys = {
   billableExpenses: (id: string) => ['shipments', id, 'billable-expenses'] as const,
   additionalCharges: (id: string) => ['shipments', id, 'additional-charges'] as const,
   companyExpenses: (id: string) => ['shipments', id, 'company-expenses'] as const,
+  /** What the client has paid, and what is still outstanding. */
+  payments: (id: string) => ['shipments', id, 'payments'] as const,
   grossProfit: (id: string) => ['shipments', id, 'gross-profit'] as const,
   commissions: (id: string) => ['shipments', id, 'commissions'] as const,
   crewPay: (id: string) => ['shipments', id, 'crew-pay'] as const,
@@ -200,6 +205,34 @@ export function addCompanyPaidExpense(
 
 export function removeCompanyPaidExpense(id: string, expenseId: string): Promise<void> {
   return apiFetch<void>(`/shipments/${id}/company-expenses/${expenseId}`, { method: 'DELETE' });
+}
+
+/**
+ * Money received from the client for this trip.
+ *
+ * `amountDue`, `balance` and the payment status all arrive computed, like every
+ * other figure here. The balance in particular is what somebody quotes to a
+ * client down the phone, so it is derived on the server — from the same
+ * function that answers what the trip is worth in the P&L — and never by
+ * subtracting two strings in a component.
+ */
+export function getClientPayments(id: string): Promise<ClientPaymentSummary> {
+  return apiFetch<ClientPaymentSummary>(`/shipments/${id}/payments`);
+}
+
+export function recordClientPayment(
+  id: string,
+  input: RecordClientPaymentInput,
+): Promise<ClientPayment> {
+  return apiFetch<ClientPayment>(`/shipments/${id}/payments`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+/** A refund or a bounced check: the removal of a receipt that did not happen. */
+export function removeClientPayment(id: string, paymentId: string): Promise<void> {
+  return apiFetch<void>(`/shipments/${id}/payments/${paymentId}`, { method: 'DELETE' });
 }
 
 export function getGrossProfit(id: string): Promise<GrossProfit> {

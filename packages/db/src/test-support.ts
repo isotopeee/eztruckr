@@ -38,6 +38,8 @@ const CLEANUP_ORDER = [
   'payout_line',
   'payout_run',
   'additional_charge',
+  // Before receipt and shipment, both of which it references.
+  'client_payment',
   'billable_expense',
   // Was missing entirely, so `itest-` rows accumulated from the phase that
   // introduced it. Noticed because it now references payee, which cannot be

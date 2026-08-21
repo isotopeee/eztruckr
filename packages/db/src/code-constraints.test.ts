@@ -7,6 +7,7 @@ import {
   LiquidationHistoryAction,
   LiquidationStatus,
   PayeeType,
+  PaymentMethod,
   PayoutRunStatus,
   SettlementStatus,
   ShipmentStatus,
@@ -68,6 +69,14 @@ const EXPECTED: ReadonlyArray<{ constraint: string; codes: readonly number[] }> 
   {
     constraint: 'settlement_disbursement_mode_code_valid',
     codes: Object.values(DisbursementMode),
+  },
+  // A SEPARATE SET FROM THE TWO ABOVE, and it has to be read back separately:
+  // the first three codes agree with DisbursementMode and the fourth, CHECK,
+  // exists only on money coming in. Sharing the entry would let one of them be
+  // widened while the other quietly was not.
+  {
+    constraint: 'client_payment_method_code_valid',
+    codes: Object.values(PaymentMethod),
   },
   { constraint: 'adjustment_direction_code_valid', codes: Object.values(AdjustmentDirection) },
   { constraint: 'commission_role_is_a_crew_role', codes: Object.values(CrewRole) },
@@ -162,6 +171,7 @@ describe('database CHECK constraints match the TypeScript code sets', () => {
       'settlement.status',
       'allowance.disbursementMode',
       'settlement.disbursementMode',
+      'client_payment.paymentMethod',
       'adjustment.direction',
       'commission.role',
       'commission.appliedMethod',
@@ -198,13 +208,13 @@ describe('createdBy stays mandatory in the database', () => {
          AND conname LIKE '%_created_by_required'
     `;
 
-    // 30 business tables, minus user and user_profile. The most recent is
-    // allowance_request; before it, staff_invitation.
+    // 31 business tables, minus user and user_profile. The most recent is
+    // client_payment; before it, allowance_request.
     //
     // Bumping this number is the intended way to add a table — the assertion
     // exists so that forgetting the CHECK fails here rather than surfacing
     // years later as a row nobody can attribute.
-    expect(rows).toHaveLength(28);
+    expect(rows).toHaveLength(29);
     expect(rows.some((row) => row.conname.startsWith('user_'))).toBe(false);
   });
 });

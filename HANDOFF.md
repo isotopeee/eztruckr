@@ -48,9 +48,9 @@ Ports are deliberately non-standard: postgres **5433**, minio **9010/9011**, api
 - **Derived, not stored**: `recognisedCost`, `commissionsStale`, `totalAdvanced`, `grossProfit`,
   crew-pay net.
 
-**Counts (verified live):** 33 tables (30 business + 3 Better Auth), 28 `_created_by_required`,
-30 `_soft_delete_consistent`, 25 partial uniques, 9 payout triggers, 11 functions, 72
-column comments, 188 `uuid` columns, **8 migrations**. `code-constraints.test.ts` asserts
+**Counts (verified live):** 34 tables (31 business + 3 Better Auth), 29 `_created_by_required`,
+31 `_soft_delete_consistent`, 25 partial uniques, 9 payout triggers, 11 functions, 76
+column comments, 194 `uuid` columns, **9 migrations**. `code-constraints.test.ts` asserts
 the table count and reads every code CHECK back out of the catalog, so both a new table and a
 code appended without a migration fail there rather than at the first write.
 
@@ -93,6 +93,7 @@ Shipment ──┬── Liquidation (one per CUSTODIAN) ──┬── Liquida
            ├── BillableExpense      rebilled to the client → revenue
            ├── CompanyPaidExpense   the company paid directly → cost
            ├── AdditionalCharge     fee with no cost → revenue
+           ├── ClientPayment        money in from the client → NOT revenue
            ├── Commission           frozen, self-verifying
            └── Adjustment           manual ± to crew pay, with a reason
 ```
@@ -149,6 +150,46 @@ exists. `allowance` gained no column; the join is `allowance_request.allowanceId
 billable expense is revenue whose cost lands wherever the money left, so counting both
 double-counts; an adjustment is never an edit to a `Commission`, which states its own arithmetic
 so a voucher is re-derivable a year later.
+
+### What the client has paid
+
+**A `ClientPayment` is the mirror of an `Allowance`, and is not revenue.** Revenue is recognised
+when the trip runs; this is its COLLECTION. Counting a payment as income double-counts the freight
+and makes a trip's profit depend on how fast the client's accounts payable department moves —
+`grossProfitSchema` names it among the deliberate absences, beside the allowance and the gas
+deduction.
+
+- **One row per payment, never an `amountPaid` field.** A downpayment at booking and the balance
+  thirty days later are two movements; a field would be overwritten by the second and the first
+  would lose its date, method and check number. The same argument that keeps `totalAdvanced`
+  derived.
+- **What is owed is derived, by the same function gross profit uses.** `shipmentRevenue()` is the
+  one place that says `netRate + billableExpenses + additionalCharges`, so an invoice chased on one
+  figure and a margin reported on another cannot happen. `client-payments.test.ts` asserts
+  `amountDue === grossProfit.revenue` against the other service rather than against a literal.
+- **`PaymentStatus` is a string union, not a code set** — the `RemovalOutcome` rule: a code set is
+  a SMALLINT with a CHECK behind it, and this is never written to a column. **Nothing received is
+  checked first**, so an unbilled trip reports UNPAID rather than "paid in full" beside its zero
+  balance. **OVERPAID is reported, not refused**: one check applied to the wrong trip is real, and
+  what is owed moves on its own as charges are recorded.
+- **A payment may be recorded at ANY status, CLOSED included** — the deliberate difference from an
+  allowance, which a closed trip refuses. Thirty- and sixty-day terms mean the check routinely
+  arrives after the crew were paid and the trip closed, so refusing it would make the LAST payment
+  on every trip the one that cannot be recorded. Symmetrically, **closing does not require the
+  client to have paid**: `assertReadyToClose` asks about the crew's cash and deliberately not the
+  client's, or a crew payout would wait on somebody else's accounts payable.
+- **`PaymentMethod` is its own code set, not `DisbursementMode` widened.** The first three codes
+  agree; the fourth, CHECK, is how a Philippine corporate client settles a hauling invoice.
+  Folding it into BANK_TRANSFER means a check number in a field labelled "transaction reference",
+  and widening the shared set would say a crew allowance may be released by check.
+- **A refund and a bounced check are the removal of the row**, not a negative one — the soft delete
+  already records who reversed it and when. `client_payment_amount_positive` backs it up.
+- **No payer column and no denormalised `clientId`.** The trip names its client, and the composite
+  key `Allowance` uses would have frozen it — a trip filed under the wrong client stays correctable
+  until it is liquidated, deliberately.
+- **Crew see none of it**, by absence from the read list rather than by redaction, and a payment's
+  proof is likewise absent from `ATTACHMENT_INCLUDE` — but present in `referenceCount`, or the
+  orphan sweep would hard-delete it. That asymmetry is the point and is commented on both.
 
 **`BillableExpense` and `CompanyPaidExpense` carry the same fields**, `isCommissionable` aside —
 one act of spending seen from two sides. Both resolve the payee rule through
@@ -655,6 +696,14 @@ under _The cash trail of a trip_; the two calls worth restating are **approve-as
 smaller release is a decline, not an approval) and **proof required for transfer and e-wallet**,
 which is the first rule in this codebase to demand an attachment — justified because the ask and
 the payment are made by different people.
+
+**12** — client payments: what has actually been collected for a trip. One new table, one new code
+set, and nothing in the P&L reads either — the design notes are under _What the client has paid_.
+The refactor it forced is the useful part: `shipmentRevenue()` now states the revenue sum once for
+both the margin and the invoice, and `repeatedReferenceNumbers()` states the duplicate-reference
+rule once for both allowances and payments. Fixed in passing: `ReceiptsService.referenceCount`
+omitted `company_paid_expense`, so the orphan sweep could hard-delete a receipt a live expense was
+still showing.
 
 ---
 

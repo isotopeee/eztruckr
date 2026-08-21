@@ -5,6 +5,8 @@ import { CommissionCoverageService } from '../commission/commission-coverage.ser
 import { CommissionController } from '../commission/commission.controller';
 import { CommissionService } from '../commission/commission.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { ClientPaymentsController } from './client-payments.controller';
+import { ClientPaymentsService } from './client-payments.service';
 import { CompanyPaidExpensesController } from './company-paid-expenses.controller';
 import { CompanyPaidExpensesService } from './company-paid-expenses.service';
 import { GrossProfitService } from './gross-profit.service';
@@ -26,6 +28,7 @@ import { ShipmentsService } from './shipments.service';
     ShipmentsController,
     ShipmentChargesController,
     CompanyPaidExpensesController,
+    ClientPaymentsController,
     CommissionController,
     AdjustmentsController,
   ],
@@ -33,6 +36,7 @@ import { ShipmentsService } from './shipments.service';
     ShipmentsService,
     ShipmentChargesService,
     CompanyPaidExpensesService,
+    ClientPaymentsService,
     GrossProfitService,
     CommissionService,
     CommissionCoverageService,

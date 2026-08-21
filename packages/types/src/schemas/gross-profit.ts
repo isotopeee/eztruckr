@@ -59,6 +59,14 @@ import { z } from 'zod';
  *   THE SETTLEMENT VARIANCE is not a cost. It is cash moving between the
  *   company and the crew to square an advance; the cost was whatever was
  *   liquidated, which is already counted above.
+ *
+ *   A CLIENT PAYMENT is not revenue, and this is the one most likely to be
+ *   "fixed" by somebody. Revenue is recognised when the trip runs — it is the
+ *   three figures above. A `ClientPayment` is the COLLECTION of that revenue,
+ *   and adding it here would count the freight twice and make a trip's profit
+ *   depend on how quickly the client's accounts payable department moves.
+ *   `ClientPaymentSummary` is where the two are compared, and `revenue` here is
+ *   the same figure it calls `amountDue` precisely so they cannot disagree.
  */
 export const grossProfitSchema = z.object({
   shipmentId: z.string(),

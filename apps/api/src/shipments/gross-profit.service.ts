@@ -8,6 +8,7 @@ import {
   type GrossProfit,
 } from '@eztruckr/types';
 import { PrismaService } from '../prisma/prisma.service';
+import { revenueAsStrings, shipmentRevenue } from './shipment-revenue';
 import { ShipmentsService } from './shipments.service';
 
 /**
@@ -44,38 +45,29 @@ export class GrossProfitService {
   async forShipment(shipmentId: string): Promise<GrossProfit> {
     const shipment = await this.shipments.load(shipmentId);
 
-    const [billable, additional, companyPaid, commissions, liquidations, commissionsStale] =
-      await Promise.all([
-        this.prisma.client.billableExpense.findMany({
-          where: { shipmentId },
-          select: { amount: true },
-        }),
-        this.prisma.client.additionalCharge.findMany({
-          where: { shipmentId },
-          select: { amount: true },
-        }),
-        this.prisma.client.companyPaidExpense.findMany({
-          where: { shipmentId },
-          select: { amount: true },
-        }),
-        this.prisma.client.commission.findMany({
-          where: { shipmentId },
-          select: { amount: true },
-        }),
-        this.prisma.client.liquidation.findMany({
-          where: { shipmentId },
-          select: { status: true, totalLiquidated: true },
-        }),
-        this.shipments.isComputationStale(shipmentId),
-      ]);
+    const [income, companyPaid, commissions, liquidations, commissionsStale] = await Promise.all([
+      // The revenue side, computed by the one function that also answers what
+      // the CLIENT OWES — see `shipment-revenue.ts`. Every line that is
+      // rebilled is revenue here; what it COST landed either on a company-paid
+      // expense or on a liquidation line, so counting the billable amount on
+      // both sides would double the cost, not net it out.
+      shipmentRevenue(this.prisma, shipmentId, shipment.netRate),
+      this.prisma.client.companyPaidExpense.findMany({
+        where: { shipmentId },
+        select: { amount: true },
+      }),
+      this.prisma.client.commission.findMany({
+        where: { shipmentId },
+        select: { amount: true },
+      }),
+      this.prisma.client.liquidation.findMany({
+        where: { shipmentId },
+        select: { status: true, totalLiquidated: true },
+      }),
+      this.shipments.isComputationStale(shipmentId),
+    ]);
 
-    // Every line that is rebilled is revenue here; what it COST landed either
-    // on a company-paid expense or on a liquidation line, so counting the
-    // billable amount on both sides would double the cost, not net it out.
-    const billableExpenses = sum(billable.map((row) => row.amount));
-    const additionalCharges = sum(additional.map((row) => row.amount));
-    const netRate = money(shipment.netRate);
-    const revenue = netRate.add(billableExpenses).add(additionalCharges);
+    const revenue = income.revenue;
 
     // EVERY ACCOUNT, not any one of them. A trip carries one liquidation per
     // cash holder, so reading a single row counted the driver's claims and
@@ -121,10 +113,7 @@ export class GrossProfitService {
       // that makes a reader doubt the arithmetic.
       grossRate: toDecimalString(money(shipment.grossRate)),
       thirdPartyCommission: toDecimalString(money(shipment.tpcAmount)),
-      netRate: toDecimalString(netRate),
-      billableExpenses: toDecimalString(billableExpenses),
-      additionalCharges: toDecimalString(additionalCharges),
-      revenue: toDecimalString(revenue),
+      ...revenueAsStrings(income),
 
       liquidatedExpenses: toDecimalString(liquidatedExpenses),
       companyPaidExpenses: toDecimalString(companyPaidExpenses),

@@ -219,6 +219,10 @@ model User {
   additionalChargesUpdated AdditionalCharge[] @relation("AdditionalChargeUpdatedBy")
   additionalChargesDeleted AdditionalCharge[] @relation("AdditionalChargeDeletedBy")
 
+  clientPaymentsCreated ClientPayment[] @relation("ClientPaymentCreatedBy")
+  clientPaymentsUpdated ClientPayment[] @relation("ClientPaymentUpdatedBy")
+  clientPaymentsDeleted ClientPayment[] @relation("ClientPaymentDeletedBy")
+
   crewDeductionsCreated CrewDeduction[] @relation("CrewDeductionCreatedBy")
   crewDeductionsUpdated CrewDeduction[] @relation("CrewDeductionUpdatedBy")
   crewDeductionsDeleted CrewDeduction[] @relation("CrewDeductionDeletedBy")
@@ -1027,6 +1031,7 @@ model Shipment {
   billableExpenses    BillableExpense[]
   companyPaidExpenses CompanyPaidExpense[]
   additionalCharges   AdditionalCharge[]
+  clientPayments      ClientPayment[]
   commissions         Commission[]
   adjustments         Adjustment[]
   crewDeductions      CrewDeduction[]
@@ -1477,6 +1482,7 @@ model Receipt {
   companyPaidExpenses CompanyPaidExpense[]
   allowances          Allowance[]
   settlements         Settlement[]
+  clientPayments      ClientPayment[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -1743,6 +1749,100 @@ model AdditionalCharge {
   @@index([shipmentId])
   @@index([deletedAt])
   @@map("additional_charge")
+}
+
+/// ONE PAYMENT RECEIVED from the client for a trip. Many rows per shipment,
+/// never one.
+///
+/// THE MIRROR OF `Allowance`, and modelled the same way for the same reason. A
+/// trip is rarely settled in one movement: a downpayment at booking, the
+/// balance thirty days after delivery, sometimes a short payment made up later.
+/// Each is its own row with its own date, method and paper trail. There is
+/// deliberately no `amountPaid` column on the shipment for a second receipt to
+/// overwrite, which would leave the first with no record it ever happened —
+/// exactly the argument that keeps `totalAdvanced` derived.
+///
+/// NOT REVENUE. Revenue is recognised when the trip runs and is what
+/// `GrossProfit` counts: the net rate, the rebilled expenses, the extra
+/// charges. This is the COLLECTION of that revenue. Counting a payment as
+/// income would book the same peso twice and make a trip's profit depend on how
+/// fast the client's accounts payable department moves. Nothing in the P&L
+/// reads this table, and nothing should start.
+///
+/// WHAT IS OWED IS DERIVED, never stored here. `ClientPaymentSummary` computes
+/// it from the same rows gross profit reads, so an invoice and a P&L cannot
+/// disagree about what the trip was worth. A stored `amountDue` would go stale
+/// the moment a late charge was recorded, and would go stale silently.
+///
+/// NO PAYER COLUMN, deliberately. The shipment names the client it was booked
+/// for and the broker it was booked through, and a payment is against the trip.
+/// A nullable payer would be a second place the same fact lives, free to
+/// disagree with the first; a client settling somebody else's invoice is what
+/// `remarks` is for. Nor is `clientId` denormalised here: the composite-key
+/// trick `Allowance` uses would have frozen a trip's client the moment it took
+/// a payment, and correcting a trip filed under the wrong client is a thing
+/// this system deliberately allows until it is liquidated.
+///
+/// NO `receivedBy`, and this is where it differs from `Allowance` rather than
+/// copying it. A release names `releasedBy` because a voucher has to name the
+/// person who physically handed cash over — an act by a specific person, with
+/// the company's own money. A client's payment arrives; whoever keyed it in is
+/// `createdBy` and that is the whole answer. A column nobody can reliably fill
+/// defaults to the typist forever and then reads like evidence of something.
+model ClientPayment {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  shipmentId String   @db.Uuid
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  /// Strictly positive, by CHECK.
+  ///
+  /// A REFUND IS NOT A NEGATIVE PAYMENT and a dishonoured check is not either:
+  /// both are the removal of a receipt that turns out not to have happened,
+  /// which the soft delete already records with who did it and when. A signed
+  /// column would also make "how much has this trip collected" depend on which
+  /// rows somebody decided to count.
+  amount     Decimal  @db.Decimal(15, 4)
+
+  /// When the money actually reached the company, which is not when the row was
+  /// typed. A check cleared on Friday is routinely recorded on Monday, and a
+  /// payment dated the day it was entered misstates when the trip was settled.
+  receivedAt DateTime @default(now()) @db.Timestamptz(6)
+
+  /// Code set: PaymentMethod (1 CASH, 2 BANK_TRANSFER, 3 EWALLET, 4 CHECK).
+  paymentMethod Int @db.SmallInt
+
+  /// Check number, transfer reference, official receipt number.
+  ///
+  /// OPTIONAL FOR EVERY METHOD AND NEVER UNIQUE, exactly as on an allowance.
+  /// One check legitimately settles two trips and carries one number on both,
+  /// so a unique index would refuse a true record. Repetition is REPORTED by
+  /// the summary instead, which is the only way the far commoner case — the
+  /// same slip entered twice, usually on two different trips — is ever caught.
+  referenceNumber String?
+
+  /// Deposit slip, check image, remittance advice. The same table and the same
+  /// S3 pipeline as a liquidation receipt, because it is the same kind of
+  /// object and splitting it would mean two upload paths to keep in step.
+  receiptId String?  @db.Uuid
+  receipt   Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+
+  remarks String?
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?   @db.Uuid
+  createdByUser User?     @relation("ClientPaymentCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?   @db.Uuid
+  updatedByUser User?     @relation("ClientPaymentUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?   @db.Uuid
+  deletedByUser User?     @relation("ClientPaymentDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([shipmentId])
+  /// Receivables are read by date — what came in this week, what is still out.
+  @@index([receivedAt])
+  @@index([deletedAt])
+  @@map("client_payment")
 }
 
 // ---------------------------------------------------------------------------

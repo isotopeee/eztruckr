@@ -43,7 +43,19 @@ export interface UploadedFile {
   buffer: Buffer;
 }
 
-/** Everything a receipt can hang off, for the read check. */
+/**
+ * Everything a receipt can hang off THAT WOULD LET A CREW MEMBER READ IT.
+ *
+ * DELIBERATELY NOT THE SAME LIST AS `referenceCount`, and the asymmetry is the
+ * point. That one asks "is anything still using this", so it must name every
+ * table with a `receiptId` or the sweep deletes a live attachment. This one
+ * asks "does working the trip entitle you to see this", and a `client_payment`
+ * is absent on purpose: a deposit slip for what the company charged its client
+ * is not something a crew member has a claim to because they drove the load.
+ * With no entry here, such a receipt has no shipment to widen access through
+ * and the crew branch refuses it — which is the right answer, arrived at
+ * because the row is missing rather than in spite of it.
+ */
 const ATTACHMENT_INCLUDE = {
   liquidationLines: { select: { liquidation: { select: { shipmentId: true } } } },
   billableExpenses: { select: { shipmentId: true } },
@@ -278,14 +290,21 @@ export class ReceiptsService {
    */
   private async referenceCount(receiptId: string): Promise<number> {
     return withDeleted(async () => {
-      const [lines, expenses, allowances, settlements] = await Promise.all([
+      // EVERY TABLE WITH A `receiptId`, and the list is checked against the
+      // schema rather than remembered: a column missing from here is a receipt
+      // this sweep will call an orphan and hard-delete out from under a row
+      // that is still showing it. `company_paid_expense` was missing and is the
+      // reason this is now spelled out; `client_payment` is the newest.
+      const [lines, billable, companyPaid, allowances, settlements, payments] = await Promise.all([
         this.prisma.client.liquidationLine.count({ where: { receiptId } }),
         this.prisma.client.billableExpense.count({ where: { receiptId } }),
+        this.prisma.client.companyPaidExpense.count({ where: { receiptId } }),
         this.prisma.client.allowance.count({ where: { receiptId } }),
         this.prisma.client.settlement.count({ where: { receiptId } }),
+        this.prisma.client.clientPayment.count({ where: { receiptId } }),
       ]);
 
-      return lines + expenses + allowances + settlements;
+      return lines + billable + companyPaid + allowances + settlements + payments;
     });
   }
 

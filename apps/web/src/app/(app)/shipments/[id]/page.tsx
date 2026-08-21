@@ -15,6 +15,7 @@ import { CrewAndLifecycleCard } from '@/components/shipments/crew-and-lifecycle-
 import { GasRateOverrideCard } from '@/components/shipments/gas-rate-override-card';
 import { GrossProfitCard } from '@/components/shipments/gross-profit-card';
 import { LiquidationCard } from '@/components/shipments/liquidation-card';
+import { PaymentsCard } from '@/components/shipments/payments-card';
 import { RateChainCard } from '@/components/shipments/rate-chain-card';
 import { SettlementCard } from '@/components/shipments/settlement-card';
 import { Badge } from '@/components/ui/badge';
@@ -119,6 +120,12 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
           <ChargesCard shipment={data} />
           <CompanyExpensesCard shipment={data} />
           <GrossProfitCard shipment={data} />
+          {/* Last, and after the profit rather than beside the charges: the
+              order is what the trip earned, then what has actually come in.
+              A payment is the collection of that revenue and never part of
+              it — putting the two cards next to each other is what would
+              invite somebody to add one to the other. */}
+          <PaymentsCard shipment={data} />
         </>
       )}
     </div>
