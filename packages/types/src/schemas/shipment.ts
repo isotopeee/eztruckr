@@ -47,11 +47,17 @@ const chargeLineFields = {
  * a date on one screen and without them on the other, and the reason was
  * nothing better than which card was written first.
  *
- * WHOSE MONEY WENT OUT is `liquidationId`, and it decides whether this row is a
- * cost as well as revenue. Null means the office paid, so the row is the whole
- * record of the disbursement. Set means the crew paid out of cash they hold and
- * the cost arrives as a liquidation line on that account — counting it here too
+ * WHOSE MONEY WENT OUT is `liquidationLineId`, and it decides whether this row
+ * is a cost as well as revenue. Null means the office paid, so the row is the
+ * whole record of the disbursement. Set means the crew paid out of cash they
+ * hold, and it names the CLAIM the cost is counted on — counting it here too
  * would book the same peso twice. See `grossProfitSchema`.
+ *
+ * THE CLAIM, NOT JUST THE ACCOUNT. Naming the account alone said the cost would
+ * turn up somewhere on it and left nobody able to say where, so a rebill could
+ * defer to an account that never filed the expense and the cost went uncounted
+ * in both places. `liquidationId` is still returned — it is what the account is
+ * — but it is derived from the claim, never sent.
  *
  * HOW MUCH COMES BACK is `billedAmount`, which need not be the whole `amount`.
  * Recovery is routinely partial, and the two are separate figures so a
@@ -62,8 +68,29 @@ const chargeLineFields = {
 export const billableExpenseSchema = auditFieldsSchema.extend({
   id: z.string(),
   shipmentId: z.string(),
-  /** The account carrying the cost, or null when the company fronted it. */
+  /** The claim carrying the cost, or null when the company fronted it. */
+  liquidationLineId: z.string().nullable(),
+  /** The account that claim is on. Derived from it; moves with it. */
   liquidationId: z.string().nullable(),
+  /** What the CLAIM says was spent. Null when there is no claim. */
+  liquidationLineAmount: z.string().nullable(),
+  /**
+   * `amount` less `liquidationLineAmount` — this row's account of what was
+   * spent against the crew's. Null when there is no claim to differ from.
+   *
+   * POSITIVE means the rebill says more was paid than the claim records;
+   * negative means less. NOT AN ERROR EITHER WAY, which is why it is displayed
+   * rather than refused: rebilling part of a larger claim is an ordinary thing
+   * to do, and so is a claim later corrected upward. What it is not is
+   * invisible — the P&L costs the CLAIM, so a rebill quietly disagreeing with
+   * the figure that is actually counted is worth seeing.
+   *
+   * Derived on read, never stored, so it cannot drift from the two figures it
+   * comes from. Computed here rather than in the browser for the same reason
+   * every other figure is: one definition, and no float arithmetic on decimal
+   * strings.
+   */
+  liquidationVariance: z.string().nullable(),
   /**
    * Who is answerable for that account, for a screen that has to say which one.
    *
@@ -138,15 +165,19 @@ export const createBillableExpenseSchema = z.object({
    */
   payeeId: idSchema.nullish().transform((value) => value ?? null),
   /**
-   * The account that will carry the cost, when the crew paid for this out of
-   * cash they hold. Omitted or null means the office paid it.
+   * The CLAIM already carrying this cost, when the crew paid for it out of cash
+   * they hold. Omitted or null means the office paid it.
+   *
+   * THE CLAIM RATHER THAN THE ACCOUNT, so the cost this row defers to is one
+   * that demonstrably exists. The account is derived from it server-side and
+   * never sent: two fields that must agree are two fields that can disagree.
    *
    * DEFAULTING TO NULL IS DEFAULTING TO A COST, which is the direction that
    * fails loudly: an office-paid rebill wrongly linked drops a real cost off
    * the trip and nothing on any screen looks wrong, whereas a crew-paid one
    * left unlinked shows the same expense twice where somebody is reading both.
    */
-  liquidationId: idSchema.nullish().transform((value) => value ?? null),
+  liquidationLineId: idSchema.nullish().transform((value) => value ?? null),
   referenceNumber: optionalText(80),
   receiptId: idSchema.nullish().transform((value) => value ?? null),
 });

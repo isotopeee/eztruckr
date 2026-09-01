@@ -480,7 +480,7 @@ describe('a billable expense carries what a company-paid one does', () => {
         spentAt: '2026-08-11T00:00:00.000Z',
         isCommissionable: false,
         payeeId,
-        liquidationId: null,
+        liquidationLineId: null,
         referenceNumber: 'SI-88214',
         receiptId: null,
       }),
@@ -507,7 +507,7 @@ describe('a billable expense carries what a company-paid one does', () => {
           spentAt: '2026-08-11T00:00:00.000Z',
           isCommissionable: false,
           payeeId: null,
-          liquidationId: null,
+          liquidationLineId: null,
           referenceNumber: null,
           receiptId: null,
         }),
@@ -535,7 +535,7 @@ describe('a billable expense carries what a company-paid one does', () => {
         spentAt: '2026-08-11T00:00:00.000Z',
         isCommissionable: false,
         payeeId: null,
-        liquidationId: null,
+        liquidationLineId: null,
         referenceNumber: null,
         receiptId: null,
       }),
@@ -594,7 +594,7 @@ describe('gross profit', () => {
       }),
     );
 
-    await act(async () =>
+    const line = await act(async () =>
       prisma.liquidationLine.create({
         data: {
           liquidationId: liquidation.id,
@@ -611,7 +611,11 @@ describe('gross profit', () => {
       data: { totalLiquidated: amount },
     });
 
-    return liquidation.id;
+    // BOTH, because the two are wanted for different things: the account for
+    // the approval and multi-custodian cases, the claim for anything rebilling
+    // it. Returning only the account is what the rebill link used to settle
+    // for, and the reason a cost could be deferred to nothing at all.
+    return { id: liquidation.id, lineId: line.id };
   }
 
   /** Approved with the history the database's CHECKs require to believe it. */
@@ -647,7 +651,7 @@ describe('gross profit', () => {
    */
   async function addBillableExpense(
     amount: string,
-    liquidationId: string | null = null,
+    liquidationLineId: string | null = null,
     billedAmount?: string,
   ) {
     return act(() =>
@@ -659,7 +663,7 @@ describe('gross profit', () => {
         spentAt: '2026-08-11T00:00:00.000Z',
         isCommissionable: false,
         payeeId,
-        liquidationId,
+        liquidationLineId,
         referenceNumber: null,
         receiptId: null,
       }),
@@ -679,7 +683,7 @@ describe('gross profit', () => {
         spentAt: '2026-08-11T00:00:00.000Z',
         isCommissionable: false,
         payeeId: null,
-        liquidationId: null,
+        liquidationLineId: null,
         referenceNumber: null,
         receiptId: null,
       }),
@@ -787,9 +791,10 @@ describe('gross profit', () => {
   it('does not charge a rebill the crew paid for — its cost is on the liquidation', async () => {
     if (!available) return;
 
-    // The crew's account, carrying the permit they paid for out of their cash.
+    // The crew's account, carrying the claim for the permit they paid for out
+    // of their cash. The rebill defers to that CLAIM, not merely the account.
     const account = await addLiquidation(staffId, '2000.0000');
-    await addBillableExpense('2000.00', account);
+    await addBillableExpense('2000.00', account.lineId);
 
     const crewPaid = await grossProfits.forShipment(SHIPMENT_ID);
 
@@ -834,7 +839,7 @@ describe('gross profit', () => {
     expect(miscounted.cost).toBe('4000.00');
 
     await act(() =>
-      charges.updateBillableExpense(SHIPMENT_ID, rebill.id, { liquidationId: account }),
+      charges.updateBillableExpense(SHIPMENT_ID, rebill.id, { liquidationLineId: account.lineId }),
     );
 
     const corrected = await grossProfits.forShipment(SHIPMENT_ID);
@@ -900,7 +905,7 @@ describe('gross profit', () => {
     if (!available) return;
 
     const account = await addLiquidation(staffId, '2000.0000');
-    await addBillableExpense('2000.00', account, '1500.00');
+    await addBillableExpense('2000.00', account.lineId, '1500.00');
 
     const profit = await grossProfits.forShipment(SHIPMENT_ID);
 
@@ -940,7 +945,97 @@ describe('gross profit', () => {
     expect(costlier.grossProfit).toBe('44100.00');
   });
 
-  it('refuses a rebill pinned to an account on another trip', async () => {
+  /**
+   * WHAT THIS ROW SAYS WAS PAID, AGAINST WHAT THE TRIP IS ACTUALLY COSTED.
+   *
+   * A linked rebill carries its own `amount`, and the P&L ignores it — the cost
+   * is the claim's. Nothing forces the two to agree, and there are honest
+   * reasons they would not: rebilling part of a larger claim, or a claim
+   * corrected after the rebill was written. So the gap is reported rather than
+   * refused, and reported from the server because deriving it in the browser
+   * would mean float arithmetic on two decimal strings.
+   */
+  it('reports the gap between what a rebill says was paid and what its claim says', async () => {
+    if (!available) return;
+
+    const account = await addLiquidation(staffId, '2000.0000');
+
+    // The rebill claims ₱2,400 was paid; the crew's claim says ₱2,000.
+    const over = await addBillableExpense('2400.00', account.lineId);
+
+    expect(over.liquidationLineAmount).toBe('2000');
+    expect(over.liquidationVariance).toBe('400.00');
+
+    // Sign says which way round it is, so a reader is never left guessing.
+    await act(() => charges.updateBillableExpense(SHIPMENT_ID, over.id, { amount: '1500.00' }));
+
+    const rows = await charges.listBillableExpenses(SHIPMENT_ID);
+    const under = rows.find((row) => row.id === over.id);
+
+    expect(under?.liquidationVariance).toBe('-500.00');
+
+    // And the P&L is unmoved by any of it: cost is the claim, both times.
+    const profit = await grossProfits.forShipment(SHIPMENT_ID);
+
+    expect(profit.liquidatedExpenses).toBe('2000.00');
+    expect(profit.cost).toBe('2000.00');
+  });
+
+  it('has no variance to report when the office paid', async () => {
+    if (!available) return;
+
+    const officePaid = await addBillableExpense('2000.00');
+
+    // Not "0.00" — there is no claim to differ from, and a zero here would
+    // read as a rebill that happens to agree with one.
+    expect(officePaid.liquidationLineAmount).toBeNull();
+    expect(officePaid.liquidationVariance).toBeNull();
+  });
+
+  /**
+   * ONE REBILL PER CLAIM. Two rebills against one claim invoice the client
+   * twice for a cost the crew incurred once — and neither of them is a cost, so
+   * the trip books the double revenue at full margin. Refused by a partial
+   * unique index; checked in the service so the user hears about the field
+   * rather than the index.
+   */
+  it('refuses a second rebill against a claim already rebilled', async () => {
+    if (!available) return;
+
+    const account = await addLiquidation(staffId, '2000.0000');
+    await addBillableExpense('2000.00', account.lineId);
+
+    const errors = await validationErrors(() => addBillableExpense('2000.00', account.lineId));
+
+    expect(errors).toEqual([expect.objectContaining({ path: 'liquidationLineId' })]);
+
+    // The trip is unchanged — one rebill, one claim, counted once each.
+    const profit = await grossProfits.forShipment(SHIPMENT_ID);
+
+    expect(profit.billableExpenses).toBe('2000.00');
+    expect(profit.cost).toBe('2000.00');
+  });
+
+  /**
+   * A rebill that leaves a claim frees it, so the corrected rebill that
+   * replaces it can take the same one. That is why the unique index is partial
+   * — a full one would make the first mistake permanent.
+   */
+  it('frees the claim when the rebill against it is removed', async () => {
+    if (!available) return;
+
+    const account = await addLiquidation(staffId, '2000.0000');
+    const first = await addBillableExpense('2000.00', account.lineId);
+
+    await act(() => charges.removeBillableExpense(SHIPMENT_ID, first.id));
+
+    const replacement = await addBillableExpense('2000.00', account.lineId, '1500.00');
+
+    expect(replacement.liquidationLineId).toBe(account.lineId);
+    expect(replacement.liquidationId).toBe(account.id);
+  });
+
+  it('refuses a rebill pinned to a claim on another trip', async () => {
     if (!available) return;
 
     const otherShipment = await act(async () =>
@@ -968,13 +1063,25 @@ describe('gross profit', () => {
       }),
     );
 
+    const foreignLine = await act(async () =>
+      prisma.liquidationLine.create({
+        data: {
+          liquidationId: foreign.id,
+          expenseCategoryId: fuelCategoryId,
+          payeeId,
+          amount: '2000.0000',
+          spentAt: new Date('2026-08-11T00:00:00.000Z'),
+        },
+      }),
+    );
+
     // Asserted on the FIELD, not just on "Validation failed". The composite key
     // would refuse this row anyway; the reason the service checks first is to
     // say which input was wrong, and a test that only proved it threw would
     // pass just as happily on a raw constraint violation surfacing as a 500.
-    const errors = await validationErrors(() => addBillableExpense('2000.00', foreign.id));
+    const errors = await validationErrors(() => addBillableExpense('2000.00', foreignLine.id));
 
-    expect(errors).toEqual([expect.objectContaining({ path: 'liquidationId' })]);
+    expect(errors).toEqual([expect.objectContaining({ path: 'liquidationLineId' })]);
   });
 
   /**
@@ -1074,7 +1181,7 @@ describe('gross profit', () => {
 
     // One custodian squaring up settles nothing on its own: the driver's
     // paperwork says nothing about the cash still out on the other account.
-    await approve(unassigned);
+    await approve(unassigned.id);
 
     const halfApproved = await grossProfits.forShipment(SHIPMENT_ID);
 
@@ -1082,7 +1189,7 @@ describe('gross profit', () => {
     expect(halfApproved.costsRecognised).toBe(false);
     expect(halfApproved.isProvisional).toBe(true);
 
-    await approve(driver);
+    await approve(driver.id);
 
     const settled = await grossProfits.forShipment(SHIPMENT_ID);
 

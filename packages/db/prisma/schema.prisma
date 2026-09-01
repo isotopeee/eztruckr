@@ -1499,6 +1499,15 @@ model LiquidationLine {
   deletedBy     String?   @db.Uuid
   deletedByUser User?     @relation("LiquidationLineDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
+  /// Rebills of THIS claim. At most one live row, by partial unique index on
+  /// `billable_expense.liquidationLineId` — see the note there.
+  billableExpenses BillableExpense[]
+
+  /// Lets a child row reference (liquidationLineId, liquidationId) as one
+  /// foreign key, the same trick `liquidation` plays with (id, shipmentId).
+  /// It is what makes "a rebill's claim is on the account the rebill names"
+  /// structural rather than something a service remembers to check.
+  @@unique([id, liquidationId], map: "liquidation_line_id_liquidation_key")
   @@index([liquidationId])
   @@index([expenseCategoryId])
   @@index([payeeId])
@@ -1678,6 +1687,29 @@ model BillableExpense {
   /// to check it against.
   liquidationId String?      @db.Uuid
   liquidation   Liquidation? @relation(fields: [liquidationId, shipmentId], references: [id, shipmentId], onDelete: Restrict)
+
+  /// WHICH CLAIM ON THAT ACCOUNT this rebills.
+  ///
+  /// Naming the account alone said the cost would arrive somewhere on it, and
+  /// left nobody able to say where. A rebill could point at an account that
+  /// never filed the expense at all, and then the cost was counted in neither
+  /// place — not on the rebill, which had deferred to the account, and not on
+  /// the account, which had nothing on it. Pointing at the CLAIM makes the cost
+  /// it defers to a row that demonstrably exists.
+  ///
+  /// SET EXACTLY WHEN `liquidationId` IS, enforced by
+  /// `billable_expense_liquidation_line_paired`. The account is kept beside the
+  /// line rather than reached through it because the composite keys need it in
+  /// two places at once: (liquidationLineId, liquidationId) proves the claim is
+  /// on the account, and (liquidationId, shipmentId) proves the account is on
+  /// this trip. Together they make "the claim is on an account on this trip" a
+  /// fact the database checks.
+  ///
+  /// AT MOST ONE LIVE REBILL PER CLAIM, by partial unique index — the same rule
+  /// as `receiptId`, and for a sharper reason: two rebills against one claim
+  /// invoice the client twice for a cost the crew incurred once.
+  liquidationLineId String?          @db.Uuid
+  liquidationLine   LiquidationLine? @relation(fields: [liquidationLineId, liquidationId], references: [id, liquidationId], onDelete: Restrict)
 
   /// Optional, unlike the amount: a category and a payee say more than a
   /// description box repeating the category's own name. Rows written before

@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@eztruckr/db';
+import { money, toDecimalString } from '@eztruckr/types';
 import type {
   AdditionalCharge,
   BillableExpense,
@@ -72,7 +73,7 @@ export class ShipmentChargesService {
     await this.assertCategoryExists(input.expenseCategoryId);
     await this.assertPayeeExists(input.payeeId);
     await this.assertReceiptExists(input.receiptId);
-    await this.assertLiquidationOnShipment(shipmentId, input.liquidationId);
+    const liquidationId = await this.resolveClaim(shipmentId, input.liquidationLineId, null);
 
     const row = await this.prisma.client.billableExpense.create({
       data: {
@@ -86,7 +87,11 @@ export class ShipmentChargesService {
         spentAt: new Date(input.spentAt),
         isCommissionable: input.isCommissionable,
         payeeId: input.payeeId,
-        liquidationId: input.liquidationId,
+        liquidationLineId: input.liquidationLineId,
+        // DERIVED, never sent. The pair has to agree for two composite keys to
+        // hold, and the only way to guarantee that is for one of them to be
+        // read off the other rather than accepted from a caller.
+        liquidationId,
         payeeRequired: await this.freezePayeeRule(input.expenseCategoryId, input.payeeId),
         referenceNumber: input.referenceNumber,
         receiptId: input.receiptId,
@@ -107,7 +112,7 @@ export class ShipmentChargesService {
     await this.assertCategoryExists(input.expenseCategoryId);
     await this.assertPayeeExists(input.payeeId);
     await this.assertReceiptExists(input.receiptId);
-    await this.assertLiquidationOnShipment(shipmentId, input.liquidationId);
+    const liquidationId = await this.resolveClaim(shipmentId, input.liquidationLineId, id);
 
     // Resolved against the row as the patch will leave it, not against the
     // request: changing only the category, or clearing only the payee, are the
@@ -134,8 +139,12 @@ export class ShipmentChargesService {
           : { isCommissionable: input.isCommissionable }),
         ...(input.payeeId === undefined ? {} : { payeeId: input.payeeId }),
         // `undefined` leaves the link alone; an explicit null moves the cost
-        // back onto this row, which is a real edit and not a no-op.
-        ...(input.liquidationId === undefined ? {} : { liquidationId: input.liquidationId }),
+        // back onto this row, which is a real edit and not a no-op. The two
+        // columns move TOGETHER or the paired CHECK refuses the row — which is
+        // the point of deriving one from the other rather than patching both.
+        ...(input.liquidationLineId === undefined
+          ? {}
+          : { liquidationLineId: input.liquidationLineId, liquidationId }),
         ...(input.referenceNumber === undefined ? {} : { referenceNumber: input.referenceNumber }),
         ...(input.receiptId === undefined ? {} : { receiptId: input.receiptId }),
         // Re-stamped: the row's frozen rule follows its category.
@@ -281,35 +290,62 @@ export class ShipmentChargesService {
   }
 
   /**
-   * The account named must be one on THIS trip.
+   * The claim a rebill defers its cost to, and the account it turns out to be
+   * on.
    *
-   * The composite foreign key already refuses the cross-trip case, so this is
-   * not the thing standing between a bad id and the database — it is what turns
-   * a raw constraint violation into a message naming the field. Without it,
-   * pointing a rebill at another trip's account fails as a 500 that reads like
-   * the server broke, on a mistake a user can actually make.
+   * RETURNS THE ACCOUNT because the caller stores both, and reading it off the
+   * claim is the only way the two are guaranteed to agree — the composite keys
+   * are only as good as the pair written into the row.
    *
-   * SOFT-DELETED ACCOUNTS ARE NOT FOUND, because the extension's default filter
-   * applies here: a deleted account carries no lines, so a rebill hung off it
-   * would claim its cost lives somewhere that no longer counts anything.
+   * THE THREE FOREIGN KEYS AND CHECKS BEHIND THIS ALREADY REFUSE EVERY CASE it
+   * rejects, and that is not a reason to drop it. A constraint violation
+   * surfaces as a 500 that reads like the server broke; these are mistakes a
+   * user makes with a stale screen open, and they deserve a message naming the
+   * field. The database stays the thing that is actually load-bearing.
+   *
+   * SOFT-DELETED CLAIMS ARE NOT FOUND, because the extension's default filter
+   * applies: deferring a cost to a claim that no longer counts would leave it
+   * counted nowhere, which is the exact hole the claim reference closed.
    */
-  private async assertLiquidationOnShipment(
+  private async resolveClaim(
     shipmentId: string,
-    liquidationId: string | null | undefined,
-  ): Promise<void> {
-    if (!liquidationId) return;
+    liquidationLineId: string | null | undefined,
+    /** The row being patched, so its own claim is not read as a clash. */
+    excludeBillableExpenseId: string | null,
+  ): Promise<string | null> {
+    if (!liquidationLineId) return null;
 
-    const found = await this.prisma.client.liquidation.findFirst({
-      where: { id: liquidationId, shipmentId },
+    const line = await this.prisma.client.liquidationLine.findFirst({
+      where: { id: liquidationLineId, liquidation: { shipmentId } },
+      select: { id: true, liquidationId: true },
+    });
+
+    if (!line) {
+      throw badRequest(
+        'liquidationLineId',
+        `No liquidation line ${liquidationLineId} on shipment ${shipmentId}`,
+      );
+    }
+
+    // ONE REBILL PER CLAIM, checked here so the partial unique index does not
+    // have to be the thing the user hears from. Two rebills against one claim
+    // invoice the client twice for a cost the crew incurred once.
+    const alreadyRebilled = await this.prisma.client.billableExpense.findFirst({
+      where: {
+        liquidationLineId,
+        ...(excludeBillableExpenseId === null ? {} : { id: { not: excludeBillableExpenseId } }),
+      },
       select: { id: true },
     });
 
-    if (!found) {
+    if (alreadyRebilled) {
       throw badRequest(
-        'liquidationId',
-        `No liquidation ${liquidationId} on shipment ${shipmentId}`,
+        'liquidationLineId',
+        `Liquidation line ${liquidationLineId} is already rebilled by another billable expense`,
       );
     }
+
+    return line.liquidationId;
   }
 
   private async assertReceiptExists(receiptId: string | null | undefined): Promise<void> {
@@ -382,6 +418,10 @@ const BILLABLE_INCLUDE = {
   liquidation: {
     select: { sequence: true, custodian: { select: { firstName: true, lastName: true } } },
   },
+  // What the CREW said this cost, so the row can be compared against the figure
+  // the P&L actually charges. The two are free to differ and the difference is
+  // reported rather than refused — see `liquidationVariance`.
+  liquidationLine: { select: { amount: true } },
 } satisfies Prisma.BillableExpenseInclude;
 
 type BillableExpenseRow = Prisma.BillableExpenseGetPayload<{ include: typeof BILLABLE_INCLUDE }>;
@@ -404,9 +444,18 @@ function toBillableExpense(row: BillableExpenseRow): BillableExpense {
     payeeId: row.payeeId,
     payeeName: row.payee?.name ?? null,
     payeeRequired: row.payeeRequired,
+    liquidationLineId: row.liquidationLineId,
     liquidationId: row.liquidationId,
     liquidationCustodianName: custodianName(row.liquidation?.custodian),
     liquidationSequence: row.liquidation?.sequence ?? null,
+    liquidationLineAmount: row.liquidationLine?.amount.toString() ?? null,
+    // Both figures or neither — a variance measured against a claim that is not
+    // there would come out as the whole amount, which reads as a discrepancy
+    // rather than as the office simply having paid.
+    liquidationVariance:
+      row.liquidationLine == null
+        ? null
+        : toDecimalString(money(row.amount).subtract(money(row.liquidationLine.amount))),
     referenceNumber: row.referenceNumber,
     receiptId: row.receiptId,
     receiptFileName: row.receipt?.fileName ?? null,

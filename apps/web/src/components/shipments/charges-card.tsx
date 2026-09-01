@@ -58,10 +58,17 @@ import { useCurrentUser } from '@/lib/use-current-user';
  *
  * WHOSE MONEY PAID FOR A REBILL is asked on the form, because the P&L cannot
  * work it out afterwards. Office-paid means this row is the only record of the
- * money leaving, so it is a cost of the trip; crew-paid means the cost arrives
- * on their liquidation and counting it here too would charge the trip twice for
- * one permit. Both mistakes look like an ordinary number on a screen, which is
- * why the question is asked rather than defaulted.
+ * money leaving, so it is a cost of the trip; crew-paid means picking the CLAIM
+ * on their liquidation that already carries the cost, and counting it here too
+ * would charge the trip twice for one permit. Both mistakes look like an
+ * ordinary number on a screen, which is why the question is asked rather than
+ * defaulted.
+ *
+ * THE CLAIM, NOT THE ACCOUNT, because an account is a promise and a claim is a
+ * row. Offering the account let somebody defer a cost to a liquidation that
+ * never filed the expense, and the cost was then counted nowhere at all —
+ * billed to the client at what read as full margin. Claims already rebilled are
+ * not offered, since one claim rebilled twice invoices the client twice.
  *
  * TWO DIFFERENT FORMS, for the same reason. A billable expense is money that
  * actually left somebody's hands, so it asks everything the company-paid card
@@ -109,6 +116,17 @@ function reportFailure(error: unknown) {
  */
 const OFFICE_PAID = 'office';
 
+/**
+ * Whether a decimal string is zero, without parsing it as a number.
+ *
+ * "0.00", "0" and "-0.00" are all the same nothing, and the point of comparing
+ * this way is that the browser never turns a money string into a float — the
+ * same rule the API follows on the other side of the wire.
+ */
+function isZeroMoney(value: string): boolean {
+  return /^-?0*(\.0*)?$/.test(value.trim());
+}
+
 function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: boolean }) {
   const invalidate = useChargeInvalidation();
 
@@ -124,8 +142,8 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
     isCommissionable: false,
     receiptId: null as string | null,
     receiptFileName: null as string | null,
-    /** '' is the office. An account id is the crew member holding the cash. */
-    liquidationId: '',
+    /** '' is the office. Otherwise the id of the claim carrying the cost. */
+    liquidationLineId: '',
   });
 
   const lines = useQuery({
@@ -146,6 +164,37 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
     queryFn: () => listShipmentLiquidations(shipment.id),
     enabled: canEdit,
   });
+
+  /**
+   * Every crew claim on this trip that is free to be rebilled, flattened out of
+   * the accounts and labelled with the one they sit on.
+   *
+   * ALREADY-REBILLED CLAIMS ARE FILTERED OUT, because offering one is offering
+   * to invoice the client twice for a cost the crew incurred once. The API
+   * refuses it and the database refuses it — this only keeps the impossible
+   * choice off the screen. The claim being EDITED is exempt, or reopening a
+   * saved row would find its own claim missing from the list.
+   */
+  const rebilledClaimIds = new Set(
+    (lines.data ?? [])
+      .map((line) => line.liquidationLineId)
+      .filter((value): value is string => value !== null),
+  );
+
+  const claims = (accounts.data ?? []).flatMap((account) =>
+    account.lines
+      .filter((line) => !rebilledClaimIds.has(line.id))
+      .map((line) => ({
+        id: line.id,
+        amount: line.amount,
+        expenseCategoryName: line.expenseCategoryName,
+        account: liquidationAccountLabel(
+          account.custodianName,
+          account.sequence,
+          account.description,
+        ),
+      })),
+  );
 
   // The chosen category decides whether a payee is required. Unknown until one
   // is picked, and false rather than true then: the field should not demand
@@ -170,7 +219,7 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
         isCommissionable: draft.isCommissionable,
         // '' is "nothing chosen"; the wire wants null.
         payeeId: draft.payeeId || null,
-        liquidationId: draft.liquidationId || null,
+        liquidationLineId: draft.liquidationLineId || null,
         referenceNumber: draft.referenceNumber || null,
         receiptId: draft.receiptId,
       }),
@@ -186,6 +235,10 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
         description: '',
         amount: '',
         billedAmount: '',
+        // Cleared, unlike the category and payee: a claim can be rebilled once,
+        // so keeping it would leave the form pointing at the one option the
+        // next line certainly cannot use.
+        liquidationLineId: '',
         referenceNumber: '',
         receiptId: null,
         receiptFileName: null,
@@ -237,10 +290,24 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                       whole cost on the trip. An account with nobody's name on
                       it is the one delivery opens when none was ever made. */}
                   <p className="text-muted-foreground text-xs">
-                    {line.liquidationId
-                      ? `Paid from crew cash · ${line.liquidationCustodianName ?? 'unassigned account'} · liquidated, not a cost here`
+                    {line.liquidationLineId
+                      ? `Rebills a crew claim · ${line.liquidationCustodianName ?? 'unassigned account'} · counted there, not here`
                       : 'Paid by the office · a cost of this trip'}
                   </p>
+                  {/* THE FIGURE THE P&L ACTUALLY CHARGES IS THE CLAIM'S, so a
+                      rebill disagreeing with it is worth seeing: this row says
+                      one thing was paid and the trip is costed another. Shown
+                      only when they differ, and worded as a comparison rather
+                      than an error — rebilling part of a larger claim is an
+                      ordinary thing to do, and the amber is there to make it a
+                      deliberate choice rather than a silent one. */}
+                  {line.liquidationVariance !== null && !isZeroMoney(line.liquidationVariance) ? (
+                    <p className="text-xs text-amber-600">
+                      {formatMoney(line.liquidationVariance.replace('-', ''))}{' '}
+                      {line.liquidationVariance.startsWith('-') ? 'less' : 'more'} than the claim,
+                      which is {formatMoney(line.liquidationLineAmount ?? '0')}
+                    </p>
+                  ) : null}
                   {line.receiptFileName ? (
                     <p className="text-muted-foreground flex items-center gap-1 text-xs">
                       <Paperclip className="h-3 w-3" />
@@ -270,7 +337,7 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                       description={
                         line.isCommissionable
                           ? 'It stops being rebilled to the client, and the crew’s commission base drops by its amount — recompute commissions afterwards.'
-                          : line.liquidationId
+                          : line.liquidationLineId
                             ? 'It stops being rebilled to the client. The cost stays on the crew’s liquidation, which this line never counted.'
                             : 'It stops being rebilled to the client and leaves the trip’s revenue and cost.'
                       }
@@ -406,11 +473,11 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                 Paid from
               </Label>
               <Select
-                value={draft.liquidationId || OFFICE_PAID}
+                value={draft.liquidationLineId || OFFICE_PAID}
                 onValueChange={(value) =>
                   setDraft((current) => ({
                     ...current,
-                    liquidationId: value === OFFICE_PAID ? '' : value,
+                    liquidationLineId: value === OFFICE_PAID ? '' : value,
                   }))
                 }
               >
@@ -419,21 +486,20 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={OFFICE_PAID}>Company funds</SelectItem>
-                  {(accounts.data ?? []).map((account) => (
-                    <SelectItem key={account.id} value={account.id}>
-                      {liquidationAccountLabel(
-                        account.custodianName,
-                        account.sequence,
-                        account.description,
-                      )}
+                  {claims.map((claim) => (
+                    <SelectItem key={claim.id} value={claim.id}>
+                      {claim.account} · {claim.expenseCategoryName ?? 'Expense'} ·{' '}
+                      {formatMoney(claim.amount)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-xs">
-                {draft.liquidationId
-                  ? 'The cost is counted on that liquidation, so this line is revenue only.'
-                  : 'This line is the record of the money leaving, so it counts as a cost too.'}
+                {draft.liquidationLineId
+                  ? 'The cost is already counted on that claim, so this line is revenue only.'
+                  : claims.length === 0
+                    ? 'This line is the record of the money leaving, so it counts as a cost too. No crew claims are available to rebill on this trip.'
+                    : 'This line is the record of the money leaving, so it counts as a cost too.'}
               </p>
             </div>
 

@@ -402,11 +402,10 @@ export class LiquidationService {
       this.prisma.client.allowanceRequest.count({
         where: { liquidationId, status: AllowanceRequestStatus.PENDING },
       }),
-      // A REBILL POINTING HERE IS A COST THIS ACCOUNT PROMISED TO CARRY. Gross
-      // profit reads that link and skips the rebill precisely because the cost
-      // is expected on this account's lines, so removing the account underneath
-      // it would drop the cost out of BOTH places — the account is gone, and
-      // the rebill still says somebody else counted it. Unlike the soft-deleted
+      // A REBILL POINTING HERE HAS DEFERRED ITS COST TO THIS ACCOUNT. Largely
+      // belt-and-braces since a rebill must now name a CLAIM, and an account
+      // with claims on it is already refused a line above — but it is the check
+      // that states the rule, and it costs one count. Unlike the soft-deleted
       // rows above, the foreign key does not save us: a soft delete is an
       // UPDATE, and no constraint fires.
       this.prisma.client.billableExpense.count({ where: { liquidationId } }),
@@ -500,6 +499,21 @@ export class LiquidationService {
     return toLine(row);
   }
 
+  /**
+   * Removing a claim, unless a rebill is standing on it.
+   *
+   * A BILLABLE EXPENSE POINTING AT THIS CLAIM HAS DEFERRED ITS COST TO IT.
+   * Gross profit skips such a rebill precisely because the cost is counted
+   * here, so soft-deleting the claim underneath it drops the cost out of both
+   * places at once — and leaves the client still being billed for it, at what
+   * then looks like full margin. The foreign key does not save us: a soft
+   * delete is an UPDATE and no constraint fires on it.
+   *
+   * The rebill is named rather than cascaded. Which of the two is wrong is not
+   * something this can know — the claim may be a duplicate, or the rebill may
+   * belong on a different claim — and quietly unlinking the rebill would turn
+   * the crew's expense into an office-paid one behind somebody's back.
+   */
   async removeLine(
     liquidationId: string,
     lineId: string,
@@ -508,6 +522,17 @@ export class LiquidationService {
     const liquidation = await this.loadEditable(liquidationId, user);
 
     await this.assertLineBelongs(liquidation.id, lineId);
+
+    const rebill = await this.prisma.client.billableExpense.findFirst({
+      where: { liquidationLineId: lineId },
+      select: { id: true },
+    });
+
+    if (rebill) {
+      throw new ConflictException(
+        `This claimed expense is rebilled to the client by billable expense ${rebill.id}. Remove or re-point that rebill first.`,
+      );
+    }
 
     await this.prisma.client.liquidationLine.softDelete({ id: lineId });
     await this.refreshTotals(liquidationId);
