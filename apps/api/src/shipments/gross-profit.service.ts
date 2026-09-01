@@ -47,10 +47,9 @@ export class GrossProfitService {
 
     const [income, companyPaid, commissions, liquidations, commissionsStale] = await Promise.all([
       // The revenue side, computed by the one function that also answers what
-      // the CLIENT OWES — see `shipment-revenue.ts`. Every line that is
-      // rebilled is revenue here; what it COST landed either on a company-paid
-      // expense or on a liquidation line, so counting the billable amount on
-      // both sides would double the cost, not net it out.
+      // the CLIENT OWES — see `shipment-revenue.ts`. It also supplies the
+      // billable total the cost side reads below, so the same rows are summed
+      // once and the two halves cannot disagree about them.
       shipmentRevenue(this.prisma, shipmentId, shipment.netRate),
       this.prisma.client.companyPaidExpense.findMany({
         where: { shipmentId },
@@ -93,7 +92,30 @@ export class GrossProfitService {
 
     const companyPaidExpenses = sum(companyPaid.map((row) => row.amount));
     const crewCommissions = sum(commissions.map((row) => row.amount));
-    const cost = liquidatedExpenses.add(companyPaidExpenses).add(crewCommissions);
+
+    // A REBILL IS A COST ONLY IF THE OFFICE PAID FOR IT, which is what
+    // `BillableExpense.liquidationId` records.
+    //
+    // With no link the row IS the disbursement — it carries the date, payee,
+    // reference and receipt that `CompanyPaidExpense` and `LiquidationLine`
+    // carry, refused by the same shape of payee CHECK, and nothing else in the
+    // database has the permit on it. Counting it only as revenue booked the
+    // recovery and dropped the spending, so every such rebill added its whole
+    // amount to profit.
+    //
+    // With a link the crew paid for it out of cash they hold, and the cost
+    // arrives as a liquidation line inside `liquidatedExpenses` above. Charging
+    // it here as well would count the same permit twice, which is the mirror of
+    // the first mistake and just as invisible on the screen.
+    //
+    // Charged at the billed amount, because one column is what the row stores —
+    // a company-paid rebill nets to zero by construction rather than by two
+    // separately-maintained figures happening to agree. If a rebill ever needs
+    // a markup, that is a second column on the row, not a second sum here.
+    const cost = liquidatedExpenses
+      .add(companyPaidExpenses)
+      .add(income.companyPaidBillableExpenses)
+      .add(crewCommissions);
 
     const grossProfit = revenue.subtract(cost);
 
@@ -117,6 +139,7 @@ export class GrossProfitService {
 
       liquidatedExpenses: toDecimalString(liquidatedExpenses),
       companyPaidExpenses: toDecimalString(companyPaidExpenses),
+      companyPaidBillableExpenses: toDecimalString(income.companyPaidBillableExpenses),
       crewCommissions: toDecimalString(crewCommissions),
       cost: toDecimalString(cost),
 

@@ -142,6 +142,16 @@ export function GrossProfitCard({ shipment }: { shipment: Shipment }) {
               note={data.costsRecognised ? undefined : 'running, not yet approved'}
             />
             <Line label="Company-paid" amount={data.companyPaidExpenses} />
+            {/* Only the rebills the OFFICE paid for. The crew-paid ones are
+                already inside the liquidated figure above, so this line is
+                smaller than its revenue twin whenever the crew fronted any —
+                and the note is what stops that gap reading as a rounding
+                error or a duplicate. */}
+            <Line
+              label="Billable expenses"
+              amount={data.companyPaidBillableExpenses}
+              note="company-paid only — the crew’s are in their liquidation"
+            />
             <Line
               label="Crew commissions"
               amount={data.crewCommissions}

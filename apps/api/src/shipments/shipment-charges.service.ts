@@ -72,6 +72,7 @@ export class ShipmentChargesService {
     await this.assertCategoryExists(input.expenseCategoryId);
     await this.assertPayeeExists(input.payeeId);
     await this.assertReceiptExists(input.receiptId);
+    await this.assertLiquidationOnShipment(shipmentId, input.liquidationId);
 
     const row = await this.prisma.client.billableExpense.create({
       data: {
@@ -82,6 +83,7 @@ export class ShipmentChargesService {
         spentAt: new Date(input.spentAt),
         isCommissionable: input.isCommissionable,
         payeeId: input.payeeId,
+        liquidationId: input.liquidationId,
         payeeRequired: await this.freezePayeeRule(input.expenseCategoryId, input.payeeId),
         referenceNumber: input.referenceNumber,
         receiptId: input.receiptId,
@@ -102,6 +104,7 @@ export class ShipmentChargesService {
     await this.assertCategoryExists(input.expenseCategoryId);
     await this.assertPayeeExists(input.payeeId);
     await this.assertReceiptExists(input.receiptId);
+    await this.assertLiquidationOnShipment(shipmentId, input.liquidationId);
 
     // Resolved against the row as the patch will leave it, not against the
     // request: changing only the category, or clearing only the payee, are the
@@ -121,6 +124,9 @@ export class ShipmentChargesService {
           ? {}
           : { isCommissionable: input.isCommissionable }),
         ...(input.payeeId === undefined ? {} : { payeeId: input.payeeId }),
+        // `undefined` leaves the link alone; an explicit null moves the cost
+        // back onto this row, which is a real edit and not a no-op.
+        ...(input.liquidationId === undefined ? {} : { liquidationId: input.liquidationId }),
         ...(input.referenceNumber === undefined ? {} : { referenceNumber: input.referenceNumber }),
         ...(input.receiptId === undefined ? {} : { receiptId: input.receiptId }),
         // Re-stamped: the row's frozen rule follows its category.
@@ -265,6 +271,38 @@ export class ShipmentChargesService {
     }
   }
 
+  /**
+   * The account named must be one on THIS trip.
+   *
+   * The composite foreign key already refuses the cross-trip case, so this is
+   * not the thing standing between a bad id and the database — it is what turns
+   * a raw constraint violation into a message naming the field. Without it,
+   * pointing a rebill at another trip's account fails as a 500 that reads like
+   * the server broke, on a mistake a user can actually make.
+   *
+   * SOFT-DELETED ACCOUNTS ARE NOT FOUND, because the extension's default filter
+   * applies here: a deleted account carries no lines, so a rebill hung off it
+   * would claim its cost lives somewhere that no longer counts anything.
+   */
+  private async assertLiquidationOnShipment(
+    shipmentId: string,
+    liquidationId: string | null | undefined,
+  ): Promise<void> {
+    if (!liquidationId) return;
+
+    const found = await this.prisma.client.liquidation.findFirst({
+      where: { id: liquidationId, shipmentId },
+      select: { id: true },
+    });
+
+    if (!found) {
+      throw badRequest(
+        'liquidationId',
+        `No liquidation ${liquidationId} on shipment ${shipmentId}`,
+      );
+    }
+  }
+
   private async assertReceiptExists(receiptId: string | null | undefined): Promise<void> {
     if (!receiptId) return;
 
@@ -332,6 +370,7 @@ const BILLABLE_INCLUDE = {
   expenseCategory: { select: { name: true } },
   payee: { select: { name: true } },
   receipt: { select: { fileName: true } },
+  liquidation: { select: { custodian: { select: { firstName: true, lastName: true } } } },
 } satisfies Prisma.BillableExpenseInclude;
 
 type BillableExpenseRow = Prisma.BillableExpenseGetPayload<{ include: typeof BILLABLE_INCLUDE }>;
@@ -353,11 +392,27 @@ function toBillableExpense(row: BillableExpenseRow): BillableExpense {
     payeeId: row.payeeId,
     payeeName: row.payee?.name ?? null,
     payeeRequired: row.payeeRequired,
+    liquidationId: row.liquidationId,
+    liquidationCustodianName: custodianName(row.liquidation?.custodian),
     referenceNumber: row.referenceNumber,
     receiptId: row.receiptId,
     receiptFileName: row.receipt?.fileName ?? null,
     ...auditFields(row),
   };
+}
+
+/**
+ * Null for an account with nobody's name on it, which is a real state rather
+ * than missing data: a trip's first liquidation is opened at booking, before
+ * anyone is assigned to drive it. `liquidationId` is what says whether there is
+ * an account at all — this only ever says who answers for one.
+ */
+function custodianName(
+  custodian: { firstName: string; lastName: string } | null | undefined,
+): string | null {
+  if (!custodian) return null;
+
+  return `${custodian.firstName} ${custodian.lastName}`;
 }
 
 function toAdditionalCharge(

@@ -1328,6 +1328,9 @@ model Liquidation {
   allowances        Allowance[]
   allowanceRequests AllowanceRequest[]
   settlements       Settlement[]
+  /// Rebills whose cost this account carries — revenue on the shipment, cost
+  /// through `lines` above rather than on the rebill row itself.
+  billableExpenses  BillableExpense[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -1612,6 +1615,23 @@ model BillableExpense {
   expenseCategoryId String?          @db.Uuid
   expenseCategory   ExpenseCategory? @relation(fields: [expenseCategoryId], references: [id], onDelete: Restrict)
 
+  /// WHICH ACCOUNT CARRIES THE COST, when the crew paid for this out of cash
+  /// they are holding rather than the office paying it directly.
+  ///
+  /// This is the one field that decides whether the row is a cost. NULL means
+  /// the company fronted the money, so this row IS the disbursement — a cost on
+  /// the trip as well as revenue, and nothing else records it. SET means the
+  /// cost arrives as a liquidation line on that account, and counting this row
+  /// too would book the same peso twice.
+  ///
+  /// The pair (liquidationId, shipmentId) is a single composite foreign key to
+  /// `liquidation (id, shipmentId)` — the same key `allowance` uses and for the
+  /// same reason: a rebill can never be pinned to an account on a DIFFERENT
+  /// trip. Nullable, so the key goes unchecked exactly when there is no account
+  /// to check it against.
+  liquidationId String?      @db.Uuid
+  liquidation   Liquidation? @relation(fields: [liquidationId, shipmentId], references: [id, shipmentId], onDelete: Restrict)
+
   /// Optional, unlike the amount: a category and a payee say more than a
   /// description box repeating the category's own name. Rows written before
   /// there was a category to pick still carry theirs.
@@ -1652,6 +1672,7 @@ model BillableExpense {
   deletedByUser User?     @relation("BillableExpenseDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
 
   @@index([shipmentId])
+  @@index([liquidationId])
   @@index([expenseCategoryId])
   @@index([payeeId])
   @@index([deletedAt])

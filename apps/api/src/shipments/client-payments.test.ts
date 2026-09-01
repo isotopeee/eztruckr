@@ -277,6 +277,7 @@ describe('what the trip is owed', () => {
         spentAt: '2026-08-11T00:00:00.000Z',
         isCommissionable: false,
         payeeId: null,
+        liquidationId: null,
         referenceNumber: null,
         receiptId: null,
       }),

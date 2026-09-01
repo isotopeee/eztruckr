@@ -46,10 +46,27 @@ const chargeLineFields = {
  * and an amount — which meant the same permit fee was recorded with a payee and
  * a date on one screen and without them on the other, and the reason was
  * nothing better than which card was written first.
+ *
+ * WHOSE MONEY WENT OUT is `liquidationId`, and it decides whether this row is a
+ * cost as well as revenue. Null means the office paid, so the row is the whole
+ * record of the disbursement. Set means the crew paid out of cash they hold and
+ * the cost arrives as a liquidation line on that account — counting it here too
+ * would book the same peso twice. See `grossProfitSchema`.
  */
 export const billableExpenseSchema = auditFieldsSchema.extend({
   id: z.string(),
   shipmentId: z.string(),
+  /** The account carrying the cost, or null when the company fronted it. */
+  liquidationId: z.string().nullable(),
+  /**
+   * Who is answerable for that account, for a screen that has to say which one.
+   *
+   * Null both when there is no link at all and when the account is the trip's
+   * own — the one opened at booking before anybody was assigned — so a reader
+   * must check `liquidationId` to tell "company-paid" from "nobody's name on it
+   * yet". The two are different facts and neither is inferable from this name.
+   */
+  liquidationCustodianName: z.string().nullable(),
   expenseCategoryId: z.string().nullable(),
   expenseCategoryName: z.string().nullable(),
   description: z.string().nullable(),
@@ -88,6 +105,16 @@ export const createBillableExpenseSchema = z.object({
    * note on `createLiquidationLineSchema.payeeId`.
    */
   payeeId: idSchema.nullish().transform((value) => value ?? null),
+  /**
+   * The account that will carry the cost, when the crew paid for this out of
+   * cash they hold. Omitted or null means the office paid it.
+   *
+   * DEFAULTING TO NULL IS DEFAULTING TO A COST, which is the direction that
+   * fails loudly: an office-paid rebill wrongly linked drops a real cost off
+   * the trip and nothing on any screen looks wrong, whereas a crew-paid one
+   * left unlinked shows the same expense twice where somebody is reading both.
+   */
+  liquidationId: idSchema.nullish().transform((value) => value ?? null),
   referenceNumber: optionalText(80),
   receiptId: idSchema.nullish().transform((value) => value ?? null),
 });

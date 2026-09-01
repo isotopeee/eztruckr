@@ -23,6 +23,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { ApiError, apiFetch } from '@/lib/api-client';
 import { formatDate, formatMoney } from '@/lib/format';
+import { liquidationKeys, listShipmentLiquidations } from '@/lib/liquidation-api';
 import {
   addAdditionalCharge,
   addBillableExpense,
@@ -38,10 +39,17 @@ import { useCurrentUser } from '@/lib/use-current-user';
  * Billable expenses and additional charges.
  *
  * Kept as two lists rather than one with a type column, because they are two
- * different things to the P&L: a billable expense is a cost the company
- * fronted and recovers, so it lands on both sides; an additional charge has no
+ * different things to the P&L: a billable expense is a cost somebody paid and
+ * the client repays, so it lands on both sides; an additional charge has no
  * underlying cost and is pure revenue. Merging them in the UI would invite
  * merging them in the reporting.
+ *
+ * WHOSE MONEY PAID FOR A REBILL is asked on the form, because the P&L cannot
+ * work it out afterwards. Office-paid means this row is the only record of the
+ * money leaving, so it is a cost of the trip; crew-paid means the cost arrives
+ * on their liquidation and counting it here too would charge the trip twice for
+ * one permit. Both mistakes look like an ordinary number on a screen, which is
+ * why the question is asked rather than defaulted.
  *
  * TWO DIFFERENT FORMS, for the same reason. A billable expense is money that
  * actually left somebody's hands, so it asks everything the company-paid card
@@ -81,6 +89,14 @@ function reportFailure(error: unknown) {
   });
 }
 
+/**
+ * The "no account" option, because a Radix `SelectItem` cannot carry an empty
+ * value — it uses '' internally for "nothing selected". A sentinel keeps the
+ * office the visibly chosen answer rather than a blank trigger that reads as an
+ * unanswered question.
+ */
+const OFFICE_PAID = 'office';
+
 function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: boolean }) {
   const invalidate = useChargeInvalidation();
 
@@ -94,6 +110,8 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
     isCommissionable: false,
     receiptId: null as string | null,
     receiptFileName: null as string | null,
+    /** '' is the office. An account id is the crew member holding the cash. */
+    liquidationId: '',
   });
 
   const lines = useQuery({
@@ -104,6 +122,14 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
   const categories = useQuery({
     queryKey: ['expense-categories', 'selectable'],
     queryFn: () => apiFetch<Page<ExpenseCategory>>('/expense-categories?pageSize=200'),
+    enabled: canEdit,
+  });
+
+  // The cash accounts open on this trip — one per custodian, plus the trip's
+  // own, which exists from booking and has nobody's name on it yet.
+  const accounts = useQuery({
+    queryKey: liquidationKeys.liquidations(shipment.id),
+    queryFn: () => listShipmentLiquidations(shipment.id),
     enabled: canEdit,
   });
 
@@ -126,13 +152,17 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
         isCommissionable: draft.isCommissionable,
         // '' is "nothing chosen"; the wire wants null.
         payeeId: draft.payeeId || null,
+        liquidationId: draft.liquidationId || null,
         referenceNumber: draft.referenceNumber || null,
         receiptId: draft.receiptId,
       }),
     onSuccess: () => {
-      // The category, payee and date are kept, as on the company-paid card:
-      // several lines off one supplier invoice is the common case, and
-      // re-picking the same vendor each time invites a wrong one.
+      // The category, payee, date and who paid are kept, as on the company-paid
+      // card: several lines off one supplier invoice is the common case, and
+      // re-picking the same vendor each time invites a wrong one. Who paid is
+      // kept for a stronger reason — a run of lines off one crew member's cash
+      // is exactly the case where re-picking each time gets one of them wrong,
+      // and a wrong one there is a cost counted twice or not at all.
       setDraft((current) => ({
         ...current,
         description: '',
@@ -159,8 +189,9 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
       <CardHeader>
         <CardTitle className="text-base">Billable expenses</CardTitle>
         <CardDescription>
-          Costs the company fronted and recovers from the client — permits, crane hire, port
-          charges. Revenue and cost both.
+          Costs fronted and recovered from the client — permits, crane hire, port charges. Revenue
+          always; a cost of the trip too when the office paid, rather than the crew out of cash they
+          are holding.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -181,6 +212,16 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                     {line.description && line.expenseCategoryName ? ` · ${line.description}` : ''}
                     {line.referenceNumber ? ` · Ref ${line.referenceNumber}` : ''}
                   </p>
+                  {/* Stated on every row, both ways round. Showing a badge only
+                      for the crew-paid ones would make "office-paid" and "we
+                      forgot to say" look identical, and those two differ by a
+                      whole cost on the trip. The account with nobody's name on
+                      it is the trip's own, opened at booking. */}
+                  <p className="text-muted-foreground text-xs">
+                    {line.liquidationId
+                      ? `Paid from crew cash · ${line.liquidationCustodianName ?? 'unassigned account'} · liquidated, not a cost here`
+                      : 'Paid by the office · a cost of this trip'}
+                  </p>
                   {line.receiptFileName ? (
                     <p className="text-muted-foreground flex items-center gap-1 text-xs">
                       <Paperclip className="h-3 w-3" />
@@ -198,7 +239,9 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                       description={
                         line.isCommissionable
                           ? 'It stops being rebilled to the client, and the crew’s commission base drops by its amount — recompute commissions afterwards.'
-                          : 'It stops being rebilled to the client and leaves the trip’s revenue and cost.'
+                          : line.liquidationId
+                            ? 'It stops being rebilled to the client. The cost stays on the crew’s liquidation, which this line never counted.'
+                            : 'It stops being rebilled to the client and leaves the trip’s revenue and cost.'
                       }
                       pending={remove.isPending}
                       onConfirm={() => remove.mutate(line.id)}
@@ -294,6 +337,46 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
               required={payeeRequired}
               onChange={(payeeId) => setDraft((current) => ({ ...current, payeeId }))}
             />
+
+            {/* WHOSE MONEY, which is the field that decides whether this line
+                is a cost. Defaulted to the office rather than left empty: a
+                required question with no answer blocks a form somebody is
+                trying to finish, and of the two possible wrong defaults this is
+                the one that fails loudly — an office-paid rebill wrongly linked
+                drops a real cost off the trip with nothing on screen looking
+                wrong, whereas a crew-paid one left here shows the same expense
+                twice to anyone reading both cards. */}
+            <div className="space-y-1">
+              <Label htmlFor="billable-paid-from" className="text-xs">
+                Paid from
+              </Label>
+              <Select
+                value={draft.liquidationId || OFFICE_PAID}
+                onValueChange={(value) =>
+                  setDraft((current) => ({
+                    ...current,
+                    liquidationId: value === OFFICE_PAID ? '' : value,
+                  }))
+                }
+              >
+                <SelectTrigger id="billable-paid-from">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={OFFICE_PAID}>Company funds</SelectItem>
+                  {(accounts.data ?? []).map((account) => (
+                    <SelectItem key={account.id} value={account.id}>
+                      {account.custodianName ?? 'Unassigned account'}’s cash
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-xs">
+                {draft.liquidationId
+                  ? 'The cost is counted on that liquidation, so this line is revenue only.'
+                  : 'This line is the record of the money leaving, so it counts as a cost too.'}
+              </p>
+            </div>
 
             <div className="space-y-1">
               <Label htmlFor="billable-reference" className="text-xs">

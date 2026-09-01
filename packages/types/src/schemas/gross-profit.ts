@@ -14,9 +14,8 @@ import { z } from 'zod';
  *   netRate           the freight, after the broker's cut. `grossRate` and
  *                     `thirdPartyCommission` are shown so the cut is visible
  *                     as a line rather than silently netted away.
- *   billableExpenses  costs the company fronted and rebills. Revenue here; the
- *                     matching cost lands wherever the money actually went
- *                     out — a company-paid expense, or a liquidation line.
+ *   billableExpenses  costs the company fronted and rebills. EVERY rebill is
+ *                     revenue, whoever paid for it — see below.
  *   additionalCharges fees with no underlying cost at all.
  *
  * WHAT COUNTS AS COST
@@ -26,7 +25,38 @@ import { z } from 'zod';
  *                       approved. `costsRecognised` says which it is.
  *   companyPaidExpenses what the office spent directly. Real from the moment
  *                       it is recorded — the money has already gone.
+ *   companyPaidBillableExpenses
+ *                       the rebills the office paid for — the subset of
+ *                       `billableExpenses` above with no liquidation on them.
  *   crewCommissions     the crew's pay, from the computed rows.
+ *
+ * A REBILL IS ALWAYS REVENUE, AND A COST ONLY IF THE OFFICE PAID FOR IT. Which
+ * one it is, is recorded per row on `BillableExpense.liquidationId` rather than
+ * assumed for the whole table, because both readings are wrong for half of it:
+ *
+ *   NO LINK — the office paid. The row IS the disbursement, carrying the date,
+ *   payee, reference and receipt a company-paid expense carries and refused by
+ *   the same shape of payee CHECK, and nothing else in the database records the
+ *   permit. Counting it only as revenue books the recovery and drops the
+ *   spending, so the rebill arrives as free money.
+ *
+ *   LINKED — the crew paid, out of cash they hold. The cost arrives as a
+ *   liquidation line and is already inside `liquidatedExpenses`. Counting it
+ *   here as well charges the trip twice for one permit.
+ *
+ * Neither mistake shows on the screen as anything but a number, which is why
+ * the distinction is a column and not a convention.
+ *
+ * `cost` therefore decomposes as `liquidatedExpenses + companyPaidExpenses +
+ * companyPaidBillableExpenses + crewCommissions`, and a company-paid rebill
+ * nets to zero against its own revenue line by construction — both sides read
+ * the one `amount` column. Should a rebill ever need a markup, the answer is a
+ * second column on the row, not a second total here.
+ *
+ * THE CREW-PAID PORTION IS NOT RETURNED as a figure of its own, deliberately.
+ * It is `billableExpenses - companyPaidBillableExpenses`, it is already counted
+ * inside `liquidatedExpenses`, and a field sitting in the cost section that
+ * must NOT be added to the cost is a trap somebody eventually falls into.
  *
  * THE RUNNING LIQUIDATION COUNTS, AND THAT IS NOT THE RECOGNITION RULE BEING
  * BROKEN. Two different questions are being asked in two places, and each
@@ -82,6 +112,12 @@ export const grossProfitSchema = z.object({
   // --- cost ----------------------------------------------------------------
   liquidatedExpenses: z.string(),
   companyPaidExpenses: z.string(),
+  /**
+   * The rebills the office paid for, and so the part of `billableExpenses`
+   * that is a cost. The rest was paid out of the crew's cash and is already
+   * inside `liquidatedExpenses` — never add both.
+   */
+  companyPaidBillableExpenses: z.string(),
   crewCommissions: z.string(),
   cost: z.string(),
 

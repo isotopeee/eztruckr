@@ -66,6 +66,14 @@ const ABSENT_ID = 'ffffffff-0000-7000-8000-000000000000';
 
 const SHIPMENT_ID = id('shipment');
 
+/**
+ * A second trip, used only to prove a rebill cannot be pinned to an account on
+ * one. Declared here rather than inside the test because `cleanup` has to know
+ * about it: a shipment left behind holds the client its FK points at, and the
+ * next run fails on a name collision instead of on whatever it was testing.
+ */
+const OTHER_SHIPMENT_ID = id('other-shipment');
+
 const CHILD_TABLES = [
   'company_paid_expense',
   'billable_expense',
@@ -75,19 +83,25 @@ const CHILD_TABLES = [
 ];
 
 async function cleanup(): Promise<void> {
+  const shipmentIds = [SHIPMENT_ID, OTHER_SHIPMENT_ID].map((value) => `'${value}'`).join(', ');
+
   await withTriggersSuspended(prisma, async (tx) => {
     // Matched through the shipment, not by id prefix: the services generate
     // cuids, so nothing below the shipment carries the prefix.
     await tx.$executeRawUnsafe(
-      `DELETE FROM "liquidation_line" WHERE "liquidationId" IN (SELECT id FROM "liquidation" WHERE "shipmentId" = '${SHIPMENT_ID}')`,
+      `DELETE FROM "liquidation_line" WHERE "liquidationId" IN (SELECT id FROM "liquidation" WHERE "shipmentId" IN (${shipmentIds}))`,
     );
-    await tx.$executeRawUnsafe(`DELETE FROM "liquidation" WHERE "shipmentId" = '${SHIPMENT_ID}'`);
 
+    // The charge tables go BEFORE the liquidations they may point at: a
+    // billable expense carries the account that owes its cost, and the
+    // composite key refuses to let the account go first.
     for (const table of CHILD_TABLES) {
-      await tx.$executeRawUnsafe(`DELETE FROM "${table}" WHERE "shipmentId" = '${SHIPMENT_ID}'`);
+      await tx.$executeRawUnsafe(`DELETE FROM "${table}" WHERE "shipmentId" IN (${shipmentIds})`);
     }
 
-    await tx.$executeRawUnsafe(`DELETE FROM "shipment" WHERE id = '${SHIPMENT_ID}'`);
+    await tx.$executeRawUnsafe(`DELETE FROM "liquidation" WHERE "shipmentId" IN (${shipmentIds})`);
+
+    await tx.$executeRawUnsafe(`DELETE FROM "shipment" WHERE id IN (${shipmentIds})`);
     await tx.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
     await tx.$executeRawUnsafe(`DELETE FROM "expense_category" WHERE id::text LIKE '${PREFIX}%'`);
   });
@@ -466,6 +480,7 @@ describe('a billable expense carries what a company-paid one does', () => {
         spentAt: '2026-08-11T00:00:00.000Z',
         isCommissionable: false,
         payeeId,
+        liquidationId: null,
         referenceNumber: 'SI-88214',
         receiptId: null,
       }),
@@ -492,6 +507,7 @@ describe('a billable expense carries what a company-paid one does', () => {
           spentAt: '2026-08-11T00:00:00.000Z',
           isCommissionable: false,
           payeeId: null,
+          liquidationId: null,
           referenceNumber: null,
           receiptId: null,
         }),
@@ -519,6 +535,7 @@ describe('a billable expense carries what a company-paid one does', () => {
         spentAt: '2026-08-11T00:00:00.000Z',
         isCommissionable: false,
         payeeId: null,
+        liquidationId: null,
         referenceNumber: null,
         receiptId: null,
       }),
@@ -603,6 +620,26 @@ describe('gross profit', () => {
     );
   }
 
+  /**
+   * A rebill, and WHOSE money paid for it. Null is the office; an account id is
+   * the crew, whose liquidation then carries the cost.
+   */
+  async function addBillableExpense(amount: string, liquidationId: string | null = null) {
+    return act(() =>
+      charges.addBillableExpense(SHIPMENT_ID, {
+        expenseCategoryId: fuelCategoryId,
+        description: null,
+        amount,
+        spentAt: '2026-08-11T00:00:00.000Z',
+        isCommissionable: false,
+        payeeId,
+        liquidationId,
+        referenceNumber: null,
+        receiptId: null,
+      }),
+    );
+  }
+
   it('adds revenue up from the net rate, the rebills and the fees', async () => {
     if (!available) return;
 
@@ -616,6 +653,7 @@ describe('gross profit', () => {
         spentAt: '2026-08-11T00:00:00.000Z',
         isCommissionable: false,
         payeeId: null,
+        liquidationId: null,
         referenceNumber: null,
         receiptId: null,
       }),
@@ -649,6 +687,174 @@ describe('gross profit', () => {
     expect(profit.companyPaidExpenses).toBe('6200.00');
     expect(profit.cost).toBe('6200.00');
     expect(profit.grossProfit).toBe('38800.00');
+  });
+
+  /**
+   * THE REBILL USED TO BE FREE MONEY. A billable expense was counted as
+   * revenue and nowhere else, so a ₱2,000 permit the company paid for and
+   * recovered added ₱2,000 to the trip's profit — the margin of a business
+   * that gets permits for nothing, and wrong on every trip carrying one.
+   *
+   * The row is the disbursement, not a pointer at a cost recorded elsewhere:
+   * it carries the date, payee, reference and receipt a company-paid expense
+   * carries, and no other table has the permit on it. So it belongs on both
+   * sides, off the one `amount` column — which is what makes the netting exact
+   * rather than approximately right.
+   */
+  it('charges a billable expense as cost as well as revenue, so a rebill nets to zero', async () => {
+    if (!available) return;
+
+    const before = await grossProfits.forShipment(SHIPMENT_ID);
+
+    await addBillableExpense('2000.00');
+
+    const after = await grossProfits.forShipment(SHIPMENT_ID);
+
+    // Both sides moved, by the same figure, because it is the same figure.
+    expect(after.billableExpenses).toBe('2000.00');
+    expect(after.revenue).toBe('47000.00');
+    expect(after.cost).toBe('2000.00');
+
+    // And so the profit did not move at all.
+    expect(before.grossProfit).toBe('45000.00');
+    expect(after.grossProfit).toBe('45000.00');
+
+    // The margin does move — the same profit spread over a larger revenue,
+    // which is the honest read of a pass-through and the reason a rebill is
+    // not a way to make a trip look better.
+    expect(after.margin).toBe('0.9574');
+  });
+
+  /**
+   * The rebill ADDS to the other costs. Counted on both sides it nets to zero
+   * on its own, and a service that quietly used it in place of what the crew
+   * or the office spent would net to zero there too — with a total nobody
+   * could decompose back to the lines on the page.
+   */
+  it('adds the rebill to the other costs rather than standing in for them', async () => {
+    if (!available) return;
+
+    await addCompanyExpense('6200.00');
+    await addBillableExpense('2000.00');
+    await addLiquidation(staffId, '9000.0000');
+
+    const profit = await grossProfits.forShipment(SHIPMENT_ID);
+
+    // 9,000 claimed + 6,200 office + 2,000 rebilled, and nothing yet for the
+    // commissions — the four terms `cost` is documented to decompose into.
+    expect(profit.cost).toBe('17200.00');
+    // 47,000 of revenue less 17,200 of cost.
+    expect(profit.grossProfit).toBe('29800.00');
+  });
+
+  /**
+   * THE OTHER HALF OF THE SAME MISTAKE. A rebill the CREW paid for out of cash
+   * they hold is already a cost — it is a line on their liquidation, counted
+   * with everything else they spent. Charging the rebill row as well would book
+   * the same permit twice, which is what happens to any rule that reads the
+   * table rather than the row.
+   *
+   * The link is what tells the two apart, so the two cases are asserted against
+   * each other on one trip: same amount, same category, same payee, and only
+   * `liquidationId` different.
+   */
+  it('does not charge a rebill the crew paid for — its cost is on the liquidation', async () => {
+    if (!available) return;
+
+    // The crew's account, carrying the permit they paid for out of their cash.
+    const account = await addLiquidation(staffId, '2000.0000');
+    await addBillableExpense('2000.00', account);
+
+    const crewPaid = await grossProfits.forShipment(SHIPMENT_ID);
+
+    // Revenue counts it like any other rebill — the client is billed either way.
+    expect(crewPaid.billableExpenses).toBe('2000.00');
+    expect(crewPaid.revenue).toBe('47000.00');
+
+    // The cost is the liquidation line, ONCE. Not the line and the rebill.
+    expect(crewPaid.liquidatedExpenses).toBe('2000.00');
+    expect(crewPaid.companyPaidBillableExpenses).toBe('0.00');
+    expect(crewPaid.cost).toBe('2000.00');
+    expect(crewPaid.grossProfit).toBe('45000.00');
+
+    // The same expense, same everything, paid by the office instead: now the
+    // rebill row IS the record of the money leaving, so it is a cost.
+    await addBillableExpense('2000.00');
+
+    const both = await grossProfits.forShipment(SHIPMENT_ID);
+
+    expect(both.billableExpenses).toBe('4000.00');
+    expect(both.companyPaidBillableExpenses).toBe('2000.00');
+    // 2,000 liquidated + 2,000 office-paid rebill. The crew's is still counted
+    // once, through the liquidation.
+    expect(both.cost).toBe('4000.00');
+    expect(both.grossProfit).toBe('45000.00');
+  });
+
+  /**
+   * The link decides the cost, so MOVING it moves the cost. A rebill recorded
+   * as office-paid and corrected to crew-paid must stop being charged twice at
+   * the moment of the correction, not at the next recompute of something else.
+   */
+  it('moves the cost when a rebill is corrected from office-paid to crew-paid', async () => {
+    if (!available) return;
+
+    const account = await addLiquidation(staffId, '2000.0000');
+    const rebill = await addBillableExpense('2000.00');
+
+    const miscounted = await grossProfits.forShipment(SHIPMENT_ID);
+
+    // The permit counted twice: once on the crew's line, once on the rebill.
+    expect(miscounted.cost).toBe('4000.00');
+
+    await act(() =>
+      charges.updateBillableExpense(SHIPMENT_ID, rebill.id, { liquidationId: account }),
+    );
+
+    const corrected = await grossProfits.forShipment(SHIPMENT_ID);
+
+    expect(corrected.companyPaidBillableExpenses).toBe('0.00');
+    expect(corrected.cost).toBe('2000.00');
+    // Revenue never moved — the client is billed the permit either way.
+    expect(corrected.revenue).toBe('47000.00');
+  });
+
+  it('refuses a rebill pinned to an account on another trip', async () => {
+    if (!available) return;
+
+    const otherShipment = await act(async () =>
+      prisma.shipment.create({
+        data: {
+          id: OTHER_SHIPMENT_ID,
+          shipmentNumber: 'SH-PROFIT-OTHER',
+          clientId,
+          origin: 'Manila',
+          destination: 'Cebu',
+          grossRate: '1000.0000',
+          tpcAmount: '0.0000',
+          netRate: '1000.0000',
+        },
+      }),
+    );
+
+    const foreign = await act(async () =>
+      prisma.liquidation.create({
+        data: { shipmentId: otherShipment.id, status: LiquidationStatus.PENDING },
+      }),
+    );
+
+    // Asserted on the FIELD, not just on "Validation failed". The composite key
+    // would refuse this row anyway; the reason the service checks first is to
+    // say which input was wrong, and a test that only proved it threw would
+    // pass just as happily on a raw constraint violation surfacing as a 500.
+    const rejection = await addBillableExpense('2000.00', foreign.id).catch(
+      (error: unknown) => error,
+    );
+
+    expect(rejection).toBeInstanceOf(BadRequestException);
+    expect((rejection as BadRequestException).getResponse()).toMatchObject({
+      errors: [{ path: 'liquidationId' }],
+    });
   });
 
   /**

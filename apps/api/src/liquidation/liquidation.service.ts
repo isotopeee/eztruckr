@@ -298,6 +298,10 @@ export class LiquidationService {
    * record of money that moved, and soft-deleting it would strand both — the
    * composite foreign key would refuse anyway, and an error from an index is a
    * worse way to learn it.
+   *
+   * A REBILL LINKED TO IT COUNTS AS CARRYING SOMETHING, even though nothing has
+   * been claimed yet: the link is what tells gross profit to expect the cost
+   * here rather than on the rebill itself.
    */
   async remove(liquidationId: string): Promise<{ removed: true }> {
     const current = await this.load(liquidationId);
@@ -306,7 +310,7 @@ export class LiquidationService {
       throw new ConflictException(`${describe(current)} is approved and can no longer be removed.`);
     }
 
-    const [releases, waiting] = await Promise.all([
+    const [releases, waiting, rebills] = await Promise.all([
       this.prisma.client.allowance.count({ where: { liquidationId } }),
       // PENDING ONLY, and the narrowness is the point. An undecided ask against
       // an account that is about to disappear would sit in accounting's queue
@@ -317,11 +321,19 @@ export class LiquidationService {
       this.prisma.client.allowanceRequest.count({
         where: { liquidationId, status: AllowanceRequestStatus.PENDING },
       }),
+      // A REBILL POINTING HERE IS A COST THIS ACCOUNT PROMISED TO CARRY. Gross
+      // profit reads that link and skips the rebill precisely because the cost
+      // is expected on this account's lines, so removing the account underneath
+      // it would drop the cost out of BOTH places — the account is gone, and
+      // the rebill still says somebody else counted it. Unlike the soft-deleted
+      // rows above, the foreign key does not save us: a soft delete is an
+      // UPDATE, and no constraint fires.
+      this.prisma.client.billableExpense.count({ where: { liquidationId } }),
     ]);
 
-    if (releases > 0 || current.lines.length > 0 || waiting > 0) {
+    if (releases > 0 || current.lines.length > 0 || waiting > 0 || rebills > 0) {
       throw new ConflictException(
-        `${describe(current)} has ${releases} release(s), ${current.lines.length} claimed expense(s) and ${waiting} allowance request(s) awaiting a decision against it. Move, decide or remove those first.`,
+        `${describe(current)} has ${releases} release(s), ${current.lines.length} claimed expense(s), ${waiting} allowance request(s) awaiting a decision and ${rebills} rebilled expense(s) against it. Move, decide or remove those first.`,
       );
     }
 
