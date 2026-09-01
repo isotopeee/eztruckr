@@ -244,7 +244,12 @@ jobs:
           docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
           echo "==> Pruning old images"
-          docker image prune -f
+          # -a, not just dangling: every deploy pushes a new SHA-tagged image,
+          # and the previous SHA stays tagged forever otherwise. Safe here
+          # because it runs AFTER `up -d`, so the images backing the containers
+          # that are actually running are excluded — only stale prior releases
+          # get removed.
+          docker image prune -af
 
           # Nightly backup at 18:10 UTC — 02:10 Manila, after the working day.
           # Written here rather than in provision.sh so it is re-asserted on
