@@ -400,28 +400,30 @@ describe('recording a cost the company paid itself', () => {
   });
 
   /**
-   * THE POINT OF THIS BLOCK. A charge locks at LIQUIDATED, because a charge
-   * feeds the commission base and a computed commission has to stay
-   * reproducible. A company-paid expense feeds no commission at all, so the
-   * only thing that should close it is the trip closing — a fuel invoice that
-   * arrives a fortnight after the trip is exactly the record this has to
-   * accept. Both halves are asserted so that "making it consistent" fails
-   * loudly rather than quietly forbidding the invoice.
+   * THE POINT OF THIS BLOCK. Neither a company-paid expense nor a charge locks
+   * at LIQUIDATED: a fuel invoice and a detention bill both arrive a fortnight
+   * after the trip, and the record is wrong without them. Both halves are
+   * asserted together because the charge used to stop here, and the assertion
+   * is what stops that bound being quietly restored.
+   *
+   * What still separates them is not the status — see the paid-commission
+   * refusal in `assertChargesEditable`, which has no counterpart on the
+   * company-paid side.
    */
-  it('can still be recorded on a liquidated trip, where a charge cannot', async () => {
+  it('can still be recorded on a liquidated trip, and so can a charge', async () => {
     if (!available) return;
 
     await setStatus(ShipmentStatus.LIQUIDATED);
 
-    await expect(
-      act(() =>
-        charges.addAdditionalCharge(SHIPMENT_ID, {
-          description: 'Detention',
-          amount: '1000.00',
-          isCommissionable: false,
-        }),
-      ),
-    ).rejects.toThrow(/charges are closed/i);
+    const charge = await act(() =>
+      charges.addAdditionalCharge(SHIPMENT_ID, {
+        description: 'Detention',
+        amount: '1000.00',
+        isCommissionable: false,
+      }),
+    );
+
+    expect(charge.description).toBe('Detention');
 
     const expense = await act(() =>
       companyExpenses.add(SHIPMENT_ID, {
@@ -456,6 +458,17 @@ describe('recording a cost the company paid itself', () => {
         }),
       ),
     ).rejects.toThrow(/closed; its costs are now part of the record/i);
+
+    // The charge stops in the same place, now that it runs this far.
+    await expect(
+      act(() =>
+        charges.addAdditionalCharge(SHIPMENT_ID, {
+          description: 'Detention',
+          amount: '500.00',
+          isCommissionable: false,
+        }),
+      ),
+    ).rejects.toThrow(/closed; its charges are now part of the record/i);
   });
 });
 

@@ -33,6 +33,12 @@ import { ShipmentsService } from './shipments.service';
  * charges would put the two guards one method apart and make the looser one
  * look like an oversight; the next person to "make it consistent" would
  * silently forbid recording a fuel invoice that arrived after payday.
+ *
+ * THE STATUS BOUNDS HAVE SINCE CONVERGED — a charge runs to CLOSED as well,
+ * because a port fee is discovered as late as a fuel invoice is. The split
+ * survives on what is left: a charge is still refused once a commission has
+ * been paid, and this is not, so the two guards remain genuinely different
+ * rules that happen to agree about the status.
  */
 @Injectable()
 export class CompanyPaidExpensesService {

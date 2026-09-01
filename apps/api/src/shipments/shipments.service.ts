@@ -745,14 +745,20 @@ export class ShipmentsService {
     return row.status;
   }
 
-  /** Charges stay open until the base is frozen. Used by the charge services. */
+  /**
+   * Charges stay open until the trip closes, and are refused outright once a
+   * commission has been paid. Used by the charge services.
+   */
   async assertChargesEditable(shipmentId: string): Promise<ShipmentRow> {
     const shipment = await this.load(shipmentId);
     const status = this.statusOf(shipment);
 
     if (!areChargesEditable(status)) {
+      // Interpolated rather than written out, because the predicate names the
+      // statuses and this should not hold a second opinion about which they
+      // are. Today it can only read "closed".
       throw new ConflictException(
-        `Shipment ${shipment.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; its charges are closed.`,
+        `Shipment ${shipment.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; its charges are now part of the record.`,
       );
     }
 
