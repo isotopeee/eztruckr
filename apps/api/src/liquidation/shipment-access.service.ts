@@ -34,9 +34,8 @@ export class ShipmentAccessService {
    * driver has liquidated. What they may not do is EDIT somebody else's, and
    * that is `assertMayAccountForThisFloat`, deliberately a different list.
    *
-   * Custodianship, and not the unnamed account created at booking — it is
-   * nobody's until the office names one, and the portal's list has always
-   * excluded it.
+   * Custodianship, and not the unnamed account delivery opens — it is nobody's
+   * until the office names one, and the portal's list has always excluded it.
    */
   async assertMayReadAccount(liquidationId: string, user: RequestUser): Promise<void> {
     const liquidation = await this.prisma.client.liquidation.findFirst({

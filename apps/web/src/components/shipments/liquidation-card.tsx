@@ -146,7 +146,10 @@ export function LiquidationCard({ shipment }: { shipment: Shipment }) {
       <CardContent className="space-y-6">
         {rows.length === 0 ? (
           <p className="text-muted-foreground text-sm">
-            No liquidation yet — one is created when the trip is booked.
+            No cash accounts on this trip yet. One opens for the helper when the crew are assigned,
+            and any other cash holder gets one below — an account arrives with the person answerable
+            for it, not with the booking. A trip delivered without any gets an unnamed one, so the
+            crew always have somewhere to file.
           </p>
         ) : (
           rows.map((account) => (
@@ -194,9 +197,10 @@ function Account({
   // Mirrors `assertMayAccountForThisFloat` on the API: anybody who can HOLD a
   // float may account for their own and nobody else's — a helper has no
   // business editing the driver's claims, and a dispatcher none editing a
-  // colleague's. The unnamed account, created with the trip, is open to whoever
-  // is in a slot on it. Only the two roles that hold no cash may act on any
-  // account, and the history names whoever did.
+  // colleague's. An account with nobody named to it — the one delivery opens
+  // for a trip that arrived with none — is open to whoever is in a slot on it.
+  // Only the two roles that hold no cash may act on any account, and the
+  // history names whoever did.
   const confined = user !== null && isConfinedToTheirOwnFloat(user.role);
   const isTheirs = user?.staffId != null && account.custodianId === user.staffId;
   const onTheTruck =
@@ -315,13 +319,13 @@ function Figure({ label, value, hint }: { label: string; value: string; hint?: s
 }
 
 /**
- * Naming who is answerable for the account created with the trip.
+ * Naming who is answerable for an account that has nobody.
  *
- * Offered only while it has nobody, which is the case that actually arises: a
- * trip is booked before anybody is assigned to drive it. Renaming a custodian
- * is a different act — the releases already booked against the account stay
- * where they are — and the API supports it, but it is not something a screen
- * should invite mid-trip.
+ * Offered only while it has nobody, which is now one case: the account delivery
+ * opens for a trip that reached the end without any, whose cash somebody was
+ * holding all along. Renaming a custodian is a different act — the releases
+ * already booked against the account stay where they are — and the API supports
+ * it, but it is not something a screen should invite mid-trip.
  */
 function CustodianPicker({
   shipment,

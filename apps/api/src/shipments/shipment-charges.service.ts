@@ -406,9 +406,9 @@ function toBillableExpense(row: BillableExpenseRow): BillableExpense {
 
 /**
  * Null for an account with nobody's name on it, which is a real state rather
- * than missing data: a trip's first liquidation is opened at booking, before
- * anyone is assigned to drive it. `liquidationId` is what says whether there is
- * an account at all — this only ever says who answers for one.
+ * than missing data: a trip delivered with no accounts is given one, and nobody
+ * has been made custodian of it yet. `liquidationId` is what says whether there
+ * is an account at all — this only ever says who answers for one.
  */
 function custodianName(
   custodian: { firstName: string; lastName: string } | null | undefined,

@@ -321,9 +321,9 @@ async function deliveredTrip(suffix: string, advance: string) {
 /**
  * A trip with a driver AND a helper, each holding their own cash.
  *
- * Built the way the application builds it: the account created at booking is
- * named to the driver, a second is opened for the helper, and each release is
- * booked against one of them. The two advances are deliberately different
+ * Built the way the application builds it: the unnamed account a delivered
+ * trip is given is named to the driver, a second is opened for the helper, and
+ * each release is booked against one of them. The two advances are deliberately different
  * amounts so that a blended figure could not accidentally match either.
  */
 async function tripWithTwoAccounts(suffix: string) {
@@ -1332,8 +1332,8 @@ describe('one person holding two piles of cash on one trip', () => {
 
     expect(second.description).toBe('Cebu leg, ferry and fuel');
 
-    // Said on the account opened at booking too, which nobody described at the
-    // time — the field is a note, not something only a create can set.
+    // Said on the trip's other account too, which nobody described when it was
+    // opened — the field is a note, not something only a create can set.
     const first = await act(async () =>
       liquidations.setDescription(liquidationId, { description: 'Manila leg' }, actor),
     );
@@ -1391,8 +1391,8 @@ describe('one person holding two piles of cash on one trip', () => {
       liquidations.createForShipment(shipmentId, { custodianId: driverId, description: null }),
     );
 
-    // The account opened at booking has nobody on it, and handing this one back
-    // to nobody as well would leave two accounts that cannot be told apart:
+    // The trip's other account has nobody on it, and handing this one back to
+    // nobody as well would leave two accounts that cannot be told apart:
     // the number says which row, and neither row says whose cash.
     const refusal = await validationMessage(() =>
       act(async () => liquidations.setCustodian(second.id, { custodianId: null })),
@@ -1400,6 +1400,144 @@ describe('one person holding two piles of cash on one trip', () => {
 
     expect(refusal).toMatch(/custodianId: Account 1 .*already has nobody named to it/i);
     expect((await liquidations.get(liquidationId)).custodianId).toBeNull();
+  });
+});
+
+/**
+ * THE HELPER'S ACCOUNT OPENS ITSELF, the moment they are put on the trip.
+ *
+ * The gap this closes: a trip is booked with one account nobody is named to,
+ * that account becomes the driver's, and a helper handed ferry money at the
+ * pier has nowhere to record it. What happened in practice is that it went onto
+ * the driver's account, because that was the only row on the screen — the two
+ * people's cash blended again in the one place the schema was rebuilt to keep
+ * apart.
+ */
+describe('assigning a helper opens their cash account', () => {
+  /** A trip with no crew yet, and the one account booking gives it. */
+  async function bookedTrip(suffix: string): Promise<string> {
+    const shipmentId = id(`shipment-${suffix}`);
+
+    await act(async () => {
+      await prisma.shipment.create({
+        data: {
+          id: shipmentId,
+          shipmentNumber: id(`SHP-${suffix}`).toUpperCase(),
+          status: ShipmentStatus.DRAFT,
+          clientId,
+          origin: 'Manila',
+          destination: 'Batangas',
+          grossRate: '20000.0000',
+          netRate: '20000.0000',
+        },
+      });
+
+      await ensurePendingLiquidation(prisma, shipmentId);
+    });
+
+    return shipmentId;
+  }
+
+  it('opens one, named and numbered, when the helper slot is filled', async () => {
+    if (!available) return;
+
+    const shipmentId = await bookedTrip('helper-assigned');
+
+    await act(async () => shipments.assignCrew(shipmentId, { driverId: null, helperId }));
+
+    const accounts = await liquidations.listForShipment(shipmentId);
+
+    // The trip's own account is untouched and still nobody's — it is the one a
+    // release lands on when nobody has chosen otherwise, and naming it is the
+    // office's decision, not this one's.
+    expect(accounts).toHaveLength(2);
+    expect(accounts[0]?.custodianId).toBeNull();
+    expect(accounts[0]?.sequence).toBe(1);
+
+    expect(accounts[1]?.custodianId).toBe(helperId);
+    expect(accounts[1]?.sequence).toBe(2);
+    expect(accounts[1]?.status).toBe(LiquidationStatus.PENDING);
+    expect(accounts[1]?.isEditable).toBe(true);
+  });
+
+  it('does not open a second when the same helper is saved again', async () => {
+    if (!available) return;
+
+    const shipmentId = await bookedTrip('helper-resaved');
+
+    // `assignCrew` writes both slots on every call, so re-saving an unchanged
+    // form reaches this again — and nothing downstream refuses a duplicate any
+    // more, now that a person may legitimately hold several accounts on a trip.
+    await act(async () => shipments.assignCrew(shipmentId, { driverId: null, helperId }));
+    await act(async () => shipments.assignCrew(shipmentId, { driverId: null, helperId }));
+
+    const accounts = await liquidations.listForShipment(shipmentId);
+
+    expect(accounts).toHaveLength(2);
+    expect(accounts.filter((account) => account.custodianId === helperId)).toHaveLength(1);
+  });
+
+  it('leaves the outgoing helper’s account exactly where it is on a swap', async () => {
+    if (!available) return;
+
+    const shipmentId = await bookedTrip('helper-swapped');
+
+    const second = await act(async () =>
+      prisma.staff.create({
+        data: {
+          id: id('helper-two'),
+          firstName: 'Second',
+          lastName: 'Helper',
+          eligibleRoles: [CrewRole.HELPER],
+        },
+      }),
+    );
+
+    await act(async () => shipments.assignCrew(shipmentId, { driverId: null, helperId }));
+
+    // Cash reached the first helper before the swap, which is the whole reason
+    // their account cannot go with them: an edit to a slot cannot un-move money.
+    const theirs = (await liquidations.listForShipment(shipmentId)).find(
+      (account) => account.custodianId === helperId,
+    );
+
+    await act(async () =>
+      allowances.issue(
+        shipmentId,
+        {
+          liquidationId: theirs?.id ?? '',
+          staffId: helperId,
+          amount: '500.00',
+          issuedAt: null,
+          disbursementMode: DisbursementMode.CASH,
+          referenceNumber: null,
+          receiptId: null,
+          releasedBy: null,
+          remarks: null,
+        },
+        actor,
+      ),
+    );
+
+    await act(async () =>
+      shipments.assignCrew(shipmentId, { driverId: null, helperId: second.id }),
+    );
+
+    const accounts = await liquidations.listForShipment(shipmentId);
+
+    expect(accounts.map((account) => account.custodianId)).toEqual([null, helperId, second.id]);
+    expect(accounts[1]?.totalAllowance).toBe('500');
+    expect(accounts[2]?.sequence).toBe(3);
+  });
+
+  it('opens nothing when the slot is left empty, or cleared', async () => {
+    if (!available) return;
+
+    const shipmentId = await bookedTrip('helper-none');
+
+    await act(async () => shipments.assignCrew(shipmentId, { driverId: null, helperId: null }));
+
+    expect(await liquidations.listForShipment(shipmentId)).toHaveLength(1);
   });
 });
 
@@ -1650,14 +1788,14 @@ describe('a dispatch manager holds cash without being on the truck', () => {
   /**
    * The one arm of the rule that is NOT the same as a crew member's.
    *
-   * An account with no custodian is the row created at booking, and it stays
-   * open to whoever is in a slot on the trip — refusing everybody would leave
-   * it unusable. An office cash holder is in no slot, so nothing has been
+   * An account with no custodian is the row delivery opens for a trip that
+   * reached the end with none, and it stays open to whoever is in a slot on the
+   * trip — refusing everybody would leave it unusable. An office cash holder is in no slot, so nothing has been
    * handed to them: the float becomes theirs when somebody with
    * `CAN_WRITE_SHIPMENT_MONEY` names them to it, which is deliberately not a
    * thing they can do for themselves.
    */
-  it('may not claim the unnamed account created at booking', async () => {
+  it('may not claim an account with nobody named to it', async () => {
     if (!available) return;
 
     const { liquidationId } = await deliveredTrip('office-unnamed', '2000.00');
@@ -1845,7 +1983,7 @@ describe('a crew session reaches only the cash it answers for', () => {
     ).rejects.toThrow(/another person/i);
   });
 
-  it('admits the account created at booking, which names nobody yet', async () => {
+  it('admits an account that names nobody yet', async () => {
     if (!available) return;
 
     // Refusing everybody here would leave the row unusable until an office

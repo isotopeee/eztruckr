@@ -221,8 +221,8 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                   {/* Stated on every row, both ways round. Showing a badge only
                       for the crew-paid ones would make "office-paid" and "we
                       forgot to say" look identical, and those two differ by a
-                      whole cost on the trip. The account with nobody's name on
-                      it is the trip's own, opened at booking. */}
+                      whole cost on the trip. An account with nobody's name on
+                      it is the one delivery opens when none was ever made. */}
                   <p className="text-muted-foreground text-xs">
                     {line.liquidationId
                       ? `Paid from crew cash · ${line.liquidationCustodianName ?? 'unassigned account'} · liquidated, not a cost here`

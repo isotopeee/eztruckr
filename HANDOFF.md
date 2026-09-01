@@ -126,6 +126,18 @@ custodianId IS NULL` — because two accounts with nobody on them cannot be told
   `liquidationAccountLabel` where the caller has one — the card, the account pickers and the API's
   refusals — and deliberately not plumbed onto release or settlement rows, which name an account by
   number.
+- **Booking opens NO account.** It used to open one with nobody named to it, and that row was the
+  default a release landed on — which is how a helper's ferry money reached the row that later
+  became the driver's. An account arrives with the person answerable for it. The one automatic
+  unnamed account left is the **delivery backstop** (`ensurePendingLiquidation`, called from
+  `transition` and nowhere else), for a trip that reached the end with none at all: the crew are
+  holding receipts and a row somebody can be named to beats refusing the paperwork.
+- **Naming a HELPER opens their account**, in the same transaction as the assignment —
+  `ensureAccountForCustodian`, beside `ensurePendingLiquidation` and a plain function for the same
+  reason. It ENSURES rather than opens: `assignCrew` writes both slots on every call, and nothing
+  refuses a duplicate custodian any more. Swapping the helper never closes the outgoing one, which
+  may hold money. **The driver gets nothing** — the account created at booking is theirs to be
+  named to, and a second one beside it would split a single pile of cash.
 - **Who received cash ≠ who answers for it**, and **a custodian need not be on the truck** —
   `assertMayHoldTripCash`, for all three callers.
 - **Holding a float and editing one are different permissions.**

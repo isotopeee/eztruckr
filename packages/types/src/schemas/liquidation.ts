@@ -116,9 +116,11 @@ export const liquidationSchema = auditFieldsSchema.extend({
   /**
    * The staff member answerable for accounting for this cash.
    *
-   * Null on the liquidation created with the shipment, because nobody has been
-   * assigned to drive it yet. NOT the same as an allowance's recipient: a
-   * helper can be handed ferry money the driver remains answerable for.
+   * Null only on the account the delivery backstop opens for a trip that got
+   * there with none — booking opens nothing, so an unnamed account means the
+   * crew came back with receipts before anybody was made custodian. NOT the
+   * same as an allowance's recipient: a helper can be handed ferry money the
+   * driver remains answerable for.
    *
    * NOT NECESSARILY ON THE TRUCK, either. A dispatch manager holds a trip's
    * float without driving or helping, which is why this points at `staff`
@@ -193,10 +195,10 @@ export type Liquidation = z.infer<typeof liquidationSchema>;
  * advance to the same one.
  *
  * The custodian is REQUIRED here, unlike on the column. The nullable column
- * exists for exactly one row — the one created automatically with the shipment,
- * before anybody is assigned — and a second account created by hand with nobody
- * answerable for it would be indistinguishable from that one, which is the
- * ambiguity `liquidation_shipment_unnamed_live_key` refuses anyway.
+ * exists for exactly one row — the one the delivery backstop opens for a trip
+ * that reached the end with no accounts — and a second account created by hand
+ * with nobody answerable for it would be indistinguishable from that one, which
+ * is the ambiguity `liquidation_shipment_unnamed_live_key` refuses anyway.
  *
  * NOTHING REFUSES A SECOND ACCOUNT FOR SOMEBODY WHO ALREADY HOLDS ONE. That was
  * a rule until a long trip needed two vouchers for one driver; what stops a

@@ -160,9 +160,9 @@ export class LiquidationService {
   /**
    * Every account on one trip, in account order.
    *
-   * A list where there used to be a single record. The trip's own liquidation —
-   * the one created with the shipment, before anybody was assigned — leads,
-   * because it is the one a release lands on when nobody has chosen otherwise.
+   * A list where there used to be a single record. An account with nobody named
+   * to it leads when there is one, because it is the oldest: a trip is given one
+   * only by the delivery backstop, which fires when no account was ever opened.
    *
    * BY `sequence`, not by `createdAt`, now that the number is what the screens
    * and the refusals call each account: the two agree today, and a list whose
@@ -199,14 +199,14 @@ export class LiquidationService {
    * row, and had the write refused. A list that disagrees with the guard behind
    * it is a list that lies. The unassigned account is included for anyone who
    * worked the trip, for the same reason the guard admits them: it is the row
-   * created at booking, and nobody has been named to it yet.
+   * delivery opens when nobody was ever named, and it is the crew's to explain.
    *
-   * DRAFTS ARE EXCLUDED, unconditionally. A liquidation now exists from the
-   * moment a trip is booked, so PENDING on its own has stopped meaning "the
-   * crew owe us paperwork" — a draft has nothing to account for, and without
-   * this every unbooked trip would sit in accounting's queue and in the crew
-   * portal's. The row is still reachable through the shipment; what this list
-   * is, is a work queue, and work that has not started is not on it.
+   * DRAFTS ARE EXCLUDED, unconditionally. Booking opens no account, so a draft
+   * usually has none to exclude — but assigning a helper opens one, and a
+   * trip crewed while it is still being planned would otherwise put its
+   * paperwork in accounting's queue and in the crew portal's before the trip
+   * exists. The row is still reachable through the shipment; what this list is,
+   * is a work queue, and work that has not started is not on it.
    */
   async list(query: LiquidationListQuery, staffId: string | null): Promise<Liquidation[]> {
     const rows = await this.prisma.client.liquidation.findMany({
@@ -873,8 +873,8 @@ export class LiquidationService {
    * `ROLES_CONFINED_TO_THEIR_OWN_FLOAT`, which is what stops "I can hold cash"
    * quietly becoming "I can edit cash".
    *
-   * THE UNNAMED ACCOUNT — the one created with the shipment, before anybody was
-   * assigned — is open to whoever is in a crew slot, and to nobody else.
+   * THE UNNAMED ACCOUNT — the one delivery opens for a trip that arrived with
+   * none — is open to whoever is in a crew slot, and to nobody else.
    * Refusing everybody would leave it unusable until an office user named a
    * custodian, but an office cash holder is not on the trip and has no claim to
    * a float nobody has handed them; naming one is `CAN_WRITE_SHIPMENT_MONEY`,

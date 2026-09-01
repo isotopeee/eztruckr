@@ -243,61 +243,32 @@ describe('the shipment number is generated', () => {
   });
 });
 
-describe('the liquidation exists from the booking', () => {
-  it('is created with the shipment, at PENDING', async () => {
-    if (!available) return;
-
-    const shipment = await book();
-    const liquidation = await prisma.liquidation.findFirst({
-      where: { shipmentId: shipment.id },
-    });
-
-    expect(liquidation).not.toBeNull();
-    expect(liquidation?.status).toBe(LiquidationStatus.PENDING);
-    // Not submitted, and the column says so. It used to be NOT NULL DEFAULT
-    // now(), which claimed every liquidation had been submitted the moment it
-    // came into existence — now more visibly wrong, since that moment is the
-    // booking.
-    expect(liquidation?.submittedAt).toBeNull();
-  });
-
-  it('leaves the shipment a draft — the liquidation is waiting, not owed', async () => {
+/**
+ * BOOKING OPENS NO ACCOUNT, and this is where that is pinned.
+ *
+ * It used to open one with nobody named to it. The row was real and the
+ * reasoning was sound — a crew spends money from day one — but an account with
+ * no custodian is not the same thing as a place to record spending: every trip
+ * carried one whether anybody held its cash or not, releases landed on it
+ * because it was the default, and that default is how a helper's ferry money
+ * reached the row that later became the driver's.
+ */
+describe('booking opens no cash account', () => {
+  it('creates the shipment and nothing else', async () => {
     if (!available) return;
 
     const shipment = await book();
 
+    expect(await prisma.liquidation.count({ where: { shipmentId: shipment.id } })).toBe(0);
     expect(shipment.status).toBe(ShipmentStatus.DRAFT);
   });
 
   /**
-   * Every draft now has a PENDING liquidation, so PENDING alone has stopped
-   * meaning "the crew owe us paperwork". Without the draft exclusion, every
-   * unbooked trip would sit in accounting's queue and in the crew portal's.
+   * The trip that reaches delivery having never been given one — nobody
+   * assigned, nobody opened one by hand — and whose crew are now holding
+   * receipts. This is the ONLY automatic unnamed account left in the system.
    */
-  it('keeps a draft out of the liquidation work queue', async () => {
-    if (!available) return;
-
-    const shipment = await book();
-
-    const queued = await prisma.liquidation.findMany({
-      where: {
-        status: LiquidationStatus.PENDING,
-        shipment: { status: { not: ShipmentStatus.DRAFT } },
-      },
-      select: { shipmentId: true },
-    });
-
-    expect(queued.map((row) => row.shipmentId)).not.toContain(shipment.id);
-  });
-
-  /**
-   * The delivery path still calls `ensurePendingLiquidation`, as a backstop for
-   * trips booked before creation started doing it. It must find the existing
-   * row rather than create a second one — the partial unique index would
-   * refuse anyway, and inside a transaction that failure would abort the
-   * delivery it was riding along with.
-   */
-  it('is not duplicated when the trip is later delivered', async () => {
+  it('opens an unnamed one at delivery, for a trip that still has none', async () => {
     if (!available) return;
 
     const shipment = await book({ truckId: null });
@@ -316,9 +287,49 @@ describe('the liquidation exists from the booking', () => {
       });
     });
 
-    const count = await prisma.liquidation.count({ where: { shipmentId: shipment.id } });
+    const opened = await prisma.liquidation.findMany({ where: { shipmentId: shipment.id } });
 
-    expect(count).toBe(1);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.custodianId).toBeNull();
+    expect(opened[0]?.sequence).toBe(1);
+    expect(opened[0]?.status).toBe(LiquidationStatus.PENDING);
+    // Not submitted, and the column says so. It used to be NOT NULL DEFAULT
+    // now(), which claimed every liquidation had been submitted the moment it
+    // came into existence.
+    expect(opened[0]?.submittedAt).toBeNull();
+  });
+
+  /**
+   * The trip that HAS an account by the time it is delivered. Adding an unnamed
+   * one beside it would put the default back on the screen — a row with nobody
+   * answerable for it, ready for the next release to drift onto.
+   */
+  it('adds none at delivery when the trip already has one', async () => {
+    if (!available) return;
+
+    const shipment = await book({ truckId: null });
+
+    await withActor({ userId: adminId }, async () => {
+      await prisma.liquidation.create({
+        data: {
+          shipmentId: shipment.id,
+          sequence: 1,
+          status: LiquidationStatus.PENDING,
+        },
+      });
+
+      await prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { status: ShipmentStatus.IN_TRANSIT },
+      });
+
+      await shipments.transition(shipment.id, {
+        to: ShipmentStatus.DELIVERED,
+        occurredAt: null,
+      });
+    });
+
+    expect(await prisma.liquidation.count({ where: { shipmentId: shipment.id } })).toBe(1);
   });
 });
 

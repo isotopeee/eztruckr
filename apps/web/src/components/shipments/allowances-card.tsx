@@ -298,6 +298,25 @@ function IssueForm({
     );
   }
 
+  // SAID BEFORE THE TYPING, not after it. A release has to be booked against an
+  // account and a trip no longer starts with one, so this form would otherwise
+  // submit an empty account id and come back refused with a sentence about a
+  // liquidation the person never chose.
+  //
+  // TWO DIFFERENT EMPTINESSES, and the fix for each is somewhere else: no
+  // account has been opened yet, or every one of them is closed. Telling
+  // somebody to reverse an approval when nothing has ever been approved sends
+  // them to the wrong screen.
+  if (open.length === 0) {
+    return (
+      <p className="text-muted-foreground border-t pt-4 text-xs">
+        {accounts.length === 0
+          ? 'No cash account on this trip yet. Assign the helper, or open an account for whoever is holding the money, in Liquidations below — a release moves one person’s variance and has to say whose.'
+          : 'No account on this trip can take a release: every one of them is approved, and approval freezes the total advanced. Accounting can reverse an approval, with a reason, or open another account.'}
+      </p>
+    );
+  }
+
   return (
     <form
       className="space-y-3 border-t pt-4"

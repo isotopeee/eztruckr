@@ -1303,8 +1303,10 @@ model Liquidation {
   /// The staff member answerable for this cash. Not necessarily on the truck:
   /// a dispatch manager holds a trip's float without driving or helping.
   ///
-  /// Nullable, because a trip's first liquidation is created at BOOKING, before
-  /// anybody has been assigned to drive it.
+  /// Nullable for ONE case: the account the delivery backstop opens for a trip
+  /// that reached the end with none at all. Booking opens nothing — an account
+  /// arrives with the person answerable for it — so an unnamed row means the
+  /// crew came back with receipts and nobody had been made custodian yet.
   ///
   /// NOT UNIQUE PER TRIP, and no longer unique per person on one either — see
   /// the model note above. What survives is

@@ -777,11 +777,15 @@ function RequestForm({
     );
   }
 
+  // Two different emptinesses now that booking opens no account: none has been
+  // opened yet, or every one of them is closed. They are fixed on different
+  // screens, so they cannot share a sentence.
   if (open.length === 0) {
     return (
       <p className="text-muted-foreground border-t pt-4 text-xs">
-        No account on this trip can take a release: every liquidation is approved, or the trip is
-        closed. Accounting can reverse an approval, with a reason.
+        {accounts.length === 0
+          ? 'No cash account on this trip yet. Assign the helper, or ask for an account to be opened for whoever will hold the money — a request names the account it would land on.'
+          : 'No account on this trip can take a release: every liquidation is approved, or the trip is closed. Accounting can reverse an approval, with a reason.'}
       </p>
     );
   }

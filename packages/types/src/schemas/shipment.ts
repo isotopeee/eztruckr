@@ -61,10 +61,10 @@ export const billableExpenseSchema = auditFieldsSchema.extend({
   /**
    * Who is answerable for that account, for a screen that has to say which one.
    *
-   * Null both when there is no link at all and when the account is the trip's
-   * own — the one opened at booking before anybody was assigned — so a reader
-   * must check `liquidationId` to tell "company-paid" from "nobody's name on it
-   * yet". The two are different facts and neither is inferable from this name.
+   * Null both when there is no link at all and when the account has nobody
+   * named to it — the one the delivery backstop opens — so a reader must check
+   * `liquidationId` to tell "company-paid" from "nobody's name on it yet". The
+   * two are different facts and neither is inferable from this name.
    */
   liquidationCustodianName: z.string().nullable(),
   /**

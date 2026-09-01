@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/select';
 import { ApiError, apiFetch } from '@/lib/api-client';
 import { formatDateTime } from '@/lib/format';
+import { liquidationKeys } from '@/lib/liquidation-api';
 import { assignCrew, assignTruck, shipmentKeys, transitionShipment } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 
@@ -88,7 +89,16 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
     });
   };
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: shipmentKeys.all });
+  /**
+   * The liquidations go with it, because naming a helper OPENS ONE — their cash
+   * account is created in the same write on the API. Invalidating only the
+   * shipment would leave the card below still showing the accounts as they were
+   * before the person it just created an account for existed on this trip.
+   */
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: shipmentKeys.all });
+    void queryClient.invalidateQueries({ queryKey: liquidationKeys.all });
+  };
 
   const save = useMutation({
     mutationFn: () =>
@@ -163,6 +173,7 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
             onChange={setHelperId}
             options={helpers}
             disabled={!canDispatch}
+            note="Gets their own cash account on this trip, opened when you save. Removing them from the slot leaves it — it may already hold money."
           />
           {canDispatch ? (
             <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>

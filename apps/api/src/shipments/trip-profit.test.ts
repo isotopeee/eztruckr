@@ -966,8 +966,8 @@ describe('gross profit', () => {
   it('counts every custodian’s account, not just the first', async () => {
     if (!available) return;
 
-    // The trip's own account, created at booking before anybody is assigned,
-    // and the driver's. Both hold cash; both spent it.
+    // An account nobody was ever named to, and the driver's. Both hold cash;
+    // both spent it.
     const unassigned = await addLiquidation(null, '9000.0000');
     const driver = await addLiquidation(staffId, '4000.0000');
 

@@ -44,7 +44,10 @@ import {
   type UpdateShipmentInput,
 } from '@eztruckr/types';
 import { computeRateChain } from '../commission/commission-chain';
-import { ensurePendingLiquidation } from '../liquidation/pending-liquidation';
+import {
+  ensureAccountForCustodian,
+  ensurePendingLiquidation,
+} from '../liquidation/pending-liquidation';
 import { PrismaService } from '../prisma/prisma.service';
 import { auditFields, dateToIso, decimalToString } from '../master-data/serialize';
 
@@ -164,23 +167,28 @@ export class ShipmentsService {
   }
 
   /**
-   * Books a trip: a generated number, and the liquidation it will need.
-   *
-   * BOTH LAND IN ONE TRANSACTION, for different reasons that happen to want
-   * the same thing.
+   * Books a trip, and generates its number.
    *
    * The NUMBER is generated rather than typed — see `shipment-number.ts` for
    * the format and why the date is Manila's. Two people booking at the same
    * moment can compute the same next number, so the partial unique index is
    * the arbiter and a collision is retried rather than reported: the second
-   * booker did nothing wrong and should not be shown a constraint name. The
-   * retry is OUTSIDE the transaction on purpose, because a caught constraint
-   * violation has already poisoned the one it happened in.
+   * booker did nothing wrong and should not be shown a constraint name.
    *
-   * The LIQUIDATION exists from this moment rather than from delivery. A trip
-   * starts spending as soon as it has cash against it, and the crew had
-   * nowhere to record that until the office marked it delivered — which is the
-   * end of the trip, not the start of the paperwork.
+   * NO LIQUIDATION IS OPENED HERE, and it used to be. Booking created one with
+   * nobody named to it, on the reasoning that a trip starts spending before the
+   * office closes it out — true, but the row it produced was an ACCOUNT WITH NO
+   * CUSTODIAN, and that is a different thing from a place to record spending.
+   * Every trip carried one whether or not anybody ever held its cash; releases
+   * landed on it by default, which is how a helper's ferry money ended up on a
+   * row that later became the driver's; and an empty unnamed account sat on
+   * every draft in the system.
+   *
+   * An account now arrives when somebody is answerable for one: named to a
+   * helper by `assignCrew`, opened by hand for anybody else, and — for a trip
+   * that reached delivery with none at all — created unnamed by the backstop in
+   * `transition`, which is the one case where the crew genuinely have paperwork
+   * and nowhere to put it.
    */
   async create(input: CreateShipmentInput): Promise<Shipment> {
     await this.assertReferencesExist(input);
@@ -216,15 +224,12 @@ export class ShipmentsService {
       const shipmentNumber = await this.generateShipmentNumber();
 
       try {
-        const row = await this.prisma.client.$transaction(async (tx) => {
-          const created = await tx.shipment.create({
-            data: { ...data, shipmentNumber },
-            include: SHIPMENT_INCLUDE,
-          });
-
-          await ensurePendingLiquidation(tx, created.id);
-
-          return created;
+        // A plain create, no longer a transaction: the transaction existed to
+        // land the shipment and its liquidation together, and there is no
+        // second row to land any more.
+        const row = await this.shipments.create({
+          data: { ...data, shipmentNumber },
+          include: SHIPMENT_INCLUDE,
         });
 
         return toShipment(row);
@@ -497,6 +502,22 @@ export class ShipmentsService {
    * Both slots move together because they are one decision — assigning them
    * separately would let the same person briefly hold both, and the check for
    * that would have nothing to compare against.
+   *
+   * NAMING A HELPER OPENS THEIR CASH ACCOUNT, in the same transaction. The trip
+   * is booked with one account that nobody is named to, and it becomes the
+   * driver's; a helper handed ferry money at the pier had nowhere to put it
+   * until an office user noticed and opened one by hand, so it went onto the
+   * driver's account instead — the two people's money blended again in the one
+   * place the schema was rebuilt to keep apart. See `ensureAccountForCustodian`
+   * for why it ensures rather than opens, and why swapping a helper never
+   * closes the outgoing one.
+   *
+   * THE DRIVER GETS NOTHING HERE, deliberately, and the asymmetry is the
+   * point rather than an oversight. A helper's cash is the case that had
+   * nowhere to go: the driver is who an office user names when they open or
+   * claim the trip's account, so a driver's float has always had a home, and
+   * opening one automatically beside a hand-made one would give the trip two
+   * accounts where the cash is one pile.
    */
   async assignCrew(id: string, input: AssignCrewInput): Promise<Shipment> {
     const current = await this.load(id);
@@ -521,10 +542,21 @@ export class ShipmentsService {
     if (input.helperId) await this.assertEligible(input.helperId, CrewRole.HELPER);
 
     return toShipment(
-      await this.shipments.update({
-        where: { id },
-        data: { driverId: input.driverId, helperId: input.helperId },
-        include: SHIPMENT_INCLUDE,
+      await this.prisma.client.$transaction(async (tx) => {
+        const updated = await tx.shipment.update({
+          where: { id },
+          data: { driverId: input.driverId, helperId: input.helperId },
+          include: SHIPMENT_INCLUDE,
+        });
+
+        // Inside the write, so a helper on the trip and an account for them are
+        // one fact rather than two that can disagree. Nothing to do when the
+        // slot is being cleared: the account of whoever was in it stays.
+        if (input.helperId !== null) {
+          await ensureAccountForCustodian(tx, id, input.helperId);
+        }
+
+        return updated;
       }),
     );
   }
@@ -619,12 +651,14 @@ export class ShipmentsService {
     const row = await this.prisma.client.$transaction(async (tx) => {
       const updated = await tx.shipment.update({ where: { id }, data, include: SHIPMENT_INCLUDE });
 
-      // A BACKSTOP, no longer the creation point. Booking a trip now creates
-      // its liquidation, so this call finds one and returns. It stays because
-      // every shipment booked before that change has none, and delivery is
-      // exactly the moment their absence starts to matter — `ensurePending`
-      // is idempotent by lookup, so the cost is one query on a path that is
-      // already writing.
+      // THE LAST RESORT, and on most trips it does nothing. A trip reaching
+      // delivery has usually been given accounts already — named to the helper
+      // when the crew were assigned, opened by hand for whoever else held cash
+      // — and this call finds one and returns. What it catches is the trip that
+      // got here with NONE: the crew have receipts in their hands and nowhere
+      // to file them, and an unnamed account somebody can be named to beats
+      // refusing the paperwork. Booking deliberately opens nothing, so this is
+      // the only automatic unnamed account left in the system.
       if (input.to === ShipmentStatus.DELIVERED) {
         await ensurePendingLiquidation(tx, id);
       }
