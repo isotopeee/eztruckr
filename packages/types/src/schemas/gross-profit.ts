@@ -14,8 +14,9 @@ import { z } from 'zod';
  *   netRate           the freight, after the broker's cut. `grossRate` and
  *                     `thirdPartyCommission` are shown so the cut is visible
  *                     as a line rather than silently netted away.
- *   billableExpenses  costs the company fronted and rebills. EVERY rebill is
- *                     revenue, whoever paid for it — see below.
+ *   billableExpenses  what the client is CHARGED for the rebills — the sum of
+ *                     their `billedAmount`. Every rebill is revenue, whoever
+ *                     paid for it, and only the recovered part is.
  *   additionalCharges fees with no underlying cost at all.
  *
  * WHAT COUNTS AS COST
@@ -26,8 +27,10 @@ import { z } from 'zod';
  *   companyPaidExpenses what the office spent directly. Real from the moment
  *                       it is recorded — the money has already gone.
  *   companyPaidBillableExpenses
- *                       the rebills the office paid for — the subset of
- *                       `billableExpenses` above with no liquidation on them.
+ *                       what the office SPENT on the rebills it paid for — the
+ *                       `amount` of the rows with no liquidation on them, which
+ *                       on a partly recovered rebill is MORE than its revenue
+ *                       line above.
  *   crewCommissions     the crew's pay, from the computed rows.
  *
  * A REBILL IS ALWAYS REVENUE, AND A COST ONLY IF THE OFFICE PAID FOR IT. Which
@@ -46,6 +49,22 @@ import { z } from 'zod';
  *
  * Neither mistake shows on the screen as anything but a number, which is why
  * the distinction is a column and not a convention.
+ *
+ * RECOVERY IS OFTEN PARTIAL, AND THE TWO SIDES READ DIFFERENT COLUMNS FOR IT.
+ * A rebill carries what was spent (`amount`) and what the client is charged
+ * (`billedAmount`), and they need not agree — a ₱2,000 permit billed at ₱1,500
+ * is an ordinary deal. Revenue counts the billed figure, cost counts the spent
+ * one, so the ₱500 nobody recovered lands where it belongs: as margin the trip
+ * did not earn back.
+ *
+ * The absorbed part is NOT a field here. It is `amount - billedAmount` summed
+ * over the rows, it is already expressed by the two sides differing, and a
+ * third figure maintained beside the two it derives from is one that can
+ * contradict them. The same reason there is no `grossProfit` column.
+ *
+ * A crew-paid rebill needs nothing extra for any of this: the liquidation
+ * counts the full spend and the revenue line counts the smaller billed figure,
+ * so the shortfall falls out of the subtraction on its own.
  *
  * `cost` therefore decomposes as `liquidatedExpenses + companyPaidExpenses +
  * companyPaidBillableExpenses + crewCommissions`, and a company-paid rebill
@@ -113,9 +132,13 @@ export const grossProfitSchema = z.object({
   liquidatedExpenses: z.string(),
   companyPaidExpenses: z.string(),
   /**
-   * The rebills the office paid for, and so the part of `billableExpenses`
+   * What the office SPENT on the rebills it paid for, and so the part of them
    * that is a cost. The rest was paid out of the crew's cash and is already
    * inside `liquidatedExpenses` — never add both.
+   *
+   * Compared against `billableExpenses` this is spent against billed, not a
+   * subset of a total: on a partly recovered rebill it is the larger of the
+   * two, and the gap is what the company absorbed.
    */
   companyPaidBillableExpenses: z.string(),
   crewCommissions: z.string(),

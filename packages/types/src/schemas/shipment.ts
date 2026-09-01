@@ -52,6 +52,12 @@ const chargeLineFields = {
  * record of the disbursement. Set means the crew paid out of cash they hold and
  * the cost arrives as a liquidation line on that account — counting it here too
  * would book the same peso twice. See `grossProfitSchema`.
+ *
+ * HOW MUCH COMES BACK is `billedAmount`, which need not be the whole `amount`.
+ * Recovery is routinely partial, and the two are separate figures so a
+ * shortfall can be recorded as one rather than faked by understating what was
+ * paid. What the company absorbed is the gap between them, and is derived
+ * wherever it is shown rather than stored anywhere.
  */
 export const billableExpenseSchema = auditFieldsSchema.extend({
   id: z.string(),
@@ -78,7 +84,10 @@ export const billableExpenseSchema = auditFieldsSchema.extend({
   expenseCategoryId: z.string().nullable(),
   expenseCategoryName: z.string().nullable(),
   description: z.string().nullable(),
+  /** What was spent. Becomes a cost when no liquidation carries it. */
   amount: z.string(),
+  /** What the client is charged for it. Revenue, always. */
+  billedAmount: z.string(),
   spentAt: z.string(),
   isCommissionable: z.boolean(),
   payeeId: z.string().nullable(),
@@ -94,7 +103,22 @@ export type BillableExpense = z.infer<typeof billableExpenseSchema>;
 
 export const createBillableExpenseSchema = z.object({
   description: optionalText(200),
+  /** What was spent — the figure on the receipt, not the one on the invoice. */
   amount: positiveMoneyStringSchema,
+  /**
+   * What the client is charged, which defaults to the whole amount.
+   *
+   * DEFAULTED RATHER THAN REQUIRED, because full recovery is the ordinary case
+   * and every caller written before partial recovery existed meant exactly
+   * that. Making it required would have turned a new capability into a breaking
+   * change for the common path, and defaulting it to anything else would
+   * silently start absorbing costs nobody chose to absorb.
+   *
+   * Not constrained to be at most `amount`: billing above cost is a markup and
+   * belongs on an additional charge, but refusing it here would also refuse the
+   * correction of a row typed the wrong way round.
+   */
+  billedAmount: positiveMoneyStringSchema.optional(),
   isCommissionable: chargeLineFields.isCommissionable,
   /**
    * Still nullish, unlike a company-paid expense's.

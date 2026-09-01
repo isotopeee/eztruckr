@@ -1682,10 +1682,37 @@ model BillableExpense {
   /// Optional, unlike the amount: a category and a payee say more than a
   /// description box repeating the category's own name. Rows written before
   /// there was a category to pick still carry theirs.
-  description      String?
-  amount           Decimal  @db.Decimal(15, 4)
+  description String?
+
+  /// WHAT WAS SPENT. The disbursement, exactly as `company_paid_expense.amount`
+  /// and `liquidation_line.amount` mean it — money that left somebody's hands.
+  /// This is the figure that becomes a COST when nobody else recorded it.
+  amount Decimal @db.Decimal(15, 4)
+
+  /// WHAT THE CLIENT IS CHARGED for it, which is not always the whole thing.
+  ///
+  /// Recovery is routinely partial: a permit bought at ₱2,000 against a client
+  /// who agreed to ₱1,500, a crane hour absorbed to keep an account, a
+  /// surcharge only half of which is passed on. The two used to be one column,
+  /// so the only expressible deal was full recovery — and a shortfall had to be
+  /// faked by understating what was paid, which then disagreed with the receipt
+  /// stapled to it.
+  ///
+  /// NOT NULLABLE, and not defaulted to the amount either. Null would be a
+  /// second way to write "the same as `amount`", and the two spellings would
+  /// have to be kept in step by every reader. Full recovery is `billedAmount`
+  /// equal to `amount`, stated once.
+  ///
+  /// The gap between the two is absorbed by the company, and falls out of the
+  /// arithmetic rather than being stored: revenue counts this, cost counts
+  /// `amount`, and the difference is the margin the trip did not recover. NOT
+  /// constrained to be the smaller of the two — billing above cost is a markup,
+  /// which belongs on an `additional_charge`, but refusing it here would also
+  /// refuse the correction of a row typed the wrong way round.
+  billedAmount Decimal @db.Decimal(15, 4)
+
   /// When the money left, which is not when the row was typed.
-  spentAt          DateTime @db.Timestamptz(6)
+  spentAt DateTime @db.Timestamptz(6)
   /// Whether this amount feeds the commission base. The one field with no
   /// counterpart on a company-paid expense, because only this side can.
   isCommissionable Boolean  @default(false)

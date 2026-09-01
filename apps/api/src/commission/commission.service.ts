@@ -41,7 +41,11 @@ import { resolveCommissionRule } from './rule-resolver';
 
 /** What Prisma gives us, with everything the chain and strategies need. */
 const SHIPMENT_INCLUDE = {
-  billableExpenses: { select: { amount: true, isCommissionable: true } },
+  // `billedAmount`, because the chain is a REVENUE chain — every figure in it
+  // is something the client is charged. What a rebill cost is irrelevant to
+  // what the crew earn on it, and paying commission on the outlay rather than
+  // the recovery would pay the crew a share of money that never came in.
+  billableExpenses: { select: { billedAmount: true, isCommissionable: true } },
   additionalCharges: { select: { amount: true, isCommissionable: true } },
   liquidations: { select: { status: true } },
   commissions: { select: { id: true, payoutLineId: true, role: true } },
@@ -274,7 +278,7 @@ export class CommissionService {
     return computeCommissionChain({
       netRate: shipment.netRate.toString(),
       billableExpenses: shipment.billableExpenses.map((line) => ({
-        amount: line.amount.toString(),
+        amount: line.billedAmount.toString(),
         isCommissionable: line.isCommissionable,
       })),
       additionalCharges: shipment.additionalCharges.map((line) => ({

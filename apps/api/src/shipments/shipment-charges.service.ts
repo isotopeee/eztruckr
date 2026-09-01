@@ -80,6 +80,9 @@ export class ShipmentChargesService {
         expenseCategoryId: input.expenseCategoryId,
         description: input.description,
         amount: input.amount,
+        // Full recovery when the caller did not say otherwise — see the note
+        // on `createBillableExpenseSchema.billedAmount`.
+        billedAmount: input.billedAmount ?? input.amount,
         spentAt: new Date(input.spentAt),
         isCommissionable: input.isCommissionable,
         payeeId: input.payeeId,
@@ -119,6 +122,12 @@ export class ShipmentChargesService {
           : { expenseCategoryId: input.expenseCategoryId }),
         ...(input.description === undefined ? {} : { description: input.description }),
         ...(input.amount === undefined ? {} : { amount: input.amount }),
+        // PATCHED INDEPENDENTLY OF THE AMOUNT, deliberately. Correcting what a
+        // permit cost says nothing about what was agreed with the client, and
+        // re-deriving this from a changed `amount` would silently rewrite the
+        // deal every time somebody fixed a typo in the cost. A caller changing
+        // both sends both.
+        ...(input.billedAmount === undefined ? {} : { billedAmount: input.billedAmount }),
         ...(input.spentAt === undefined ? {} : { spentAt: new Date(input.spentAt) }),
         ...(input.isCommissionable === undefined
           ? {}
@@ -389,6 +398,7 @@ function toBillableExpense(row: BillableExpenseRow): BillableExpense {
     expenseCategoryName: row.expenseCategory?.name ?? null,
     description: row.description,
     amount: row.amount.toString(),
+    billedAmount: row.billedAmount.toString(),
     spentAt: row.spentAt.toISOString(),
     isCommissionable: row.isCommissionable,
     payeeId: row.payeeId,

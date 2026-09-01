@@ -124,7 +124,7 @@ export function GrossProfitCard({ shipment }: { shipment: Shipment }) {
             <Line label="Gross rate" amount={data.grossRate} />
             <Line label="Third-party cut" amount={data.thirdPartyCommission} negated />
             <Line label="Net rate" amount={data.netRate} muted />
-            <Line label="Billable expenses" amount={data.billableExpenses} />
+            <Line label="Billable expenses" amount={data.billableExpenses} note="as billed" />
             <Line label="Additional charges" amount={data.additionalCharges} />
             <Line label="Total revenue" amount={data.revenue} strong />
           </section>
@@ -142,15 +142,15 @@ export function GrossProfitCard({ shipment }: { shipment: Shipment }) {
               note={data.costsRecognised ? undefined : 'running, not yet approved'}
             />
             <Line label="Company-paid" amount={data.companyPaidExpenses} />
-            {/* Only the rebills the OFFICE paid for. The crew-paid ones are
-                already inside the liquidated figure above, so this line is
-                smaller than its revenue twin whenever the crew fronted any —
-                and the note is what stops that gap reading as a rounding
-                error or a duplicate. */}
+            {/* What the OFFICE SPENT on rebills, which differs from its
+                revenue twin above for two unrelated reasons: the crew-paid ones
+                are counted in the liquidation instead, and a partly recovered
+                one costs more than it billed. The note names both, because a
+                gap a reader cannot explain is one they assume is a bug. */}
             <Line
               label="Billable expenses"
               amount={data.companyPaidBillableExpenses}
-              note="company-paid only — the crew’s are in their liquidation"
+              note="as paid, company-paid only — the crew’s are in their liquidation"
             />
             <Line
               label="Crew commissions"
@@ -174,6 +174,11 @@ export function GrossProfitCard({ shipment }: { shipment: Shipment }) {
             </span>
           </span>
         </div>
+
+        <p className="text-muted-foreground text-xs">
+          A rebill is billed on the left and paid on the right, so a cost only partly recovered
+          shows up as the difference rather than as a line of its own.
+        </p>
 
         <p className="text-muted-foreground text-xs">
           Excluded on purpose: allowances (cash advanced is owed back, not spent), the gas deduction

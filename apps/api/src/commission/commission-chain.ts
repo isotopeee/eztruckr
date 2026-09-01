@@ -32,6 +32,11 @@ import { money, multiplyByRate, sum, toDecimalString } from '@eztruckr/types';
  */
 
 export interface ChargeLine {
+  /**
+   * What the CLIENT IS CHARGED for this line. Every figure this chain produces
+   * is revenue or derived from it, so a billable expense enters as its
+   * `billedAmount` — never as what it cost, which may be more.
+   */
   readonly amount: string;
   readonly isCommissionable: boolean;
 }
@@ -45,7 +50,12 @@ export interface ChainInput {
 }
 
 export interface CommissionChain {
-  /** Every billable expense, commissionable or not. Revenue, and also cost. */
+  /**
+   * Every billable expense at what the client is charged, commissionable or
+   * not. Revenue. What those rebills COST is a separate figure the P&L reads
+   * off the rows themselves — it is not in this chain and does not belong in
+   * one, because nothing here is a cost.
+   */
   readonly billableExpensesTotal: string;
   /** Every additional charge, commissionable or not. Pure revenue. */
   readonly additionalChargesTotal: string;

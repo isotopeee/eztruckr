@@ -50,6 +50,12 @@ import { useCurrentUser } from '@/lib/use-current-user';
  * underlying cost and is pure revenue. Merging them in the UI would invite
  * merging them in the reporting.
  *
+ * HOW MUCH COMES BACK is asked separately from what was paid, because recovery
+ * is routinely partial — a permit bought at ₱2,000 against a client who agreed
+ * to ₱1,500. One field for both could only express full recovery, and the way
+ * people worked around that was to type the smaller figure as the cost, which
+ * then disagreed with the receipt attached to the same line.
+ *
  * WHOSE MONEY PAID FOR A REBILL is asked on the form, because the P&L cannot
  * work it out afterwards. Office-paid means this row is the only record of the
  * money leaving, so it is a cost of the trip; crew-paid means the cost arrives
@@ -110,6 +116,8 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
     expenseCategoryId: '',
     description: '',
     amount: '',
+    /** Blank means the whole amount — the API defaults it, so '' is honest. */
+    billedAmount: '',
     spentAt: new Date().toISOString().slice(0, 10),
     payeeId: '',
     referenceNumber: '',
@@ -152,6 +160,10 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
         expenseCategoryId: draft.expenseCategoryId || null,
         description: draft.description || null,
         amount: draft.amount,
+        // Omitted rather than defaulted here: the API fills it with the amount,
+        // and copying that rule into the browser would be a second place for it
+        // to be wrong.
+        billedAmount: draft.billedAmount || undefined,
         // A date-only input means midnight local; sent as an instant because
         // storage is UTC and the display layer renders Asia/Manila.
         spentAt: new Date(draft.spentAt).toISOString(),
@@ -173,6 +185,7 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
         ...current,
         description: '',
         amount: '',
+        billedAmount: '',
         referenceNumber: '',
         receiptId: null,
         receiptFileName: null,
@@ -236,8 +249,20 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                   ) : null}
                   {line.isCommissionable ? <Badge variant="secondary">Commissionable</Badge> : null}
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <span className="tabular-nums">{formatMoney(line.amount)}</span>
+                <div className="flex shrink-0 items-start gap-2">
+                  {/* The BILLED figure leads, because this list sits beside the
+                      revenue it makes up. What was paid is shown under it only
+                      when the two differ — printing "₱1,500 · paid ₱1,500" on
+                      every fully recovered line would bury the handful that
+                      actually lost money. */}
+                  <span className="text-right">
+                    <span className="tabular-nums">{formatMoney(line.billedAmount)}</span>
+                    {line.billedAmount !== line.amount ? (
+                      <span className="text-muted-foreground block text-xs tabular-nums">
+                        paid {formatMoney(line.amount)}
+                      </span>
+                    ) : null}
+                  </span>
                   {canEdit ? (
                     <ConfirmDeleteButton
                       label={`Remove ${line.expenseCategoryName ?? line.description ?? 'expense'}`}
@@ -292,7 +317,7 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
               </div>
               <div className="space-y-1">
                 <Label htmlFor="billable-amount" className="text-xs">
-                  Amount
+                  Amount paid
                 </Label>
                 <Input
                   id="billable-amount"
@@ -305,6 +330,30 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                   }
                 />
               </div>
+            </div>
+
+            {/* LEFT BLANK IS FULL RECOVERY, which is the ordinary case and so
+                should cost nothing to express. Pre-filling it with the amount
+                would look the same but behave worse: the two would then have to
+                be kept in step while somebody edited the first, and a stale
+                copy left behind is a discount nobody agreed to. */}
+            <div className="space-y-1">
+              <Label htmlFor="billable-billed" className="text-xs">
+                Billed to client
+              </Label>
+              <Input
+                id="billable-billed"
+                placeholder={draft.amount ? `${draft.amount} (the full amount)` : 'The full amount'}
+                inputMode="decimal"
+                value={draft.billedAmount}
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, billedAmount: event.target.value }))
+                }
+              />
+              <p className="text-muted-foreground text-xs">
+                Leave blank to recover all of it. A smaller figure is the part the client agreed to
+                — the rest stays with the company as cost.
+              </p>
             </div>
 
             <div className="grid gap-2 sm:grid-cols-2">

@@ -551,8 +551,8 @@ describe('a billable expense carries what a company-paid one does', () => {
     await expect(
       prisma.$executeRawUnsafe(`
         INSERT INTO "billable_expense"
-          (id, "shipmentId", "expenseCategoryId", amount, "spentAt", "payeeRequired", "createdAt", "updatedAt", "createdBy")
-        VALUES ('${id('billable-no-payee')}', '${SHIPMENT_ID}', '${fuelCategoryId}', 100, now(), true, now(), now(), '${adminId}')
+          (id, "shipmentId", "expenseCategoryId", amount, "billedAmount", "spentAt", "payeeRequired", "createdAt", "updatedAt", "createdBy")
+        VALUES ('${id('billable-no-payee')}', '${SHIPMENT_ID}', '${fuelCategoryId}', 100, 100, now(), true, now(), now(), '${adminId}')
       `),
     ).rejects.toThrow(/billable_expense_payee_required/);
   });
@@ -645,12 +645,17 @@ describe('gross profit', () => {
    * A rebill, and WHOSE money paid for it. Null is the office; an account id is
    * the crew, whose liquidation then carries the cost.
    */
-  async function addBillableExpense(amount: string, liquidationId: string | null = null) {
+  async function addBillableExpense(
+    amount: string,
+    liquidationId: string | null = null,
+    billedAmount?: string,
+  ) {
     return act(() =>
       charges.addBillableExpense(SHIPMENT_ID, {
         expenseCategoryId: fuelCategoryId,
         description: null,
         amount,
+        billedAmount,
         spentAt: '2026-08-11T00:00:00.000Z',
         isCommissionable: false,
         payeeId,
@@ -840,6 +845,101 @@ describe('gross profit', () => {
     expect(corrected.revenue).toBe('47000.00');
   });
 
+  /**
+   * PARTIAL RECOVERY, which one `amount` column could not express at all. The
+   * workaround was to type the billed figure as the cost, so a ₱2,000 permit
+   * recovered at ₱1,500 was recorded as having cost ₱1,500 — the trip claimed
+   * to have spent less than it did, and the ₱500 it absorbed vanished rather
+   * than showing up as the margin it cost.
+   */
+  it('bills less than was paid, and absorbs the difference as cost', async () => {
+    if (!available) return;
+
+    await addBillableExpense('2000.00', null, '1500.00');
+
+    const profit = await grossProfits.forShipment(SHIPMENT_ID);
+
+    // The client owes what was AGREED, not what it cost.
+    expect(profit.billableExpenses).toBe('1500.00');
+    expect(profit.revenue).toBe('46500.00');
+
+    // The trip spent the whole ₱2,000 — the discount does not un-spend it.
+    expect(profit.companyPaidBillableExpenses).toBe('2000.00');
+    expect(profit.cost).toBe('2000.00');
+
+    // 45,000 of freight less the ₱500 nobody recovered.
+    expect(profit.grossProfit).toBe('44500.00');
+  });
+
+  it('recovers the whole amount when no billed figure is given', async () => {
+    if (!available) return;
+
+    const line = await addBillableExpense('2000.00');
+
+    // Stated on the row rather than left null, so nothing downstream has to
+    // know that "missing" means "all of it".
+    expect(line.amount).toBe('2000');
+    expect(line.billedAmount).toBe('2000');
+
+    const profit = await grossProfits.forShipment(SHIPMENT_ID);
+
+    // Still the pass-through it always was: revenue and cost move together.
+    expect(profit.billableExpenses).toBe('2000.00');
+    expect(profit.companyPaidBillableExpenses).toBe('2000.00');
+    expect(profit.grossProfit).toBe('45000.00');
+  });
+
+  /**
+   * A CREW-PAID REBILL NEEDS NO EXTRA ARITHMETIC for a shortfall. The
+   * liquidation counts the full spend and revenue counts the smaller billed
+   * figure, so the absorbed part falls out of the subtraction — and this is the
+   * case where a service tempted to compute the gap itself would count it
+   * twice.
+   */
+  it('absorbs a shortfall on a crew-paid rebill through the liquidation', async () => {
+    if (!available) return;
+
+    const account = await addLiquidation(staffId, '2000.0000');
+    await addBillableExpense('2000.00', account, '1500.00');
+
+    const profit = await grossProfits.forShipment(SHIPMENT_ID);
+
+    expect(profit.billableExpenses).toBe('1500.00');
+    // Nothing on the rebill row, because the crew's line already has it.
+    expect(profit.companyPaidBillableExpenses).toBe('0.00');
+    expect(profit.liquidatedExpenses).toBe('2000.00');
+    expect(profit.cost).toBe('2000.00');
+    // The same ₱44,500 as the office-paid case — whose cash paid for it does
+    // not change what the trip made.
+    expect(profit.grossProfit).toBe('44500.00');
+  });
+
+  it('changes only what it is told to when the billed figure is patched', async () => {
+    if (!available) return;
+
+    const line = await addBillableExpense('2000.00');
+
+    await act(() =>
+      charges.updateBillableExpense(SHIPMENT_ID, line.id, { billedAmount: '1500.00' }),
+    );
+
+    const discounted = await grossProfits.forShipment(SHIPMENT_ID);
+
+    expect(discounted.billableExpenses).toBe('1500.00');
+    // The cost did not move with it. Correcting a deal is not re-spending.
+    expect(discounted.companyPaidBillableExpenses).toBe('2000.00');
+
+    // And the reverse: correcting the cost leaves the agreed price alone,
+    // which is the failure a service deriving one from the other would cause.
+    await act(() => charges.updateBillableExpense(SHIPMENT_ID, line.id, { amount: '2400.00' }));
+
+    const costlier = await grossProfits.forShipment(SHIPMENT_ID);
+
+    expect(costlier.billableExpenses).toBe('1500.00');
+    expect(costlier.companyPaidBillableExpenses).toBe('2400.00');
+    expect(costlier.grossProfit).toBe('44100.00');
+  });
+
   it('refuses a rebill pinned to an account on another trip', async () => {
     if (!available) return;
 
@@ -872,14 +972,9 @@ describe('gross profit', () => {
     // would refuse this row anyway; the reason the service checks first is to
     // say which input was wrong, and a test that only proved it threw would
     // pass just as happily on a raw constraint violation surfacing as a 500.
-    const rejection = await addBillableExpense('2000.00', foreign.id).catch(
-      (error: unknown) => error,
-    );
+    const errors = await validationErrors(() => addBillableExpense('2000.00', foreign.id));
 
-    expect(rejection).toBeInstanceOf(BadRequestException);
-    expect((rejection as BadRequestException).getResponse()).toMatchObject({
-      errors: [{ path: 'liquidationId' }],
-    });
+    expect(errors).toEqual([expect.objectContaining({ path: 'liquidationId' })]);
   });
 
   /**
