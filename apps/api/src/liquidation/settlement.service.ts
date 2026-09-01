@@ -4,6 +4,7 @@ import {
   isAllowanceOutstanding,
   isDisbursementMode,
   isSettlementStatus,
+  liquidationAccountLabel,
   money,
   PayoutRunStatus,
   SETTLEMENT_STATUS_LABELS,
@@ -44,6 +45,7 @@ const SETTLEMENT_INCLUDE = {
   liquidation: {
     select: {
       custodianId: true,
+      sequence: true,
       approvedAt: true,
       custodian: { select: { firstName: true, lastName: true } },
     },
@@ -148,15 +150,20 @@ export class SettlementService {
 
     await this.assertMayBeCharged(current.shipmentId, input.staffId);
 
-    // Names the custodian as well as the trip. A deduction reading only
+    // Names the ACCOUNT as well as the trip. A deduction reading only
     // "shipment 20260813001" was unambiguous while a trip had one account; with
-    // two it would sit on a payslip without saying which cash it was for.
+    // two it would sit on a payslip without saying which cash it was for — and
+    // naming only the person is no better once one person can hold two of them,
+    // since a crew member could then be shown the same sentence twice for two
+    // different balances.
     const custodian = current.liquidation?.custodian;
-    const whose = custodian ? ` held by ${custodian.firstName} ${custodian.lastName}` : '';
 
     const reason =
       input.reason ??
-      `Unliquidated allowance${whose} on shipment ${current.shipment?.shipmentNumber ?? current.shipmentId}`;
+      `Unliquidated allowance on ${liquidationAccountLabel(
+        custodian ? `${custodian.firstName} ${custodian.lastName}` : null,
+        current.liquidation.sequence,
+      )}, shipment ${current.shipment?.shipmentNumber ?? current.shipmentId}`;
 
     await this.prisma.client.$transaction(async (tx) => {
       const deduction = await tx.crewDeduction.create({
@@ -254,6 +261,7 @@ export class SettlementService {
         shipment: { select: { shipmentNumber: true } },
         liquidation: {
           select: {
+            sequence: true,
             approvedAt: true,
             custodian: { select: { firstName: true, lastName: true } },
           },
@@ -279,6 +287,7 @@ export class SettlementService {
         custodianName: row.liquidation?.custodian
           ? `${row.liquidation.custodian.firstName} ${row.liquidation.custodian.lastName}`
           : null,
+        liquidationSequence: row.liquidation.sequence,
         status: row.status,
         amount: row.amount.toString(),
         approvedAt: dateToIso(row.liquidation?.approvedAt ?? null),
@@ -366,6 +375,7 @@ export function toSettlement(row: SettlementRow): Settlement {
     custodianName: row.liquidation?.custodian
       ? `${row.liquidation.custodian.firstName} ${row.liquidation.custodian.lastName}`
       : null,
+    liquidationSequence: row.liquidation.sequence,
 
     status: row.status,
     amount: row.amount.toString(),

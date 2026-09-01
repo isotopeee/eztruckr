@@ -85,7 +85,7 @@ driver slot refuses to dispatch against it.
 ### The cash trail of a trip
 
 ```
-Shipment ──┬── Liquidation (one per CUSTODIAN) ──┬── LiquidationLine     what they spent
+Shipment ──┬── Liquidation (one per CASH PILE) ──┬── LiquidationLine     what they spent
            │                                     ├── LiquidationHistory  submissions + returns
            │                                     ├── Allowance           releases booked to it
            │                                     ├── AllowanceRequest    dispatch asking for one
@@ -98,16 +98,34 @@ Shipment ──┬── Liquidation (one per CUSTODIAN) ──┬── Liquida
            └── Adjustment           manual ± to crew pay, with a reason
 ```
 
-**A liquidation is one custodian's account of one trip's cash.** One row per shipment blended
-two people's money: a single `variance` said what the TRIP was short by and never who owed it.
-Every action takes a **liquidation id**; only the lists and the create take a shipment.
+**A liquidation is one account of one trip's cash — one per PILE, not per person.** One row per
+shipment blended two people's money: a single `variance` said what the TRIP was short by and never
+who owed it. One row per custodian then blended the same person's two vouchers, and left the first
+advance unapprovable until the second had been spent. Every action takes a **liquidation id**; only
+the lists and the create take a shipment.
 
 - `Allowance.liquidationId` and `Settlement.liquidationId` are enforced by **composite foreign
   keys** on `(liquidationId, shipmentId)`, which is why `shipmentId` stays on both tables. In
   Prisma the target unique uses **`map:`, not `name:`** — `name:` renames only the client-side
   key and leaves drift.
-- **`custodianId` is nullable** for exactly one row: the liquidation created at BOOKING. Partial
-  unique `(shipmentId, custodianId) NULLS NOT DISTINCT WHERE deletedAt IS NULL`.
+- **`custodianId` is nullable** for exactly one row: the liquidation created at BOOKING. All that
+  is unique now is the UNNAMED one — partial unique `(shipmentId) WHERE deletedAt IS NULL AND
+custodianId IS NULL` — because two accounts with nobody on them cannot be told apart. A person
+  may hold as many as the trip demanded.
+- **`sequence` is the account's identity**, 1, 2, 3 on its trip. Allocated max + 1 over the trip's
+  accounts **including soft-deleted ones** and never reused, so a settlement or an alert naming
+  "account 2" means the same cash a year later; the unique index `(shipmentId, sequence)` is
+  therefore **not** partial on `deletedAt`, the one place in the schema where that would be wrong.
+  Allocate-and-retry on P2002, exactly as `shipmentNumber` is allocated. `liquidationAccountLabel`
+  in `@eztruckr/types` is the one phrasing — "Test Driver's account 2" — used by every screen and
+  every refusal, because the custodian's name stopped identifying an account.
+- **`description` is optional and load-bearing on nothing** — "Manila leg", "second advance".
+  `sequence` identifies an account; this is what makes it recognisable, which is a different job.
+  Set on the create or through `PATCH /liquidations/:id/description`, `CAN_SUBMIT_LIQUIDATION` like
+  the reference beside it, and frozen by approval with the rest of the record. It is appended to
+  `liquidationAccountLabel` where the caller has one — the card, the account pickers and the API's
+  refusals — and deliberately not plumbed onto release or settlement rows, which name an account by
+  number.
 - **Who received cash ≠ who answers for it**, and **a custodian need not be on the truck** —
   `assertMayHoldTripCash`, for all three callers.
 - **Holding a float and editing one are different permissions.**

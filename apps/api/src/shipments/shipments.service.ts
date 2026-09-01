@@ -18,6 +18,7 @@ import {
   isRateChainCorrectable,
   isRateChainEditable,
   isShipmentStatus,
+  liquidationAccountLabel,
   LiquidationStatus,
   nextShipmentNumber,
   SAME_PERSON_BOTH_SLOTS_MESSAGE,
@@ -877,13 +878,21 @@ export class ShipmentsService {
     // is the lock, so there is nothing beyond it to also accept here.
     const outstanding = await this.prisma.client.liquidation.findMany({
       where: { shipmentId: shipment.id, status: { not: LiquidationStatus.APPROVED } },
-      select: { custodian: { select: { firstName: true, lastName: true } } },
+      select: { sequence: true, custodian: { select: { firstName: true, lastName: true } } },
+      orderBy: { sequence: 'asc' },
     });
 
     if (outstanding.length > 0) {
+      // Named the way the screens name them. One person may hold several
+      // accounts on a trip, so a list of names alone could read "Test Driver,
+      // Test Driver" and leave the reader to work out which of the two is still
+      // open.
       const who = outstanding
         .map((row) =>
-          row.custodian ? `${row.custodian.firstName} ${row.custodian.lastName}` : 'unassigned',
+          liquidationAccountLabel(
+            row.custodian ? `${row.custodian.firstName} ${row.custodian.lastName}` : null,
+            row.sequence,
+          ),
         )
         .join(', ');
 

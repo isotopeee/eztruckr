@@ -7,6 +7,7 @@ import {
 import type { Prisma } from '@eztruckr/db';
 import {
   isDisbursementMode,
+  liquidationAccountLabel,
   LiquidationStatus,
   ShipmentStatus,
   sum,
@@ -45,7 +46,9 @@ import { assertMayHoldTripCash } from './trip-cash-participants';
  */
 export const ALLOWANCE_INCLUDE = {
   staff: { select: { firstName: true, lastName: true } },
-  liquidation: { select: { custodian: { select: { firstName: true, lastName: true } } } },
+  liquidation: {
+    select: { sequence: true, custodian: { select: { firstName: true, lastName: true } } },
+  },
   releasedByUser: { select: { name: true } },
   receipt: { select: { fileName: true } },
 } satisfies Prisma.AllowanceInclude;
@@ -303,6 +306,7 @@ export class AllowancesService {
       where: { id: liquidationId },
       select: {
         shipmentId: true,
+        sequence: true,
         status: true,
         custodian: { select: { firstName: true, lastName: true } },
       },
@@ -316,9 +320,15 @@ export class AllowancesService {
     }
 
     if (liquidation.status === LiquidationStatus.APPROVED) {
-      const who = liquidation.custodian
-        ? `${liquidation.custodian.firstName} ${liquidation.custodian.lastName}'s account`
-        : 'That account';
+      // The number as well as the name: the other account this suggests booking
+      // against may well be the same person's, and "book it against another
+      // account" is not actionable if both read alike.
+      const who = liquidationAccountLabel(
+        liquidation.custodian
+          ? `${liquidation.custodian.firstName} ${liquidation.custodian.lastName}`
+          : null,
+        liquidation.sequence,
+      );
 
       throw new ConflictException(
         `${who} is approved, so its total advanced is frozen. Reverse the approval, with a reason, or book the release against another account.`,
@@ -419,6 +429,7 @@ export function toAllowance(row: AllowanceRow): Allowance {
     custodianName: row.liquidation?.custodian
       ? `${row.liquidation.custodian.firstName} ${row.liquidation.custodian.lastName}`
       : null,
+    liquidationSequence: row.liquidation.sequence,
     staffId: row.staffId,
     staffName: row.staff ? `${row.staff.firstName} ${row.staff.lastName}` : null,
     amount: row.amount.toString(),

@@ -1260,7 +1260,7 @@ model AllowanceRequest {
 /// their action". What a `RETURNED` state would have recorded is recorded
 /// better by `LiquidationHistory`, which also says when, by whom and why. See
 /// the code set for the full argument.
-/// ONE CUSTODIAN'S ACCOUNT of one trip's cash. Many per shipment.
+/// ONE ACCOUNT of one trip's cash. Many per shipment, and MANY PER CUSTODIAN.
 ///
 /// It was one per shipment until the custodian existed, and that single row
 /// was quietly blending two people's money: with a driver holding ₱10,000 and
@@ -1268,6 +1268,14 @@ model AllowanceRequest {
 /// was short by, never which of them owed it. The settlement built on top
 /// inherited the same blindness, and a crew member could be chased for change
 /// their colleague was holding.
+///
+/// It was then one per custodian, which blended the SAME person's money in
+/// exactly the same way. A driver drawing a second advance halfway through a
+/// long trip is holding two piles of cash against two vouchers, and the office
+/// squares them up separately — folding them into one row made the first
+/// unapprovable until the second was spent, and produced one variance where
+/// the paperwork has two. A custodian may now hold as many accounts as the
+/// trip demanded, each with its own status, variance and settlement.
 ///
 /// A custodian is the person accountable for accounting — not necessarily the
 /// person who received every peso. An allowance names its own recipient, so a
@@ -1278,14 +1286,32 @@ model Liquidation {
   shipmentId String   @db.Uuid
   shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
 
+  /// This account's number on its trip — 1, 2, 3 — and the only thing that
+  /// tells two accounts of the SAME custodian apart.
+  ///
+  /// Allocated as max + 1 over the trip's accounts INCLUDING soft-deleted ones,
+  /// so a number is never reused. An account removed as a mistake would
+  /// otherwise hand its number on, and every settlement, alert and refusal that
+  /// had already named "account 2" would quietly start pointing at a different
+  /// pile of cash.
+  ///
+  /// NOT `referenceNumber`, which sits below and does the opposite job: this is
+  /// the number THIS system issues and guarantees unique on the trip; that one
+  /// is what somebody wrote on a voucher, optional and deliberately not unique.
+  sequence Int
+
   /// The staff member answerable for this cash. Not necessarily on the truck:
   /// a dispatch manager holds a trip's float without driving or helping.
   ///
   /// Nullable, because a trip's first liquidation is created at BOOKING, before
-  /// anybody has been assigned to drive it. Partial-unique on
-  /// (shipmentId, custodianId) WHERE "deletedAt" IS NULL and NULLS NOT
-  /// DISTINCT — one open account per person per trip, and only one that has
-  /// nobody's name on it yet, because two unnamed accounts are indistinguishable.
+  /// anybody has been assigned to drive it.
+  ///
+  /// NOT UNIQUE PER TRIP, and no longer unique per person on one either — see
+  /// the model note above. What survives is
+  /// `liquidation_shipment_unnamed_live_key`: at most one LIVE account with
+  /// nobody named to it, because two unnamed accounts are indistinguishable
+  /// from each other and a release landing on "the unassigned account" would
+  /// have no way to say which.
   custodianId String? @db.Uuid
   custodian   Staff?  @relation("LiquidationCustodian", fields: [custodianId], references: [id], onDelete: Restrict)
 
@@ -1314,6 +1340,21 @@ model Liquidation {
   approvedBy     String?   @db.Uuid
   approvedByUser User?     @relation("LiquidationApprovedBy", fields: [approvedBy], references: [id], onDelete: Restrict)
   remarks        String?
+
+  /// What this account is FOR, in the office's own words — "Manila leg",
+  /// "second advance", "ferry money".
+  ///
+  /// Optional, and never load-bearing: `sequence` is what identifies an account
+  /// and nothing is derived from this. It exists because a number tells two of
+  /// one person's accounts apart without saying which is which, and the person
+  /// who opened the second one knows why they did.
+  ///
+  /// THE THIRD PIECE OF FREE TEXT ON THIS ROW, and the three are not
+  /// interchangeable. This describes the ACCOUNT and is written when it is
+  /// opened; `remarks` annotates a SUBMISSION or an APPROVAL and arrives with
+  /// one of those moves; `referenceNumber` is not prose at all — it is a number
+  /// somebody else issued, transcribed off paper.
+  description String?
 
   /// The voucher or document number this account was settled under.
   ///
@@ -1348,6 +1389,10 @@ model Liquidation {
   /// `map:`, not `name:` — the first sets the constraint name in Postgres, the
   /// second only renames the compound key in the generated client.
   @@unique([id, shipmentId], map: "liquidation_id_shipment_key")
+  /// The account's identity on its trip, and the constraint that makes
+  /// "account 2" mean one thing forever. NOT partial on `deletedAt`: a removed
+  /// account keeps its number precisely so the next one cannot inherit it.
+  @@unique([shipmentId, sequence], map: "liquidation_shipment_sequence_key")
   @@index([shipmentId])
   @@index([custodianId])
   @@index([status])
@@ -1824,7 +1869,7 @@ model ClientPayment {
   /// which the soft delete already records with who did it and when. A signed
   /// column would also make "how much has this trip collected" depend on which
   /// rows somebody decided to count.
-  amount     Decimal  @db.Decimal(15, 4)
+  amount Decimal @db.Decimal(15, 4)
 
   /// When the money actually reached the company, which is not when the row was
   /// typed. A check cleared on Friday is routinely recorded on Monday, and a

@@ -350,6 +350,7 @@ async function tripWithTwoAccounts(suffix: string) {
 
     const helperAccount = await liquidations.createForShipment(shipmentId, {
       custodianId: helperId,
+      description: null,
     });
 
     for (const [liquidationId, staffId, amount] of [
@@ -1149,6 +1150,260 @@ describe('two people holding cash on one trip', () => {
 });
 
 /**
+ * ONE PERSON, TWO PILES OF CASH, on the same trip.
+ *
+ * The case the one-account-per-custodian rule could not hold. A driver on a
+ * long haul draws a second advance against a second voucher: the office issues
+ * them separately, counts them separately and squares them up separately, and
+ * folding both into one row left the first unapprovable until the second had
+ * been spent — with one variance standing where the paperwork has two.
+ *
+ * Everything here is the two-custodian suite above with ONE person in it, which
+ * is the point: nothing about an account depends on whose it is.
+ */
+describe('one person holding two piles of cash on one trip', () => {
+  it('opens a second account for the same custodian, numbered and separate', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await deliveredTrip('same-custodian', '10000.00');
+
+    await act(async () => liquidations.setCustodian(liquidationId, { custodianId: driverId }));
+
+    const second = await act(async () =>
+      liquidations.createForShipment(shipmentId, { custodianId: driverId, description: null }),
+    );
+
+    await act(async () =>
+      allowances.issue(
+        shipmentId,
+        {
+          liquidationId: second.id,
+          staffId: driverId,
+          amount: '4000.00',
+          issuedAt: null,
+          disbursementMode: DisbursementMode.CASH,
+          referenceNumber: null,
+          receiptId: null,
+          releasedBy: null,
+          remarks: null,
+        },
+        actor,
+      ),
+    );
+
+    await addLine(liquidationId, '9000.00');
+    await addLine(second.id, '3500.00');
+
+    const first = await liquidations.get(liquidationId);
+
+    // The number, not the name, is what tells them apart — both say
+    // "Test Driver".
+    expect(first.sequence).toBe(1);
+    expect(second.sequence).toBe(2);
+    expect(first.custodianName).toBe('Test Driver');
+    expect((await liquidations.get(second.id)).custodianName).toBe('Test Driver');
+
+    // Each measured against its own releases. Blended, this trip reads 14,000
+    // advanced against 12,500 spent: one variance of 1,500 belonging to neither
+    // voucher, and no way to close the first while the second is still running.
+    expect(first.totalAllowance).toBe('10000');
+    expect(first.variance).toBe('1000');
+    expect((await liquidations.get(second.id)).totalAllowance).toBe('4000');
+    expect((await liquidations.get(second.id)).variance).toBe('500');
+  });
+
+  it('approves the first voucher while the second is still taking cash', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await deliveredTrip('first-voucher', '10000.00');
+
+    await act(async () => liquidations.setCustodian(liquidationId, { custodianId: driverId }));
+
+    const second = await act(async () =>
+      liquidations.createForShipment(shipmentId, { custodianId: driverId, description: null }),
+    );
+
+    await addLine(liquidationId, '10000.00');
+    await act(async () => liquidations.submit(liquidationId, { remarks: null }, actor));
+    await act(async () => liquidations.approve(liquidationId, { remarks: null }, actor));
+
+    // THE WHOLE REASON THIS EXISTS. Approval freezes an account, and while one
+    // account was all a person could hold, freezing the first voucher meant
+    // refusing the cash the second leg still needs.
+    await act(async () =>
+      allowances.issue(
+        shipmentId,
+        {
+          liquidationId: second.id,
+          staffId: driverId,
+          amount: '4000.00',
+          issuedAt: null,
+          disbursementMode: DisbursementMode.CASH,
+          referenceNumber: null,
+          receiptId: null,
+          releasedBy: null,
+          remarks: null,
+        },
+        actor,
+      ),
+    );
+
+    expect((await liquidations.get(second.id)).totalAllowance).toBe('4000');
+    expect((await liquidations.get(second.id)).isEditable).toBe(true);
+
+    // And the trip is not accounted for on the strength of the first voucher,
+    // even though the only custodian on it has signed something.
+    expect(await liquidations.allApproved(shipmentId)).toBe(false);
+  });
+
+  it('never hands a removed account’s number to the next one', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await deliveredTrip('number-reuse', '1000.00');
+
+    await act(async () => liquidations.setCustodian(liquidationId, { custodianId: driverId }));
+
+    const opened = await act(async () =>
+      liquidations.createForShipment(shipmentId, { custodianId: driverId, description: null }),
+    );
+
+    expect(opened.sequence).toBe(2);
+
+    // Opened by mistake and removed while empty — the one removal the service
+    // allows.
+    await act(async () => liquidations.remove(opened.id));
+
+    const reopened = await act(async () =>
+      liquidations.createForShipment(shipmentId, { custodianId: driverId, description: null }),
+    );
+
+    // 3, NOT 2. A settlement, an alert or a message naming "account 2" was
+    // written about the removed one, and a reused number would quietly point it
+    // at a different pile of cash.
+    expect(reopened.sequence).toBe(3);
+  });
+
+  it('numbers the account the delivery backstop reopens, after every one was removed', async () => {
+    if (!available) return;
+
+    const shipmentId = id('shipment-backstop-reopen');
+
+    await act(async () =>
+      prisma.shipment.create({
+        data: {
+          id: shipmentId,
+          shipmentNumber: id('SHP-backstop-reopen').toUpperCase(),
+          status: ShipmentStatus.PENDING_LIQUIDATION,
+          clientId,
+          driverId,
+          origin: 'Manila',
+          destination: 'Batangas',
+          grossRate: '20000.0000',
+          netRate: '20000.0000',
+        },
+      }),
+    );
+
+    const first = await act(async () => ensurePendingLiquidation(prisma, shipmentId));
+    await act(async () => liquidations.remove(first));
+
+    // The trip now has no LIVE account, so the backstop opens one — and it must
+    // read the removed row to number it, which is the one thing a soft-delete
+    // filter hides by default. Numbering from the live rows would hand this
+    // account the number the removed one still carries.
+    const reopened = await act(async () => ensurePendingLiquidation(prisma, shipmentId));
+
+    expect((await liquidations.get(reopened)).sequence).toBe(2);
+  });
+
+  it('carries what an account is for, from the moment it is opened', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await deliveredTrip('described', '1000.00');
+
+    await act(async () => liquidations.setCustodian(liquidationId, { custodianId: driverId }));
+
+    const second = await act(async () =>
+      liquidations.createForShipment(shipmentId, {
+        custodianId: driverId,
+        description: 'Cebu leg, ferry and fuel',
+      }),
+    );
+
+    expect(second.description).toBe('Cebu leg, ferry and fuel');
+
+    // Said on the account opened at booking too, which nobody described at the
+    // time — the field is a note, not something only a create can set.
+    const first = await act(async () =>
+      liquidations.setDescription(liquidationId, { description: 'Manila leg' }, actor),
+    );
+
+    expect(first.description).toBe('Manila leg');
+
+    // It reads back on the account rather than through anything derived from
+    // it: nothing depends on this text, which is the whole reason it is allowed
+    // to be free.
+    const listed = await liquidations.listForShipment(shipmentId);
+    expect(listed.map((account) => account.description)).toEqual([
+      'Manila leg',
+      'Cebu leg, ferry and fuel',
+    ]);
+
+    // And it clears back to nothing, which is what it said before anybody typed.
+    const cleared = await act(async () =>
+      liquidations.setDescription(liquidationId, { description: null }, actor),
+    );
+
+    expect(cleared.description).toBeNull();
+  });
+
+  it('freezes the description on approval, with the rest of the record', async () => {
+    if (!available) return;
+
+    const { liquidationId } = await deliveredTrip('described-frozen', '1000.00');
+
+    await act(async () => liquidations.setCustodian(liquidationId, { custodianId: driverId }));
+    await act(async () =>
+      liquidations.setDescription(liquidationId, { description: 'Manila leg' }, actor),
+    );
+
+    await addLine(liquidationId, '1000.00');
+    await act(async () => liquidations.submit(liquidationId, { remarks: null }, actor));
+    await act(async () => liquidations.approve(liquidationId, { remarks: null }, actor));
+
+    // The same lock the claims and the reference are under, and the refusal
+    // names the account the way every screen does — description included.
+    await expect(
+      act(async () =>
+        liquidations.setDescription(liquidationId, { description: 'Something else' }, actor),
+      ),
+    ).rejects.toThrow(/Test Driver's account 1 \(Manila leg\) .*is approved and locked/i);
+
+    expect((await liquidations.get(liquidationId)).description).toBe('Manila leg');
+  });
+
+  it('still refuses a second account with nobody named to it', async () => {
+    if (!available) return;
+
+    const { shipmentId, liquidationId } = await deliveredTrip('two-unnamed', '1000.00');
+
+    const second = await act(async () =>
+      liquidations.createForShipment(shipmentId, { custodianId: driverId, description: null }),
+    );
+
+    // The account opened at booking has nobody on it, and handing this one back
+    // to nobody as well would leave two accounts that cannot be told apart:
+    // the number says which row, and neither row says whose cash.
+    const refusal = await validationMessage(() =>
+      act(async () => liquidations.setCustodian(second.id, { custodianId: null })),
+    );
+
+    expect(refusal).toMatch(/custodianId: Account 1 .*already has nobody named to it/i);
+    expect((await liquidations.get(liquidationId)).custodianId).toBeNull();
+  });
+});
+
+/**
  * The rules that are the database's, not the service's.
  *
  * Each has a service-level check in front of it that says the same thing in a
@@ -1189,31 +1444,36 @@ describe('the constraints hold when the service is bypassed', () => {
 
     const { shipmentId } = await deliveredTrip('nulls-not-distinct', '1000.00');
 
-    // NULLS NOT DISTINCT. Two custodian-less accounts on one trip would be
-    // indistinguishable from each other, and a release landing on "the
-    // unassigned account" would have no way to say which.
+    // Two custodian-less accounts on one trip would be indistinguishable from
+    // each other, and a release landing on "the unassigned account" would have
+    // no way to say which. The number tells accounts of the same PERSON apart;
+    // it cannot tell these apart, because neither has a person.
     await expect(
       act(async () =>
         prisma.liquidation.create({
-          data: { shipmentId, status: LiquidationStatus.PENDING },
+          data: { shipmentId, sequence: 2, status: LiquidationStatus.PENDING },
         }),
       ),
-    ).rejects.toThrow(/unique|liquidation_shipment_custodian_live_key/i);
+    ).rejects.toThrow(/unique|liquidation_shipment_unnamed_live_key/i);
   });
 
-  it('refuses a second account for somebody who already holds one', async () => {
+  it('refuses two accounts holding the same number on one trip', async () => {
     if (!available) return;
 
-    const { shipmentId } = await tripWithTwoAccounts('duplicate-custodian');
+    const { shipmentId } = await deliveredTrip('duplicate-sequence', '1000.00');
 
-    // The service says it in a sentence before the index has to. Both exist:
-    // a second account for the same person is not a constraint violation to
-    // the user, it is a screen that should not have offered it.
-    const refusal = await validationMessage(() =>
-      act(async () => liquidations.createForShipment(shipmentId, { custodianId: helperId })),
-    );
-
-    expect(refusal).toMatch(/custodianId: Test Helper already holds an account/i);
+    // The number is the account's name in every settlement, alert and refusal
+    // that has already been written down, so the database owns it rather than
+    // the allocation loop that reads max + 1. Not partial on `deletedAt`,
+    // deliberately: a removed account keeps its number so the next one cannot
+    // inherit it.
+    await expect(
+      act(async () =>
+        prisma.liquidation.create({
+          data: { shipmentId, sequence: 1, custodianId: driverId },
+        }),
+      ),
+    ).rejects.toThrow(/unique|liquidation_shipment_sequence_key/i);
   });
 
   it('refuses a custodian who never worked the trip', async () => {
@@ -1225,7 +1485,9 @@ describe('the constraints hold when the service is bypassed', () => {
     const { shipmentId } = await deliveredTrip('outsider-custodian', '1000.00');
 
     const refusal = await validationMessage(() =>
-      act(async () => liquidations.createForShipment(shipmentId, { custodianId: helperId })),
+      act(async () =>
+        liquidations.createForShipment(shipmentId, { custodianId: helperId, description: null }),
+      ),
     );
 
     expect(refusal).toMatch(
@@ -1274,7 +1536,7 @@ describe('a dispatch manager holds cash without being on the truck', () => {
 
     const { shipmentId } = await deliveredTrip('dispatch-queue', '1000.00');
     const theirs = await act(async () =>
-      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId }),
+      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId, description: null }),
     );
 
     const queue = await liquidations.list({ returnedOnly: false }, dispatcherId);
@@ -1290,7 +1552,7 @@ describe('a dispatch manager holds cash without being on the truck', () => {
 
     // Not the driver, not the helper, and not in any slot on this shipment.
     const account = await act(async () =>
-      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId }),
+      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId, description: null }),
     );
 
     expect(account.custodianName).toBe('Test Dispatcher');
@@ -1309,7 +1571,7 @@ describe('a dispatch manager holds cash without being on the truck', () => {
     const { shipmentId } = await deliveredTrip('dispatch-float', '1000.00');
 
     const account = await act(async () =>
-      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId }),
+      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId, description: null }),
     );
 
     // Received BY them and booked AGAINST them: they are physically holding it.
@@ -1446,7 +1708,7 @@ describe('a dispatch manager holds cash without being on the truck', () => {
     const { shipmentId } = await deliveredTrip('dispatcher-role-custodian', '1000.00');
 
     const account = await act(async () =>
-      liquidations.createForShipment(shipmentId, { custodianId: person.id }),
+      liquidations.createForShipment(shipmentId, { custodianId: person.id, description: null }),
     );
 
     expect(account.custodianName).toBe('Test Booker');
@@ -1457,7 +1719,7 @@ describe('a dispatch manager holds cash without being on the truck', () => {
 
     const { shipmentId } = await deliveredTrip('office-own-float', '1000.00');
     const account = await act(async () =>
-      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId }),
+      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId, description: null }),
     );
 
     const line = await act(async () =>
@@ -1484,7 +1746,7 @@ describe('a dispatch manager holds cash without being on the truck', () => {
     const { shipmentId } = await deliveredTrip('dispatch-carry', '1000.00');
 
     const account = await act(async () =>
-      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId }),
+      liquidations.createForShipment(shipmentId, { custodianId: dispatcherId, description: null }),
     );
 
     await act(async () =>

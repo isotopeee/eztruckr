@@ -67,6 +67,14 @@ export const billableExpenseSchema = auditFieldsSchema.extend({
    * yet". The two are different facts and neither is inferable from this name.
    */
   liquidationCustodianName: z.string().nullable(),
+  /**
+   * Which of that person's accounts on the trip carries the cost.
+   *
+   * Null exactly when `liquidationId` is: one person may hold several accounts
+   * on one trip, so the custodian's name alone no longer says which of them
+   * promised to carry this rebill's cost.
+   */
+  liquidationSequence: z.number().int().nullable(),
   expenseCategoryId: z.string().nullable(),
   expenseCategoryName: z.string().nullable(),
   description: z.string().nullable(),

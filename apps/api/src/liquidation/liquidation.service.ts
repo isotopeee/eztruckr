@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Prisma } from '@eztruckr/db';
+import { Prisma, withDeleted } from '@eztruckr/db';
 import {
   AllowanceRequestStatus,
   isAllowedLiquidationTransition,
@@ -15,6 +15,7 @@ import {
   isLiquidationHistoryAction,
   isLiquidationStatus,
   isShipmentStatus,
+  liquidationAccountLabel,
   LIQUIDATION_STATUS_LABELS,
   LiquidationHistoryAction,
   LiquidationStatus,
@@ -34,6 +35,7 @@ import {
   type ReturnLiquidationInput,
   type ReverseLiquidationInput,
   type SetCustodianInput,
+  type SetLiquidationDescriptionInput,
   type SetLiquidationReferenceInput,
   type SubmitLiquidationInput,
   type UpdateLiquidationLineInput,
@@ -118,6 +120,30 @@ type LineRow = LiquidationRow['lines'][number];
 const AUDIT_ENTITY_TYPE = 'Liquidation';
 const REVERSAL_ACTION = 'liquidation.reverse-approval';
 
+/**
+ * Allocate-and-retry, exactly as `shipmentNumber` is allocated.
+ *
+ * `sequence` is max + 1 over the trip's accounts, which two people opening one
+ * at the same moment can both read as the same number. The unique index is what
+ * decides between them and this is what makes the loser's request succeed
+ * anyway — reserving the number in a transaction would serialise every account
+ * on a trip to make an event that happens roughly never a little tidier.
+ */
+const ACCOUNT_NUMBER_ATTEMPTS = 5;
+
+function isAccountNumberCollision(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+    return false;
+  }
+
+  // Both spellings, for the reason `isShipmentNumberCollision` gives: Prisma
+  // may report the index name or resolve it back to the model fields, and which
+  // one arrives is the client's business rather than this code's.
+  const detail = `${JSON.stringify(error.meta?.target ?? '')} ${error.message}`;
+
+  return detail.includes('sequence') || detail.includes('liquidation_shipment_sequence_key');
+}
+
 @Injectable()
 export class LiquidationService {
   constructor(
@@ -132,17 +158,22 @@ export class LiquidationService {
   }
 
   /**
-   * Every account on one trip, oldest first.
+   * Every account on one trip, in account order.
    *
    * A list where there used to be a single record. The trip's own liquidation —
    * the one created with the shipment, before anybody was assigned — leads,
    * because it is the one a release lands on when nobody has chosen otherwise.
+   *
+   * BY `sequence`, not by `createdAt`, now that the number is what the screens
+   * and the refusals call each account: the two agree today, and a list whose
+   * order came from a different column would eventually show "account 3" above
+   * "account 2" and leave a reader wondering which of them they had misread.
    */
   async listForShipment(shipmentId: string): Promise<Liquidation[]> {
     const rows = await this.prisma.client.liquidation.findMany({
       where: { shipmentId },
       include: LIQUIDATION_INCLUDE,
-      orderBy: [{ createdAt: 'asc' }],
+      orderBy: [{ sequence: 'asc' }],
     });
 
     return rows.map(toLiquidation);
@@ -210,28 +241,48 @@ export class LiquidationService {
   // --- opening and naming an account ---------------------------------------
 
   /**
-   * Opens a second account on a trip, for a second cash holder.
+   * Opens another account on a trip — for a second cash holder, or for a second
+   * advance to somebody who already holds one.
+   *
+   * NOTHING HERE REFUSES A DUPLICATE CUSTODIAN any more, and that is the point
+   * of this method now. It used to, on the reasoning that a release belongs on
+   * the account the person already has; a long haul with two vouchers is the
+   * case that reasoning could not hold, and folding both into one row left the
+   * first advance unapprovable until the second had been spent. What guards
+   * against an account opened by mistake is that every account is listed,
+   * numbered, and removable while empty.
    *
    * The custodian is required here even though the column is nullable: the
    * nullable case exists for exactly one row — the account created with the
-   * shipment — and the partial unique index (NULLS NOT DISTINCT) refuses a
-   * second unnamed one anyway. Failing in the service with a sentence beats
-   * failing at an index name.
+   * shipment — and `liquidation_shipment_unnamed_live_key` refuses a second
+   * unnamed one anyway. Failing in the service with a sentence beats failing at
+   * an index name.
    */
   async createForShipment(shipmentId: string, input: CreateLiquidationInput): Promise<Liquidation> {
     await this.assertMayBeCustodian(shipmentId, input.custodianId);
-    await this.assertNoOpenAccountFor(shipmentId, input.custodianId, null);
 
-    const row = await this.prisma.client.liquidation.create({
-      data: {
-        shipmentId,
-        custodianId: input.custodianId,
-        status: LiquidationStatus.PENDING,
-      },
-      include: LIQUIDATION_INCLUDE,
-    });
+    for (let attempt = 1; ; attempt += 1) {
+      const sequence = await this.nextSequence(shipmentId);
 
-    return toLiquidation(row);
+      try {
+        const row = await this.prisma.client.liquidation.create({
+          data: {
+            shipmentId,
+            sequence,
+            custodianId: input.custodianId,
+            description: input.description,
+            status: LiquidationStatus.PENDING,
+          },
+          include: LIQUIDATION_INCLUDE,
+        });
+
+        return toLiquidation(row);
+      } catch (error) {
+        if (attempt >= ACCOUNT_NUMBER_ATTEMPTS || !isAccountNumberCollision(error)) {
+          throw error;
+        }
+      }
+    }
   }
 
   /**
@@ -251,9 +302,14 @@ export class LiquidationService {
       );
     }
 
-    if (input.custodianId !== null) {
+    if (input.custodianId === null) {
+      // Handing an account back to nobody is the only move that can produce a
+      // second unnamed one, and that is the one shape still refused: two
+      // accounts with nobody named to them cannot be told apart. Naming the
+      // SAME person as another account is fine now — see `createForShipment`.
+      await this.assertOnlyUnnamedAccount(current.shipmentId, liquidationId);
+    } else {
       await this.assertMayBeCustodian(current.shipmentId, input.custodianId);
-      await this.assertNoOpenAccountFor(current.shipmentId, input.custodianId, liquidationId);
     }
 
     return toLiquidation(
@@ -286,6 +342,31 @@ export class LiquidationService {
       await this.prisma.client.liquidation.update({
         where: { id: liquidationId },
         data: { referenceNumber: input.referenceNumber },
+        include: LIQUIDATION_INCLUDE,
+      }),
+    );
+  }
+
+  /**
+   * Saying what this account is for, or changing what it says.
+   *
+   * The same permission and the same lock as the reference above — it is part
+   * of accounting for a float rather than a decision about somebody else's
+   * money, and approval freezes the whole record. Null clears it: an account
+   * described wrongly should be able to go back to saying nothing, which is
+   * what it said before anybody typed.
+   */
+  async setDescription(
+    liquidationId: string,
+    input: SetLiquidationDescriptionInput,
+    user: RequestUser,
+  ): Promise<Liquidation> {
+    await this.loadEditable(liquidationId, user);
+
+    return toLiquidation(
+      await this.prisma.client.liquidation.update({
+        where: { id: liquidationId },
+        data: { description: input.description },
         include: LIQUIDATION_INCLUDE,
       }),
     );
@@ -916,35 +997,47 @@ export class LiquidationService {
   }
 
   /**
-   * One open account per person per trip.
+   * The next account number on this trip.
    *
-   * `liquidation_shipment_custodian_live_key` enforces this, and this method
-   * exists to say it in a sentence rather than as an index name — a second
-   * account for the same person is not a constraint violation to the user, it
-   * is a screen they should not have offered.
+   * `withDeleted`, and that is the whole correctness of it. A number is the
+   * account's name in every settlement, alert and refusal that has already been
+   * written down, so a removed account keeps its own: numbering from the LIVE
+   * rows would hand "account 2" to a different pile of cash the moment an empty
+   * one was tidied away. The unique index is not partial for the same reason,
+   * which is also what makes the collision retry above possible — a reused
+   * number would be accepted rather than refused.
    */
-  private async assertNoOpenAccountFor(
-    shipmentId: string,
-    custodianId: string,
-    excludingId: string | null,
-  ): Promise<void> {
+  private async nextSequence(shipmentId: string): Promise<number> {
+    const latest = await withDeleted(async () =>
+      this.prisma.client.liquidation.findFirst({
+        where: { shipmentId },
+        orderBy: { sequence: 'desc' },
+        select: { sequence: true },
+      }),
+    );
+
+    return (latest?.sequence ?? 0) + 1;
+  }
+
+  /**
+   * At most one live account with nobody named to it.
+   *
+   * All that survives of the old one-per-custodian rule, and for the one reason
+   * that never depended on it: two unnamed accounts are indistinguishable from
+   * each other, so a release booked against "the unassigned account" could not
+   * say which. `liquidation_shipment_unnamed_live_key` enforces it; this says it
+   * in a sentence first, because an index name is a poor way to learn it.
+   */
+  private async assertOnlyUnnamedAccount(shipmentId: string, excludingId: string): Promise<void> {
     const existing = await this.prisma.client.liquidation.findFirst({
-      where: {
-        shipmentId,
-        custodianId,
-        ...(excludingId === null ? {} : { id: { not: excludingId } }),
-      },
-      include: { custodian: { select: { firstName: true, lastName: true } } },
+      where: { shipmentId, custodianId: null, id: { not: excludingId } },
+      select: { sequence: true },
     });
 
     if (existing) {
-      const name = existing.custodian
-        ? `${existing.custodian.firstName} ${existing.custodian.lastName}`
-        : 'That crew member';
-
       throw badRequest(
         'custodianId',
-        `${name} already holds an account on this trip. Add the release to it rather than opening a second.`,
+        `Account ${existing.sequence} on this trip already has nobody named to it, and two accounts in that state cannot be told apart. Name a custodian on one of them first.`,
       );
     }
   }
@@ -1016,15 +1109,22 @@ export class LiquidationService {
 /**
  * How an account reads in a refusal.
  *
- * A trip can carry several now, so "the liquidation for shipment X" stopped
- * identifying anything — the person is what tells them apart.
+ * A trip can carry several, so "the liquidation for shipment X" stopped
+ * identifying anything — and one PERSON can hold several, so the name stopped
+ * identifying anything either. The number is what is left, and it is on every
+ * refusal for that reason.
+ *
+ * Built from `liquidationAccountLabel`, the same phrasing the screens caption an
+ * account with, so a person reading "Test Driver's account 2 is approved and
+ * locked" is reading the heading of the card in front of them rather than a
+ * second name for the same row.
  */
 function describe(row: LiquidationRow): string {
-  const who = row.custodian
-    ? `${row.custodian.firstName} ${row.custodian.lastName}'s liquidation`
-    : 'The unassigned liquidation';
+  const custodianName = row.custodian
+    ? `${row.custodian.firstName} ${row.custodian.lastName}`
+    : null;
 
-  return `${who} on shipment ${row.shipment.shipmentNumber}`;
+  return `${liquidationAccountLabel(custodianName, row.sequence, row.description)} on shipment ${row.shipment.shipmentNumber}`;
 }
 
 function badRequest(path: string, message: string): BadRequestException {
@@ -1085,8 +1185,12 @@ export function toLiquidation(row: LiquidationRow): Liquidation {
     shipmentId: row.shipmentId,
     shipmentNumber: row.shipment?.shipmentNumber ?? null,
 
+    sequence: row.sequence,
+
     custodianId: row.custodianId,
     custodianName: row.custodian ? `${row.custodian.firstName} ${row.custodian.lastName}` : null,
+
+    description: row.description,
 
     status,
 

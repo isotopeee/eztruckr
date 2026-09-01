@@ -22,12 +22,21 @@ export const allowanceSchema = auditFieldsSchema.extend({
   shipmentId: z.string(),
 
   /**
-   * Which custodian's account this release is booked against — whose variance
-   * it moves. A trip can carry one per cash holder, and until this existed
-   * every release counted against a single blended total.
+   * Which account this release is booked against — whose variance it moves. A
+   * trip can carry one per cash holder, and until this existed every release
+   * counted against a single blended total.
    */
   liquidationId: z.string(),
   custodianName: z.string().nullable(),
+  /**
+   * That account's number on the trip.
+   *
+   * Beside the name because the name stopped identifying an account when one
+   * person could hold two: a screen listing "Test Driver's account" twice, with
+   * different figures, is the release picker offering a choice nobody can make.
+   * `liquidationAccountLabel` is how the two read together.
+   */
+  liquidationSequence: z.number().int(),
 
   /**
    * Who physically RECEIVED the cash. Deliberately independent of the account's

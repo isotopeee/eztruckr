@@ -9,6 +9,7 @@ import {
   AllowanceRequestStatus,
   expectsProofOfRelease,
   isAllowanceRequestStatus,
+  liquidationAccountLabel,
   LiquidationStatus,
   ShipmentStatus,
   type AllowanceRequest,
@@ -50,7 +51,9 @@ import { assertMayHoldTripCash } from './trip-cash-participants';
 
 const REQUEST_INCLUDE = {
   shipment: { select: { shipmentNumber: true } },
-  liquidation: { select: { custodian: { select: { firstName: true, lastName: true } } } },
+  liquidation: {
+    select: { sequence: true, custodian: { select: { firstName: true, lastName: true } } },
+  },
   staff: { select: { firstName: true, lastName: true } },
   requestedByUser: { select: { name: true } },
   decidedByUser: { select: { name: true } },
@@ -373,6 +376,7 @@ export class AllowanceRequestsService {
       where: { id: liquidationId },
       select: {
         shipmentId: true,
+        sequence: true,
         status: true,
         custodian: { select: { firstName: true, lastName: true } },
       },
@@ -386,9 +390,15 @@ export class AllowanceRequestsService {
     }
 
     if (liquidation.status === LiquidationStatus.APPROVED) {
-      const who = liquidation.custodian
-        ? `${liquidation.custodian.firstName} ${liquidation.custodian.lastName}'s account`
-        : 'That account';
+      // The number as well as the name — "request against another account" may
+      // mean another of the SAME person's, and a name on its own cannot say
+      // which of the two is closed.
+      const who = liquidationAccountLabel(
+        liquidation.custodian
+          ? `${liquidation.custodian.firstName} ${liquidation.custodian.lastName}`
+          : null,
+        liquidation.sequence,
+      );
 
       throw new ConflictException(
         `${who} is approved, so its total advanced is frozen and nothing further can be released against it. Request against another account, or ask accounting to reverse the approval.`,
@@ -472,6 +482,7 @@ export function toAllowanceRequest(row: RequestRow): AllowanceRequest {
     custodianName: row.liquidation?.custodian
       ? `${row.liquidation.custodian.firstName} ${row.liquidation.custodian.lastName}`
       : null,
+    liquidationSequence: row.liquidation.sequence,
     staffId: row.staffId,
     staffName: row.staff ? `${row.staff.firstName} ${row.staff.lastName}` : null,
     amount: row.amount.toString(),

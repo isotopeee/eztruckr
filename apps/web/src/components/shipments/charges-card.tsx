@@ -2,7 +2,13 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { UserRole, type ExpenseCategory, type Page, type Shipment } from '@eztruckr/types';
+import {
+  liquidationAccountLabel,
+  UserRole,
+  type ExpenseCategory,
+  type Page,
+  type Shipment,
+} from '@eztruckr/types';
 import { Loader2, Paperclip } from 'lucide-react';
 import { toast } from 'sonner';
 import { ConfirmDeleteButton } from '@/components/confirm-delete-button';
@@ -125,7 +131,7 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
     enabled: canEdit,
   });
 
-  // The cash accounts open on this trip — one per custodian, plus the trip's
+  // The cash accounts open on this trip — one per pile of cash, plus the trip's
   // own, which exists from booking and has nobody's name on it yet.
   const accounts = useQuery({
     queryKey: liquidationKeys.liquidations(shipment.id),
@@ -366,7 +372,11 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                   <SelectItem value={OFFICE_PAID}>Company funds</SelectItem>
                   {(accounts.data ?? []).map((account) => (
                     <SelectItem key={account.id} value={account.id}>
-                      {account.custodianName ?? 'Unassigned account'}’s cash
+                      {liquidationAccountLabel(
+                        account.custodianName,
+                        account.sequence,
+                        account.description,
+                      )}
                     </SelectItem>
                   ))}
                 </SelectContent>

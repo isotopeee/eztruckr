@@ -560,6 +560,22 @@ describe('a billable expense carries what a company-paid one does', () => {
 
 describe('gross profit', () => {
   /**
+   * One account's number on its trip, allocated the way the service allocates
+   * it. A fixture cannot hard-code 1: these tests open several accounts on one
+   * shipment on purpose — including two for the same person — and the unique
+   * index on (shipmentId, sequence) refuses the second of any pair that guesses.
+   */
+  async function nextSequence(shipmentId: string): Promise<number> {
+    const latest = await prisma.liquidation.findFirst({
+      where: { shipmentId },
+      orderBy: { sequence: 'desc' },
+      select: { sequence: true },
+    });
+
+    return (latest?.sequence ?? 0) + 1;
+  }
+
+  /**
    * One custodian's account, with a single line on it.
    *
    * `totalLiquidated` is written alongside the line because the service reads
@@ -569,7 +585,12 @@ describe('gross profit', () => {
   async function addLiquidation(custodianId: string | null, amount: string) {
     const liquidation = await act(async () =>
       prisma.liquidation.create({
-        data: { shipmentId: SHIPMENT_ID, custodianId, status: LiquidationStatus.PENDING },
+        data: {
+          shipmentId: SHIPMENT_ID,
+          sequence: await nextSequence(SHIPMENT_ID),
+          custodianId,
+          status: LiquidationStatus.PENDING,
+        },
       }),
     );
 
@@ -839,7 +860,11 @@ describe('gross profit', () => {
 
     const foreign = await act(async () =>
       prisma.liquidation.create({
-        data: { shipmentId: otherShipment.id, status: LiquidationStatus.PENDING },
+        data: {
+          shipmentId: otherShipment.id,
+          sequence: await nextSequence(otherShipment.id),
+          status: LiquidationStatus.PENDING,
+        },
       }),
     );
 
@@ -871,7 +896,11 @@ describe('gross profit', () => {
 
     const liquidation = await act(async () =>
       prisma.liquidation.create({
-        data: { shipmentId: SHIPMENT_ID, status: LiquidationStatus.PENDING },
+        data: {
+          shipmentId: SHIPMENT_ID,
+          sequence: await nextSequence(SHIPMENT_ID),
+          status: LiquidationStatus.PENDING,
+        },
       }),
     );
 
@@ -997,6 +1026,7 @@ describe('gross profit', () => {
       prisma.liquidation.create({
         data: {
           shipmentId: SHIPMENT_ID,
+          sequence: await nextSequence(SHIPMENT_ID),
           status: LiquidationStatus.PENDING,
           totalLiquidated: '9000.0000',
         },
@@ -1033,7 +1063,9 @@ describe('gross profit', () => {
     // Booked against an account, because every release now is: an allowance
     // with no liquidation is cash with nobody answerable for it.
     const account = await act(async () =>
-      prisma.liquidation.create({ data: { shipmentId: SHIPMENT_ID } }),
+      prisma.liquidation.create({
+        data: { shipmentId: SHIPMENT_ID, sequence: await nextSequence(SHIPMENT_ID) },
+      }),
     );
 
     await act(async () =>
@@ -1139,6 +1171,7 @@ describe('gross profit', () => {
       prisma.liquidation.create({
         data: {
           shipmentId: SHIPMENT_ID,
+          sequence: await nextSequence(SHIPMENT_ID),
           status: LiquidationStatus.APPROVED,
           submittedAt: new Date(),
           approvedAt: new Date(),

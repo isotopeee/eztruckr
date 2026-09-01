@@ -143,12 +143,18 @@ function LiquidationsWaitingCard() {
           {rows.map((liquidation) => (
             <li key={liquidation.id} className="space-y-1 py-3 first:pt-0 last:pb-0">
               <div className="flex items-center justify-between gap-3">
-                <Link
-                  href={`/shipments/${liquidation.shipmentId}`}
-                  className="font-medium underline-offset-4 hover:underline"
-                >
-                  {liquidation.shipmentNumber ?? 'Trip'}
-                </Link>
+                <div className="min-w-0">
+                  <Link
+                    href={`/shipments/${liquidation.shipmentId}`}
+                    className="font-medium underline-offset-4 hover:underline"
+                  >
+                    {liquidation.shipmentNumber ?? 'Trip'}
+                  </Link>
+                  {/* One trip can put two rows here: a second advance against a
+                      second voucher is a second account, and both are this
+                      person's. The number is what says which is which. */}
+                  <p className="text-muted-foreground text-xs">Account {liquidation.sequence}</p>
+                </div>
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground tabular-nums">
                     {formatMoney(liquidation.totalAllowance)} advanced

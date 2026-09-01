@@ -42,6 +42,8 @@ export const allowanceRequestSchema = auditFieldsSchema.extend({
    */
   liquidationId: z.string(),
   custodianName: z.string().nullable(),
+  /** That account's number on the trip — see the note on `Allowance`. */
+  liquidationSequence: z.number().int(),
 
   /** Who the cash is for. The same independence an `Allowance` has: a helper
    * can be handed ferry money the driver still answers for. */

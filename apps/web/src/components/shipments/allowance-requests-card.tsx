@@ -11,6 +11,7 @@ import {
   UserRole,
   expectsProofOfRelease,
   expectsReferenceNumber,
+  liquidationAccountLabel,
   type AllowanceRequest,
   type Liquidation,
   type Shipment,
@@ -208,10 +209,7 @@ function RequestRow({
               {ALLOWANCE_REQUEST_STATUS_LABELS[request.status]}
             </Badge>
             <span>
-              on{' '}
-              {request.custodianName
-                ? `${request.custodianName}'s account`
-                : 'the unassigned account'}
+              on {liquidationAccountLabel(request.custodianName, request.liquidationSequence)}
             </span>
             {request.requestedByName ? <span>asked by {request.requestedByName}</span> : null}
             {/* Said out loud, because approval carries no amount of its own to
@@ -380,7 +378,11 @@ function EditDialog({
                 <SelectContent>
                   {selectable.map((account) => (
                     <SelectItem key={account.id} value={account.id}>
-                      {account.custodianName ?? 'Unassigned account'}
+                      {liquidationAccountLabel(
+                        account.custodianName,
+                        account.sequence,
+                        account.description,
+                      )}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -537,10 +539,8 @@ function ApproveDialog({
             <DialogTitle>Release {formatMoney(request.amount)}?</DialogTitle>
             <DialogDescription>
               To {request.staffName ?? 'the crew'}, against{' '}
-              {request.custodianName
-                ? `${request.custodianName}'s account`
-                : 'the unassigned account'}
-              . This records the cash release itself — the amount is the one that was requested.
+              {liquidationAccountLabel(request.custodianName, request.liquidationSequence)}. This
+              records the cash release itself — the amount is the one that was requested.
             </DialogDescription>
           </DialogHeader>
 
@@ -808,7 +808,11 @@ function RequestForm({
           <SelectContent>
             {open.map((account) => (
               <SelectItem key={account.id} value={account.id}>
-                {account.custodianName ?? 'Unassigned account'}
+                {liquidationAccountLabel(
+                  account.custodianName,
+                  account.sequence,
+                  account.description,
+                )}
               </SelectItem>
             ))}
           </SelectContent>

@@ -16,6 +16,7 @@ import {
   ReturnLiquidationDto,
   ReverseLiquidationDto,
   SetCustodianDto,
+  SetLiquidationDescriptionDto,
   SetLiquidationReferenceDto,
   SubmitLiquidationDto,
   UpdateLiquidationLineDto,
@@ -152,6 +153,23 @@ export class LiquidationController {
     @CurrentUser() user: RequestUser,
   ): Promise<Liquidation> {
     return this.liquidations.setReference(liquidationId, dto, user);
+  }
+
+  /**
+   * What this account is for, in the office's own words.
+   *
+   * `CAN_SUBMIT_LIQUIDATION`, like the reference above rather than like the
+   * custodian: describing a float you are holding is part of accounting for it,
+   * and the service still confines a cash holder to their own account.
+   */
+  @Patch('liquidations/:liquidationId/description')
+  @Roles(...CAN_SUBMIT_LIQUIDATION)
+  setDescription(
+    @Param('liquidationId') liquidationId: string,
+    @Body() dto: SetLiquidationDescriptionDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Liquidation> {
+    return this.liquidations.setDescription(liquidationId, dto, user);
   }
 
   @Delete('liquidations/:liquidationId')

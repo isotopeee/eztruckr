@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DISBURSEMENT_MODE_LABELS,
   DisbursementMode,
+  liquidationAccountLabel,
   SETTLEMENT_STATUS_LABELS,
   SettlementStatus,
   UserRole,
@@ -117,7 +118,12 @@ function SettlementRow({
   return (
     <section className="space-y-4 rounded-md border p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-sm font-medium">{settlement.custodianName ?? 'No custodian named'}</h3>
+        {/* The person AND which of their accounts: one custodian can hold
+            several on a trip, so two settlements here can carry the same name
+            and different figures. */}
+        <h3 className="text-sm font-medium">
+          {liquidationAccountLabel(settlement.custodianName, settlement.liquidationSequence)}
+        </h3>
         <Badge variant={settlement.isOutstanding ? 'outline' : 'secondary'}>
           {SETTLEMENT_STATUS_LABELS[settlement.status]}
         </Badge>

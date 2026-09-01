@@ -272,8 +272,8 @@ describe('an unallocated code stays out of the database as well as the type', ()
 
     await expect(
       prisma.$executeRawUnsafe(`
-        INSERT INTO "liquidation" (id, "shipmentId", status, "createdAt", "updatedAt", "createdBy")
-        VALUES ('${testId('bad-status')}', '${shipmentId}', 4, now(), now(), '${actorId}')
+        INSERT INTO "liquidation" (id, "shipmentId", "sequence", status, "createdAt", "updatedAt", "createdBy")
+        VALUES ('${testId('bad-status')}', '${shipmentId}', 1, 4, now(), now(), '${actorId}')
       `),
     ).rejects.toThrow(/liquidation_status_code_valid/i);
   });
@@ -290,8 +290,8 @@ describe('an unallocated code stays out of the database as well as the type', ()
 
     await expect(
       prisma.$executeRawUnsafe(`
-        INSERT INTO "liquidation" (id, "shipmentId", status, "createdAt", "updatedAt", "createdBy")
-        VALUES ('${testId('good-status')}', '${shipmentId}', ${LiquidationStatus.PENDING},
+        INSERT INTO "liquidation" (id, "shipmentId", "sequence", status, "createdAt", "updatedAt", "createdBy")
+        VALUES ('${testId('good-status')}', '${shipmentId}', 2, ${LiquidationStatus.PENDING},
                 now(), now(), '${actorId}')
       `),
     ).resolves.toBe(1);

@@ -370,7 +370,9 @@ const BILLABLE_INCLUDE = {
   expenseCategory: { select: { name: true } },
   payee: { select: { name: true } },
   receipt: { select: { fileName: true } },
-  liquidation: { select: { custodian: { select: { firstName: true, lastName: true } } } },
+  liquidation: {
+    select: { sequence: true, custodian: { select: { firstName: true, lastName: true } } },
+  },
 } satisfies Prisma.BillableExpenseInclude;
 
 type BillableExpenseRow = Prisma.BillableExpenseGetPayload<{ include: typeof BILLABLE_INCLUDE }>;
@@ -394,6 +396,7 @@ function toBillableExpense(row: BillableExpenseRow): BillableExpense {
     payeeRequired: row.payeeRequired,
     liquidationId: row.liquidationId,
     liquidationCustodianName: custodianName(row.liquidation?.custodian),
+    liquidationSequence: row.liquidation?.sequence ?? null,
     referenceNumber: row.referenceNumber,
     receiptId: row.receiptId,
     receiptFileName: row.receipt?.fileName ?? null,

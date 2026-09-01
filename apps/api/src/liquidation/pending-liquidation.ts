@@ -1,4 +1,4 @@
-import type { ExtendedPrismaClient } from '@eztruckr/db';
+import { withDeleted, type ExtendedPrismaClient } from '@eztruckr/db';
 import { LiquidationStatus } from '@eztruckr/types';
 
 /**
@@ -28,9 +28,18 @@ export type PendingLiquidationClient = Pick<ExtendedPrismaClient, 'liquidation'>
 /**
  * Creates the shipment's PENDING liquidation, unless a live one already exists.
  *
- * Idempotent by lookup rather than by catching the partial unique violation: a
- * caught constraint error inside a transaction has already poisoned it, and
- * this runs inside the delivery write.
+ * Idempotent by lookup rather than by catching the unique violation: a caught
+ * constraint error inside a transaction has already poisoned it, and this runs
+ * inside the delivery write. There is no retry here for the same reason, and
+ * none is owed — the race this leaves is two callers delivering one shipment in
+ * the same instant, which is what the lookup and the index between them already
+ * refuse rather than duplicate.
+ *
+ * THE NUMBER IS ALLOCATED THE SAME WAY `LiquidationService` allocates it —
+ * max + 1 over the trip's accounts INCLUDING soft-deleted ones. Usually that is
+ * 1, because this is the trip's first account; it is not 1 when every account on
+ * a trip has been removed and this backstop runs again, and handing that trip a
+ * second "account 1" would give one number to two piles of cash.
  */
 export async function ensurePendingLiquidation(
   tx: PendingLiquidationClient,
@@ -45,8 +54,16 @@ export async function ensurePendingLiquidation(
     return existing.id;
   }
 
+  const latest = await withDeleted(async () =>
+    tx.liquidation.findFirst({
+      where: { shipmentId },
+      orderBy: { sequence: 'desc' },
+      select: { sequence: true },
+    }),
+  );
+
   const created = await tx.liquidation.create({
-    data: { shipmentId, status: LiquidationStatus.PENDING },
+    data: { shipmentId, sequence: (latest?.sequence ?? 0) + 1, status: LiquidationStatus.PENDING },
     select: { id: true },
   });
 

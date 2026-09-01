@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   isConfinedToTheirOwnFloat,
+  liquidationAccountLabel,
   LIQUIDATION_HISTORY_ACTION_LABELS,
   LIQUIDATION_STATUS_LABELS,
   LiquidationHistoryAction,
@@ -44,6 +45,7 @@ import {
   returnLiquidation,
   reverseLiquidation,
   setLiquidationCustodian,
+  setLiquidationDescription,
   setLiquidationReference,
   submitLiquidation,
 } from '@/lib/liquidation-api';
@@ -54,14 +56,20 @@ import { PayeeField } from './payee-field';
 import { ReceiptField } from './receipt-field';
 
 /**
- * The liquidations: what the trip's cash was spent on, one account per person
- * holding it.
+ * The liquidations: what the trip's cash was spent on, one account per pile of
+ * it.
  *
  * ONE CARD, SEVERAL ACCOUNTS, AND THE SEPARATION IS THE POINT. A driver holding
  * ₱10,000 and a helper holding ₱3,000 each get their own figures, their own
  * status and their own four moves — approving the driver's does not touch, hurry
  * or speak for the helper's. Every action below sends a liquidation id, never a
  * shipment id, which is what makes that true rather than merely intended.
+ *
+ * AND SEVERAL OF THEM CAN BE ONE PERSON'S. A driver who draws a second advance
+ * against a second voucher holds two piles of cash, squared up separately, so
+ * the name at the top of a section stopped identifying it — `sequence` is what
+ * does, through `liquidationAccountLabel`, here and in every refusal the API
+ * sends back.
  *
  * WHAT THE STATUSES MEAN ON SCREEN. Pending is with the crew; submitted is with
  * accounting; approved is locked and its costs are recognised. There is no
@@ -129,8 +137,9 @@ export function LiquidationCard({ shipment }: { shipment: Shipment }) {
       <CardHeader>
         <CardTitle className="text-base">Liquidations</CardTitle>
         <CardDescription>
-          Expenses claimed against the cash advanced for this trip, one account per person holding
-          it. Costs reach the P&amp;L as each account is approved, and not before.
+          Expenses claimed against the cash advanced for this trip, one account per pile of it — one
+          person can hold several, a voucher each. Costs reach the P&amp;L as each account is
+          approved, and not before.
         </CardDescription>
       </CardHeader>
 
@@ -202,7 +211,9 @@ function Account({
   return (
     <section className="space-y-4 rounded-md border p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-sm font-medium">{account.custodianName ?? 'No custodian named'}</h3>
+        <h3 className="text-sm font-medium">
+          {liquidationAccountLabel(account.custodianName, account.sequence, account.description)}
+        </h3>
         <Badge variant={account.status === LiquidationStatus.APPROVED ? 'default' : 'secondary'}>
           {LIQUIDATION_STATUS_LABELS[account.status]}
         </Badge>
@@ -253,7 +264,31 @@ function Account({
         />
       </dl>
 
-      <ReferenceField liquidation={account} canEdit={canEditLines} onChanged={onChanged} />
+      {/* What it is for, then the number it was settled under. In that order
+          because the first is written when the account is opened and the second
+          when the paperwork lands. */}
+      <SelfSavingField
+        id={`liquidation-description-${account.id}`}
+        label="What this account is for"
+        placeholder="Manila leg, second advance… (optional)"
+        stored={account.description}
+        canEdit={canEditLines}
+        errorTitle="Could not save that description"
+        save={(description) => setLiquidationDescription(account.id, { description })}
+        onChanged={onChanged}
+      />
+
+      <SelfSavingField
+        id={`liquidation-reference-${account.id}`}
+        label="Reference"
+        placeholder="Voucher or document number (optional)"
+        stored={account.referenceNumber}
+        canEdit={canEditLines}
+        readOnlyPrefix="Reference "
+        errorTitle="Could not save that reference"
+        save={(referenceNumber) => setLiquidationReference(account.id, { referenceNumber })}
+        onChanged={onChanged}
+      />
 
       <Lines liquidation={account} canEdit={canEditLines} onChanged={onChanged} />
 
@@ -384,9 +419,11 @@ function RemoveAccountButton({
     <ConfirmDeleteButton
       label="Remove account"
       title="Remove this account?"
-      description={`${
-        account.custodianName ?? 'This account'
-      } will no longer have a float to answer for on this trip. The API refuses if any cash was released against it or anything has been claimed.`}
+      description={`${liquidationAccountLabel(
+        account.custodianName,
+        account.sequence,
+        account.description,
+      )} will no longer exist on this trip. The API refuses if any cash was released against it or anything has been claimed. Its NUMBER is not reused — the next account opened here gets the following one, so nothing that already named this one starts pointing somewhere else.`}
       pending={remove.isPending}
       onConfirm={() => remove.mutate()}
     />
@@ -394,61 +431,81 @@ function RemoveAccountButton({
 }
 
 /**
- * The voucher number this account was settled under.
+ * A ONE-VALUE FIELD THAT SAVES ITSELF, rather than a form with a button.
  *
- * A FIELD THAT SAVES ITSELF, rather than a form with a button, because it is
- * one value and the paperwork it comes off is usually in the person's other
- * hand. It commits on blur; an unchanged value sends nothing.
+ * TWO OF THESE SIT ON AN ACCOUNT — the voucher reference and what the account
+ * is for — and they are one component because they are one interaction: a
+ * single value, typed off paperwork in the person's other hand or out of their
+ * head, committed when they look away. An unchanged value sends nothing, and a
+ * refusal puts back what the server still holds so the box never shows a value
+ * that was rejected. Written twice, one copy would eventually forget that last
+ * part.
  *
- * Editable exactly as long as the claims are — approval freezes the account,
- * reference included, and reversing it opens both again.
+ * Both are editable exactly as long as the claims are: approval freezes the
+ * account, these included, and reversing it opens them again.
+ *
+ * `readOnlyPrefix` is what a frozen account shows instead of the input — and
+ * omitting it means "show nothing", which is what the description does, because
+ * the heading above already reads "Test Driver's account 2 (Manila leg)".
  */
-function ReferenceField({
-  liquidation,
+function SelfSavingField({
+  id,
+  label,
+  placeholder,
+  stored,
   canEdit,
+  readOnlyPrefix,
+  errorTitle,
+  save,
   onChanged,
 }: {
-  liquidation: Liquidation;
+  id: string;
+  label: string;
+  placeholder: string;
+  stored: string | null;
   canEdit: boolean;
+  readOnlyPrefix?: string;
+  errorTitle: string;
+  save: (value: string | null) => Promise<unknown>;
   onChanged: () => void;
 }) {
-  const [value, setValue] = useState(liquidation.referenceNumber ?? '');
+  const [value, setValue] = useState(stored ?? '');
 
-  const save = useMutation({
-    mutationFn: () =>
-      setLiquidationReference(liquidation.id, { referenceNumber: value.trim() || null }),
+  const commit = useMutation({
+    mutationFn: () => save(value.trim() || null),
     onSuccess: onChanged,
     onError: (error: unknown) => {
-      // Put back what the server still holds, so the box never shows a value
-      // that was refused.
-      setValue(liquidation.referenceNumber ?? '');
-      toast.error('Could not save that reference', {
+      setValue(stored ?? '');
+      toast.error(errorTitle, {
         description: error instanceof ApiError ? error.displayMessage : String(error),
       });
     },
   });
 
   if (!canEdit) {
-    return liquidation.referenceNumber ? (
-      <p className="text-muted-foreground text-xs">Reference {liquidation.referenceNumber}</p>
+    return stored && readOnlyPrefix !== undefined ? (
+      <p className="text-muted-foreground text-xs">
+        {readOnlyPrefix}
+        {stored}
+      </p>
     ) : null;
   }
 
   return (
     <div className="space-y-1">
-      <Label htmlFor={`liquidation-reference-${liquidation.id}`} className="text-xs">
-        Reference
+      <Label htmlFor={id} className="text-xs">
+        {label}
       </Label>
       <Input
-        id={`liquidation-reference-${liquidation.id}`}
+        id={id}
         className="sm:max-w-xs"
-        placeholder="Voucher or document number (optional)"
+        placeholder={placeholder}
         value={value}
-        disabled={save.isPending}
+        disabled={commit.isPending}
         onChange={(event) => setValue(event.target.value)}
         onBlur={() => {
-          if (value.trim() === (liquidation.referenceNumber ?? '')) return;
-          save.mutate();
+          if (value.trim() === (stored ?? '')) return;
+          commit.mutate();
         }}
       />
     </div>
@@ -456,11 +513,18 @@ function ReferenceField({
 }
 
 /**
- * Opening an account for a second cash holder.
+ * Opening another account — for a second cash holder, or a second voucher
+ * belonging to somebody who already holds one.
  *
- * Offered only for crew on the trip who do not already hold one — the API
- * enforces both, and a picker listing somebody who would be refused is a
- * screen that should not have offered it.
+ * EVERYBODY WHO MAY HOLD THIS TRIP'S CASH IS LISTED, including people who
+ * already have an account here. They used to be filtered out, because the API
+ * refused them; it stopped refusing when a long haul needed two vouchers for one
+ * driver, and a picker that still hid them would be a screen enforcing a rule
+ * that no longer exists.
+ *
+ * What a duplicate opened by accident costs is one click of Remove account,
+ * which is offered while it is empty — and the count beside each name is there
+ * so somebody notices before opening it rather than after.
  */
 function OpenAccountForm({
   shipment,
@@ -472,17 +536,27 @@ function OpenAccountForm({
   onOpened: () => void;
 }) {
   const [custodianId, setCustodianId] = useState('');
+  const [description, setDescription] = useState('');
 
-  const held = new Set(
-    accounts.map((account) => account.custodianId).filter((id): id is string => id !== null),
-  );
-  const available = useTripCashHolders(shipment).filter((member) => !held.has(member.id));
+  const held = new Map<string, number>();
+  for (const account of accounts) {
+    if (account.custodianId !== null) {
+      held.set(account.custodianId, (held.get(account.custodianId) ?? 0) + 1);
+    }
+  }
+
+  const available = useTripCashHolders(shipment);
 
   const open = useMutation({
-    mutationFn: () => createLiquidation(shipment.id, { custodianId }),
+    // Asked for HERE rather than only on the card afterwards: the person
+    // opening a second account for somebody who already has one is the person
+    // who knows why, and a minute later they are somebody else.
+    mutationFn: () =>
+      createLiquidation(shipment.id, { custodianId, description: description.trim() || null }),
     onSuccess: () => {
       toast.success('Account opened');
       setCustodianId('');
+      setDescription('');
       onOpened();
     },
     onError: (error: unknown) =>
@@ -504,7 +578,7 @@ function OpenAccountForm({
       }}
     >
       <Label htmlFor="open-account" className="text-xs">
-        Open an account for another cash holder
+        Open another account
       </Label>
       <div className="flex flex-wrap items-center gap-2">
         <Select value={custodianId} onValueChange={setCustodianId}>
@@ -512,22 +586,39 @@ function OpenAccountForm({
             <SelectValue placeholder="Crew or dispatch manager" />
           </SelectTrigger>
           <SelectContent>
-            {available.map((member) => (
-              <SelectItem key={member.id} value={member.id}>
-                {member.name}
-                {member.note ? ` · ${member.note}` : ''}
-              </SelectItem>
-            ))}
+            {available.map((member) => {
+              const alreadyHolds = held.get(member.id) ?? 0;
+
+              return (
+                <SelectItem key={member.id} value={member.id}>
+                  {member.name}
+                  {member.note ? ` · ${member.note}` : ''}
+                  {alreadyHolds > 0
+                    ? ` · already holds ${alreadyHolds} account${alreadyHolds === 1 ? '' : 's'} here`
+                    : ''}
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
+        <Input
+          className="w-56"
+          aria-label="What this account is for"
+          placeholder="What it is for (optional)"
+          value={description}
+          disabled={open.isPending}
+          onChange={(event) => setDescription(event.target.value)}
+        />
         <Button type="submit" size="sm" variant="outline" disabled={open.isPending || !custodianId}>
           {open.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
           Open account
         </Button>
       </div>
       <p className="text-muted-foreground text-[11px]">
-        Their own advances, their own variance. Cash they are handed can still be released against
-        somebody else&apos;s account — who received it and who answers for it are separate facts.
+        Its own advances, its own variance, its own voucher — a second advance to the same person
+        belongs here rather than on the account they are about to close. Cash somebody is handed can
+        still be released against another account: who received it and who answers for it are
+        separate facts.
       </p>
     </form>
   );

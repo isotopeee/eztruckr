@@ -8,6 +8,7 @@ import {
   LiquidationStatus,
   UserRole,
   expectsReferenceNumber,
+  liquidationAccountLabel,
   type AllowanceSummary,
   type Liquidation,
   type Shipment,
@@ -130,9 +131,7 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
                         person it was handed to. */}
                     <span>
                       on{' '}
-                      {release.custodianName
-                        ? `${release.custodianName}'s account`
-                        : 'the unassigned account'}
+                      {liquidationAccountLabel(release.custodianName, release.liquidationSequence)}
                     </span>
                     {release.referenceNumber ? <span>Ref {release.referenceNumber}</span> : null}
                     {/* The reference is on another live release somewhere in
@@ -168,11 +167,10 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
                     <ConfirmDeleteButton
                       label="Remove release"
                       title="Remove this cash release?"
-                      description={`${formatMoney(release.amount)} comes off ${
-                        release.custodianName
-                          ? `${release.custodianName}'s account`
-                          : 'the unassigned account'
-                      }, so their variance moves by the same amount. Records a release that never happened as never having happened — correct one that did by removing it and recording it again.`}
+                      description={`${formatMoney(release.amount)} comes off ${liquidationAccountLabel(
+                        release.custodianName,
+                        release.liquidationSequence,
+                      )}, so its variance moves by the same amount. Records a release that never happened as never having happened — correct one that did by removing it and recording it again.`}
                       pending={remove.isPending}
                       onConfirm={() => remove.mutate(release.id)}
                     />
@@ -322,7 +320,11 @@ function IssueForm({
           <SelectContent>
             {open.map((account) => (
               <SelectItem key={account.id} value={account.id}>
-                {account.custodianName ?? 'Unassigned account'}
+                {liquidationAccountLabel(
+                  account.custodianName,
+                  account.sequence,
+                  account.description,
+                )}
               </SelectItem>
             ))}
           </SelectContent>

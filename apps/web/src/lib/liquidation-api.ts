@@ -17,6 +17,7 @@ import type {
   RecordSettlementInput,
   SetCustodianInput,
   UpdateAllowanceRequestInput,
+  SetLiquidationDescriptionInput,
   SetLiquidationReferenceInput,
   Settlement,
 } from '@eztruckr/types';
@@ -184,6 +185,21 @@ export function setLiquidationReference(
   input: SetLiquidationReferenceInput,
 ): Promise<Liquidation> {
   return apiFetch<Liquidation>(`/liquidations/${liquidationId}/reference`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * What this account is for, in the office's own words. Its own call for the
+ * same reason the reference above is: one value, typed whenever the person
+ * typing it works out what to say.
+ */
+export function setLiquidationDescription(
+  liquidationId: string,
+  input: SetLiquidationDescriptionInput,
+): Promise<Liquidation> {
+  return apiFetch<Liquidation>(`/liquidations/${liquidationId}/description`, {
     method: 'PATCH',
     body: JSON.stringify(input),
   });

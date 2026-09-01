@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
   AllowanceRequestStatus,
+  liquidationAccountLabel,
   PaymentVerificationStatus,
   SETTLEMENT_STATUS_LABELS,
   USER_ROLE_LABELS,
@@ -257,10 +258,11 @@ function PaymentsToVerifyCard({ role }: { role: UserRole | undefined }) {
  * would report a trip as clear while the crew still held the change. A carried
  * balance stays on this list until the payout run recovering it is paid.
  *
- * IT NAMES A PERSON, which is the point of the whole change behind it. A trip
- * can appear twice, once per custodian, so the row is keyed on the account and
- * not on the shipment — and while the settlement was one blended figure per
- * trip, this alert was structurally unable to say whose ₱1,400 it was.
+ * IT NAMES AN ACCOUNT, which is the point of the whole change behind it. A trip
+ * can appear once per account — and several accounts may be one person's — so
+ * the row is keyed on the account rather than on the shipment, and labelled with
+ * the number as well as the name. While the settlement was one blended figure
+ * per trip, this alert was structurally unable to say whose ₱1,400 it was.
  */
 function OutstandingAllowancesCard() {
   const outstanding = useQuery({
@@ -298,7 +300,7 @@ function OutstandingAllowancesCard() {
                   {item.shipmentNumber}
                 </Link>
                 <p className="text-muted-foreground truncate text-xs">
-                  {item.custodianName ?? 'No custodian named'}
+                  {liquidationAccountLabel(item.custodianName, item.liquidationSequence)}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -353,10 +355,10 @@ function ReturnedForCorrectionCard() {
                 >
                   {liquidation.shipmentNumber ?? 'Trip'}
                 </Link>
-                {/* A trip can appear once per custodian, so the person is what
-                    tells two rows apart. */}
+                {/* A trip can appear once per ACCOUNT, and one person can hold
+                    several, so the name alone no longer tells two rows apart. */}
                 <span className="text-muted-foreground text-xs">
-                  {liquidation.custodianName ?? 'No custodian named'}
+                  {liquidationAccountLabel(liquidation.custodianName, liquidation.sequence)}
                 </span>
               </div>
               {liquidation.latestReturnReason ? (

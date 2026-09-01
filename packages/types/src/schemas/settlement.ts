@@ -21,10 +21,19 @@ export const settlementSchema = auditFieldsSchema.extend({
   shipmentId: z.string(),
   shipmentNumber: z.string().nullable(),
 
-  /** Whose account this squares. */
+  /** Whose account this squares, and which of theirs. */
   liquidationId: z.string(),
   custodianId: z.string().nullable(),
   custodianName: z.string().nullable(),
+  /**
+   * The account's number on the trip.
+   *
+   * One person may hold several accounts on one trip and each is settled on its
+   * own, so two settlements on one shipment can both name the same person for
+   * different amounts. Without the number, "Test Driver returns ₱2,000" is a
+   * sentence about whichever row was read first.
+   */
+  liquidationSequence: z.number().int(),
 
   status: settlementStatusSchema,
   /** Positive = crew return cash, negative = company reimburses crew. */
@@ -100,6 +109,8 @@ export const outstandingAllowanceSchema = z.object({
   /** The account, and the person holding it — the alert can now name both. */
   liquidationId: z.string(),
   custodianName: z.string().nullable(),
+  /** Which of that person's accounts on the trip. See `Settlement`. */
+  liquidationSequence: z.number().int(),
   status: settlementStatusSchema,
   amount: z.string(),
   approvedAt: z.string().nullable(),

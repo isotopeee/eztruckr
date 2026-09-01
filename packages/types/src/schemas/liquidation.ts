@@ -83,18 +83,35 @@ export type LiquidationHistoryEntry = z.infer<typeof liquidationHistoryEntrySche
 // ---------------------------------------------------------------------------
 
 /**
- * ONE CUSTODIAN'S ACCOUNT of one trip's cash. There may be several per trip.
+ * ONE ACCOUNT of one trip's cash. There may be several per trip, and several
+ * per PERSON.
  *
  * It was one per shipment until the custodian existed, and that single row was
  * blending two people's money: with a driver holding ₱10,000 and a helper
  * holding ₱3,000, one `variance` could say what the TRIP was short by and never
  * which of them owed it. Splitting it is what lets the settlement — and the
  * outstanding-allowances alert built on it — name a person.
+ *
+ * It was then one per person, which blended the same person's money the same
+ * way. A driver drawing a second advance on a long haul holds two piles of cash
+ * against two vouchers, issued, counted and squared up separately; one row for
+ * both left the first unapprovable until the second was spent, and produced one
+ * variance where the paperwork has two. `sequence` is what tells them apart —
+ * the custodian answers for an account and has stopped being its name.
  */
 export const liquidationSchema = auditFieldsSchema.extend({
   id: z.string(),
   shipmentId: z.string(),
   shipmentNumber: z.string().nullable(),
+
+  /**
+   * This account's number on its trip — 1, 2, 3.
+   *
+   * Issued by the system, unique on the trip and never reused, which is what
+   * makes it safe to name in a settlement or an alert. `referenceNumber` below
+   * is the opposite: what somebody wrote on a voucher, optional and repeatable.
+   */
+  sequence: z.number().int(),
 
   /**
    * The staff member answerable for accounting for this cash.
@@ -109,6 +126,17 @@ export const liquidationSchema = auditFieldsSchema.extend({
    */
   custodianId: z.string().nullable(),
   custodianName: z.string().nullable(),
+
+  /**
+   * What this account is for, in the office's own words — "Manila leg",
+   * "second advance", "ferry money".
+   *
+   * Optional, and nothing depends on it. `sequence` is the identity; this is
+   * what makes an account RECOGNISABLE, which is a different job — two of one
+   * person's accounts are always distinguishable by number and are not
+   * necessarily tellable apart by anybody who did not open them.
+   */
+  description: z.string().nullable(),
 
   status: liquidationStatusSchema,
 
@@ -161,16 +189,29 @@ export const liquidationSchema = auditFieldsSchema.extend({
 export type Liquidation = z.infer<typeof liquidationSchema>;
 
 /**
- * Opening a second account on a trip, for a second cash holder.
+ * Opening another account on a trip — for a second cash holder, or a second
+ * advance to the same one.
  *
  * The custodian is REQUIRED here, unlike on the column. The nullable column
  * exists for exactly one row — the one created automatically with the shipment,
  * before anybody is assigned — and a second account created by hand with nobody
  * answerable for it would be indistinguishable from that one, which is the
- * ambiguity the partial unique index refuses anyway.
+ * ambiguity `liquidation_shipment_unnamed_live_key` refuses anyway.
+ *
+ * NOTHING REFUSES A SECOND ACCOUNT FOR SOMEBODY WHO ALREADY HOLDS ONE. That was
+ * a rule until a long trip needed two vouchers for one driver; what stops a
+ * duplicate opened by accident is that both are listed, numbered, and an empty
+ * one can be removed.
  */
 export const createLiquidationSchema = z.object({
   custodianId: idSchema,
+  /**
+   * Optional here as well as on the column, and offered at the same moment for
+   * a reason: the person opening a second account for somebody who already has
+   * one is the person who knows why, and asking them later is asking somebody
+   * else.
+   */
+  description: optionalText(120),
 });
 
 export type CreateLiquidationInput = z.infer<typeof createLiquidationSchema>;
@@ -197,6 +238,21 @@ export const setLiquidationReferenceSchema = z.object({
 });
 
 export type SetLiquidationReferenceInput = z.infer<typeof setLiquidationReferenceSchema>;
+
+/**
+ * Naming, renaming or clearing what an account is for.
+ *
+ * ITS OWN CALL, exactly like the reference beside it and for the same reason:
+ * it is one value, it arrives whenever the person typing it works out what to
+ * say, and folding it into `submit` would make the only chance to state it the
+ * one moment nobody is thinking about it. It closes when the account does —
+ * approval freezes the whole record, this included.
+ */
+export const setLiquidationDescriptionSchema = z.object({
+  description: optionalText(120),
+});
+
+export type SetLiquidationDescriptionInput = z.infer<typeof setLiquidationDescriptionSchema>;
 
 // ---------------------------------------------------------------------------
 // The four moves
@@ -263,6 +319,49 @@ export const liquidationListQuerySchema = z.object({
 });
 
 export type LiquidationListQuery = z.infer<typeof liquidationListQuerySchema>;
+
+// ---------------------------------------------------------------------------
+// Naming an account
+// ---------------------------------------------------------------------------
+
+/**
+ * How one account reads wherever it has to be told from another.
+ *
+ * DECLARED ONCE because the custodian's name stopped identifying an account the
+ * moment one person could hold two of them, and half a dozen screens plus every
+ * refusal message in `LiquidationService` name accounts. Left to each caller,
+ * the release picker would say "Juan Dela Cruz" for both rows, the settlement
+ * alert would chase him for a figure belonging to whichever one it read first,
+ * and both would look correct.
+ *
+ * The number is always shown, including on a trip carrying one account. A label
+ * that appears only when there is something to disambiguate is a label people
+ * learn to ignore, and "account 1" is what the account is called — the second
+ * one arrives after somebody has already read, and quoted, the first.
+ *
+ * POSSESSIVE, so that one phrasing serves a heading, a picker option and a
+ * sentence: "Test Driver's account 2" heads a card, fills a dropdown and reads
+ * correctly inside "… is approved and locked", which is why the API's refusals
+ * are built from it too.
+ *
+ * THE DESCRIPTION IS APPENDED WHERE THE CALLER HAS ONE, and several do not —
+ * a release row carries its account's custodian and number, not its prose. It
+ * is parenthesised rather than joined with a separator so that the label still
+ * reads as one phrase inside a sentence: "Test Driver's account 2 (Manila leg)
+ * is approved and locked".
+ */
+export function liquidationAccountLabel(
+  custodianName: string | null,
+  sequence: number,
+  description?: string | null,
+): string {
+  const account =
+    custodianName === null
+      ? `Unassigned account ${sequence}`
+      : `${custodianName}'s account ${sequence}`;
+
+  return description ? `${account} (${description})` : account;
+}
 
 // ---------------------------------------------------------------------------
 // The predicate both sides share
