@@ -962,6 +962,151 @@ describe('the paperwork behind the cash', () => {
 });
 
 /**
+ * The release booked against one account.
+ *
+ * `tripWithTwoAccounts` gives each account exactly one, so a miss here is a
+ * broken fixture rather than a case the test should be handling.
+ */
+async function releaseOn(shipmentId: string, liquidationId: string) {
+  const summary = await allowances.summary(shipmentId, null);
+  const found = summary.allowances.find((row) => row.liquidationId === liquidationId);
+
+  if (!found) throw new Error(`no release is booked against ${liquidationId}`);
+
+  return found;
+}
+
+/**
+ * Re-booking a release onto the account it belonged on all along.
+ *
+ * A CORRECTION TO THE FILING, NEVER TO THE CASH. Nothing here changes what was
+ * handed over, when, by whom or to whom — only whose variance it moves. The
+ * trip's total advanced is therefore the same figure before and after, and the
+ * first assertion says so, because a move that quietly changed it would be a
+ * release invented or lost.
+ *
+ * Untested until now, which is why the frozen cases are here twice over: an
+ * approved account's variance was measured against exactly the releases on it,
+ * so a release leaving one is as wrong as a release arriving on one, and the
+ * two are separate branches in `update`.
+ */
+describe('moving a release between the accounts on a trip', () => {
+  it('takes the amount off one account and puts it on the other, leaving the trip total alone', async () => {
+    if (!available) return;
+
+    const { shipmentId, driverAccountId, helperAccountId } = await tripWithTwoAccounts('move');
+
+    // Ferry money handed to the helper, booked against the driver's account by
+    // mistake — the release itself is right in every other respect.
+    const misfiled = await act(async () =>
+      allowances.issue(
+        shipmentId,
+        {
+          liquidationId: driverAccountId,
+          staffId: helperId,
+          amount: '500.00',
+          issuedAt: null,
+          disbursementMode: DisbursementMode.CASH,
+          referenceNumber: null,
+          receiptId: null,
+          releasedBy: null,
+          remarks: 'Ferry',
+        },
+        actor,
+      ),
+    );
+
+    const before = await allowances.summary(shipmentId, null);
+    expect(before.totalAdvanced).toBe('13500.00');
+    expect((await liquidations.get(driverAccountId)).totalAllowance).toBe('10500');
+
+    const moved = await act(async () =>
+      allowances.update(shipmentId, misfiled.id, { liquidationId: helperAccountId }),
+    );
+
+    expect(moved.liquidationId).toBe(helperAccountId);
+    // Everything the release says about the handover survives the move.
+    expect(moved.staffId).toBe(helperId);
+    expect(moved.amount).toBe('500');
+    expect(moved.remarks).toBe('Ferry');
+
+    // BOTH SIDES REFRESHED. Refreshing only the destination is the plausible
+    // bug, and it leaves the origin claiming a release it no longer holds.
+    expect((await liquidations.get(driverAccountId)).totalAllowance).toBe('10000');
+    expect((await liquidations.get(helperAccountId)).totalAllowance).toBe('3500');
+
+    // The money did not move; its filing did.
+    const after = await allowances.summary(shipmentId, null);
+    expect(after.totalAdvanced).toBe('13500.00');
+    expect(after.releaseCount).toBe(before.releaseCount);
+  });
+
+  it('refuses to pull a release out of an approved account', async () => {
+    if (!available) return;
+
+    const { shipmentId, driverAccountId, helperAccountId } =
+      await tripWithTwoAccounts('move-from-frozen');
+
+    await addLine(driverAccountId, '10000.00');
+    await act(async () => liquidations.submit(driverAccountId, { remarks: null }, actor));
+    await act(async () => liquidations.approve(driverAccountId, { remarks: null }, actor));
+
+    const release = await releaseOn(shipmentId, driverAccountId);
+
+    await expect(
+      act(async () =>
+        allowances.update(shipmentId, release.id, { liquidationId: helperAccountId }),
+      ),
+    ).rejects.toThrow(/approved, so its total advanced is frozen/i);
+
+    // And the approved account is untouched by the attempt.
+    expect((await liquidations.get(driverAccountId)).totalAllowance).toBe('10000');
+  });
+
+  it('refuses to push a release into an approved account', async () => {
+    if (!available) return;
+
+    const { shipmentId, driverAccountId, helperAccountId } =
+      await tripWithTwoAccounts('move-to-frozen');
+
+    await addLine(helperAccountId, '3000.00');
+    await act(async () => liquidations.submit(helperAccountId, { remarks: null }, actor));
+    await act(async () => liquidations.approve(helperAccountId, { remarks: null }, actor));
+
+    const release = await releaseOn(shipmentId, driverAccountId);
+
+    await expect(
+      act(async () =>
+        allowances.update(shipmentId, release.id, { liquidationId: helperAccountId }),
+      ),
+    ).rejects.toThrow(/approved, so its total advanced is frozen/i);
+
+    expect((await liquidations.get(driverAccountId)).totalAllowance).toBe('10000');
+    expect((await liquidations.get(helperAccountId)).totalAllowance).toBe('3000');
+  });
+
+  it('refuses an account belonging to another trip, before the foreign key does', async () => {
+    if (!available) return;
+
+    const { shipmentId, driverAccountId } = await tripWithTwoAccounts('move-cross-trip');
+    const elsewhere = await deliveredTrip('move-cross-trip-other', '1000.00');
+
+    const release = await releaseOn(shipmentId, driverAccountId);
+
+    // A sentence rather than a constraint name: the composite key cannot be
+    // talked out of it either, but nobody can act on `allowance_liquidationId_
+    // shipmentId_fkey`.
+    expect(
+      await validationMessage(async () =>
+        act(async () =>
+          allowances.update(shipmentId, release.id, { liquidationId: elsewhere.liquidationId }),
+        ),
+      ),
+    ).toMatch(/liquidationId: .*belonging to the trip it is for/i);
+  });
+});
+
+/**
  * The change these tests exist for: a trip where two people are each holding
  * cash, which the single-liquidation shape could not express at all.
  *

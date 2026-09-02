@@ -16,6 +16,7 @@ import type {
   Receipt,
   RecordSettlementInput,
   SetCustodianInput,
+  UpdateAllowanceInput,
   UpdateAllowanceRequestInput,
   SetLiquidationDescriptionInput,
   SetLiquidationReferenceInput,
@@ -68,6 +69,27 @@ export function getAllowances(shipmentId: string): Promise<AllowanceSummary> {
 export function issueAllowance(shipmentId: string, input: IssueAllowanceInput): Promise<Allowance> {
   return apiFetch<Allowance>(`/shipments/${shipmentId}/allowances`, {
     method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * Correcting a release that has not been frozen by an approval.
+ *
+ * The one correction the screen offers is which ACCOUNT it is booked against —
+ * a release recorded on the driver's when the money was the helper's moves one
+ * variance the wrong way and the other's not at all. Amounts and dates are
+ * deliberately absent: a second handover is a second row, and editing the first
+ * would swallow it. The endpoint is `.partial()`, so sending one field is a
+ * move and nothing else.
+ */
+export function updateAllowance(
+  shipmentId: string,
+  id: string,
+  input: UpdateAllowanceInput,
+): Promise<Allowance> {
+  return apiFetch<Allowance>(`/shipments/${shipmentId}/allowances/${id}`, {
+    method: 'PATCH',
     body: JSON.stringify(input),
   });
 }

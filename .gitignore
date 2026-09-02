@@ -36,3 +36,6 @@ coverage/
 # prod-stack testing. A private key must never reach the repository.
 certs/
 .env.production
+
+# claude code
+.claude/

@@ -9,11 +9,12 @@ import {
   UserRole,
   expectsReferenceNumber,
   liquidationAccountLabel,
+  type Allowance,
   type AllowanceSummary,
   type Liquidation,
   type Shipment,
 } from '@eztruckr/types';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { ArrowLeftRight, AlertTriangle, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ConfirmDeleteButton } from '@/components/confirm-delete-button';
 import { Badge } from '@/components/ui/badge';
@@ -21,6 +22,14 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -37,6 +46,7 @@ import {
   listShipmentLiquidations,
   receiptContentUrl,
   removeAllowance,
+  updateAllowance,
 } from '@/lib/liquidation-api';
 import { shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
@@ -50,6 +60,16 @@ import { ReceiptField } from './receipt-field';
  * trip carries an initial advance and whatever the road demands afterwards, so
  * a second release is a second row — with its own date, its own mode and its
  * own paper trail. A single editable figure would swallow the first one whole.
+ *
+ * THE ONE EXCEPTION IS WHICH ACCOUNT IT IS BOOKED AGAINST, and it is an
+ * exception because it is not an edit to the cash event. The amount, the date,
+ * the mode and the person handed the money are all statements about a handover
+ * that happened; the account is a statement about WHOSE VARIANCE IT MOVES, and
+ * getting that wrong is a filing mistake with a wrong number at the end of it —
+ * the driver short by the helper's ferry money and the helper's account
+ * claiming a release it never saw. The alternative on offer was delete and
+ * retype, which throws away the original row's date, its reference and whoever
+ * released it in order to correct a field that never described them.
  *
  * EVERY RELEASE NAMES TWO PEOPLE, and they are not the same question. Who
  * RECEIVED the cash is the crew member it was handed to; which ACCOUNT it is
@@ -164,13 +184,21 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="tabular-nums">{formatMoney(release.amount)}</span>
                   {canIssueRole && data?.canIssue ? (
+                    <MoveAccountDialog
+                      shipment={shipment}
+                      release={release}
+                      accounts={accounts.data ?? []}
+                      onMoved={invalidate}
+                    />
+                  ) : null}
+                  {canIssueRole && data?.canIssue ? (
                     <ConfirmDeleteButton
                       label="Remove release"
                       title="Remove this cash release?"
                       description={`${formatMoney(release.amount)} comes off ${liquidationAccountLabel(
                         release.custodianName,
                         release.liquidationSequence,
-                      )}, so its variance moves by the same amount. Records a release that never happened as never having happened — correct one that did by removing it and recording it again.`}
+                      )}, so its variance moves by the same amount. Records a release that never happened as never having happened — correct one that did by removing it and recording it again. If only the account is wrong, move it instead and keep the original row.`}
                       pending={remove.isPending}
                       onConfirm={() => remove.mutate(release.id)}
                     />
@@ -198,6 +226,146 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
         ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Re-booking a release onto the account it belonged on all along.
+ *
+ * ONE FIELD, DELIBERATELY. The endpoint is `.partial()` and would happily take
+ * the amount, the date and the mode too, and offering them here would turn a
+ * filing correction into the editable running total this card exists to refuse.
+ * What moved is the money's FILING, not the money.
+ *
+ * BOTH ENDS HAVE TO BE OPEN, and only one of them can be checked here. A
+ * release cannot be pulled out of an approved account any more than it can be
+ * pushed into one — approval freezes a variance measured against exactly these
+ * releases — so the button is hidden on a release whose own account is
+ * approved, and the destination list offers the open ones. The API asks both
+ * questions again and answers with a sentence naming the account, which is the
+ * only place the answer can be right when somebody else approves an account
+ * between this list loading and the save.
+ *
+ * NOT OFFERED ON A CLOSED TRIP either, which is why the row gates this on the
+ * same `canIssue` that gates removal: that flag is false exactly when no
+ * account on the trip could take a release — every one approved, or the trip
+ * closed — and a move is refused in both of those cases too.
+ */
+function MoveAccountDialog({
+  shipment,
+  release,
+  accounts,
+  onMoved,
+}: {
+  shipment: Shipment;
+  release: Allowance;
+  accounts: Liquidation[];
+  onMoved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  // Seeded when the dialog opens rather than on mount: the list refetches
+  // underneath this row, and a value frozen at first render would offer to
+  // "move" a release somebody else has already moved.
+  const [liquidationId, setLiquidationId] = useState(release.liquidationId);
+
+  const from = accounts.find((account) => account.id === release.liquidationId);
+
+  const save = useMutation({
+    mutationFn: () => updateAllowance(shipment.id, release.id, { liquidationId }),
+    onSuccess: () => {
+      setOpen(false);
+      onMoved();
+    },
+    onError: (error: unknown) =>
+      toast.error('Could not move that release', {
+        description: error instanceof ApiError ? error.displayMessage : String(error),
+      }),
+  });
+
+  // Its own account is frozen, so nothing can leave it. Said by hiding the
+  // control rather than by a refusal after the choosing — unlike the
+  // destination, this is settled before anybody opens the dialog.
+  if (from?.status === LiquidationStatus.APPROVED) return null;
+
+  // Nowhere to move it TO. A trip with one account is the common case, and a
+  // dialog offering the account the release is already on is a button that
+  // does nothing.
+  const destinations = accounts.filter(
+    (account) => account.status !== LiquidationStatus.APPROVED || account.id === liquidationId,
+  );
+
+  if (destinations.length < 2) return null;
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label="Move release to another account"
+        onClick={() => {
+          setLiquidationId(release.liquidationId);
+          setOpen(true);
+        }}
+      >
+        <ArrowLeftRight className="h-4 w-4" />
+      </Button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Move this release to another account</DialogTitle>
+            <DialogDescription>
+              {formatMoney(release.amount)} released to {release.staffName ?? 'the crew'} on{' '}
+              {formatDate(release.issuedAt)}. Nothing about the handover changes — the amount, the
+              date and who received it stay as recorded. What changes is whose variance it moves.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-1">
+            <Label htmlFor={`move-account-${release.id}`} className="text-xs">
+              Booked against
+            </Label>
+            <Select value={liquidationId} onValueChange={setLiquidationId}>
+              <SelectTrigger id={`move-account-${release.id}`}>
+                <SelectValue placeholder="Account" />
+              </SelectTrigger>
+              <SelectContent>
+                {destinations.map((account) => (
+                  <SelectItem key={account.id} value={account.id}>
+                    {liquidationAccountLabel(
+                      account.custodianName,
+                      account.sequence,
+                      account.description,
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-muted-foreground text-[11px]">
+              Both accounts move by {formatMoney(release.amount)}: it comes off the one it is on now
+              and lands on the one chosen here.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              // Saving the account it is already on is a no-op that still
+              // rewrites the row and its audit columns.
+              disabled={save.isPending || liquidationId === release.liquidationId}
+              onClick={() => save.mutate()}
+            >
+              {save.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Move release
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
