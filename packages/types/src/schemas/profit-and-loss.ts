@@ -128,6 +128,24 @@ export const profitAndLossShipmentSchema = z.object({
   revenue: z.string(),
   cost: z.string(),
   grossProfit: z.string(),
+  /**
+   * This trip's gross profit over its own revenue, as a rate.
+   *
+   * THE TRIP'S OWN `GrossProfit.margin`, passed through rather than recomputed
+   * — the one definition of a margin in the system, so this column and the card
+   * on `/shipments/:id` cannot round differently.
+   *
+   * WHY IT EARNS A COLUMN when the peso figure is already here: the two answer
+   * different questions, and the big trips drown out the small ones on the peso
+   * column alone. A ₱200,000 haul returning 8% and a ₱40,000 one returning 45%
+   * are the same conversation only if you can see both rates side by side, and
+   * the period's own margin above is an average that hides exactly that spread.
+   *
+   * Null on zero revenue rather than zero, matching `GrossProfit.margin` and
+   * the period's two margins: a trip that billed nothing has no margin, and
+   * "0.0%" reads like a real one that happened to break even.
+   */
+  margin: z.string().nullable(),
   /** This trip's figure will still move. Contributes to the period's own flag. */
   isProvisional: z.boolean(),
 });
@@ -207,7 +225,19 @@ export const profitAndLossSchema = z.object({
    */
   isProvisional: z.boolean(),
 
-  /** Every trip in the window, largest contribution first. */
+  /**
+   * Every trip in the window, OLDEST FIRST.
+   *
+   * Chronological rather than ranked by contribution, because this table is
+   * read as the period's record: a reader following a month down the page is
+   * tracing what happened in it, and a statement whose rows jump around the
+   * calendar cannot be checked against anything else — not a day book, not a
+   * client's own list, not the shipments screen, which orders by date too.
+   * Ranking is a question a reader answers by looking at the margin column.
+   *
+   * Ordered in the DATABASE, with the id breaking ties, so two trips sharing a
+   * date keep a stable order between requests.
+   */
   byShipment: z.array(profitAndLossShipmentSchema),
 });
 

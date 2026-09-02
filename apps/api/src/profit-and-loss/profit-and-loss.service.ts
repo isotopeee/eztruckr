@@ -74,6 +74,12 @@ export class ProfitAndLossService {
         rateChainUpdatedAt: true,
         client: { select: { name: true } },
       },
+      // OLDEST FIRST, and ordered here rather than after the arithmetic: the
+      // breakdown is read as the period's record, so it should run down the
+      // calendar the way the shipments screen does. The id breaks ties — a
+      // uuidv7, so it is both unique and minted in creation order — without
+      // which two trips sharing a date could swap places between requests.
+      orderBy: [{ shipmentDate: 'asc' }, { id: 'asc' }],
     });
 
     const shipmentIds = shipments.map((row) => row.id);
@@ -164,21 +170,23 @@ export class ProfitAndLossService {
     const overheadTotal = money(operatingExpenses.total);
     const netProfit = grossProfit.subtract(overheadTotal);
 
-    const byShipment: ProfitAndLossShipment[] = trips
-      .map(({ shipment, profit }) => ({
-        shipmentId: shipment.id,
-        shipmentNumber: shipment.shipmentNumber,
-        shipmentDate: shipment.shipmentDate.toISOString(),
-        clientName: shipment.client?.name ?? null,
-        revenue: profit.revenue,
-        cost: profit.cost,
-        grossProfit: profit.grossProfit,
-        isProvisional: profit.isProvisional,
-      }))
-      // Largest contribution first, and losses therefore last — the point of
-      // the breakdown is which trip to look at, and on a bad month that is the
-      // one at the bottom.
-      .sort((a, b) => Number(b.grossProfit) - Number(a.grossProfit));
+    // Already in the order it is reported in — the query ordered by date, and
+    // `map` preserves that. No second sort here, because a list ordered in two
+    // places is one that eventually disagrees with itself about ties.
+    const byShipment: ProfitAndLossShipment[] = trips.map(({ shipment, profit }) => ({
+      shipmentId: shipment.id,
+      shipmentNumber: shipment.shipmentNumber,
+      shipmentDate: shipment.shipmentDate.toISOString(),
+      clientName: shipment.client?.name ?? null,
+      revenue: profit.revenue,
+      cost: profit.cost,
+      grossProfit: profit.grossProfit,
+      // The trip's OWN margin, passed through rather than divided again here.
+      // `grossProfitOf` already computed it, nulls it on zero revenue, and is
+      // the single definition of a margin in the system.
+      margin: profit.margin,
+      isProvisional: profit.isProvisional,
+    }));
 
     const provisionalShipmentCount = trips.filter((trip) => trip.profit.isProvisional).length;
 

@@ -470,9 +470,69 @@ describe('the period’s trip figures', () => {
       revenue: trip.revenue,
       cost: trip.cost,
       grossProfit: trip.grossProfit,
+      // The trip's OWN margin, not a second division here — against the other
+      // service, so the column and the trip's card cannot round differently.
+      margin: trip.margin,
       isProvisional: trip.isProvisional,
     });
     expect(row?.shipmentDate).toBe(IN_AUGUST);
+    // Not null on a trip that billed something, or the assertion above would
+    // pass just as well on two nulls.
+    expect(row?.margin).not.toBeNull();
+  });
+
+  it('report no margin for a trip that billed nothing, rather than a zero', async () => {
+    if (!available) return;
+
+    // No rate, no charges — a trip with nothing on the revenue side at all.
+    await prisma.shipment.update({
+      where: { id: AUGUST_TRIP },
+      data: { grossRate: '0.0000', tpcAmount: '0.0000', netRate: '0.0000' },
+    });
+
+    const row = (await report()).byShipment.find((entry) => entry.shipmentId === AUGUST_TRIP);
+
+    expect(row?.revenue).toBe('0.00');
+    expect(row?.margin).toBeNull();
+  });
+
+  it('are ordered oldest first, with the id breaking a shared date', async () => {
+    if (!available) return;
+
+    // A third trip, dated between the two the suite books together.
+    await act(() => book(BOUNDARY_TRIP, { shipmentDate: '2031-08-20T02:00:00.000Z' }));
+    await prisma.shipment.update({
+      where: { id: AUGUST_TRIP_2 },
+      data: { shipmentDate: new Date('2031-08-02T02:00:00.000Z') },
+    });
+
+    const period = await report();
+
+    expect(period.byShipment.map((trip) => trip.shipmentId)).toEqual([
+      AUGUST_TRIP_2, // 2 August
+      AUGUST_TRIP, // 15 August
+      BOUNDARY_TRIP, // 20 August
+    ]);
+
+    // Stated as the property rather than the sequence, so the claim survives
+    // the fixtures being re-dated.
+    const dates = period.byShipment.map((trip) => Date.parse(trip.shipmentDate));
+    expect(dates).toEqual([...dates].sort((a, b) => a - b));
+  });
+
+  it('keep a stable order when two trips share a date', async () => {
+    if (!available) return;
+
+    // Both already sit on IN_AUGUST, so only the id tiebreak separates them —
+    // and it must give the same answer every time or a reader watching the
+    // table would see two rows swap for no reason.
+    const first = await report();
+    const second = await report();
+
+    expect(second.byShipment.map((trip) => trip.shipmentId)).toEqual(
+      first.byShipment.map((trip) => trip.shipmentId),
+    );
+    expect(first.byShipment).toHaveLength(2);
   });
 });
 

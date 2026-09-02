@@ -266,15 +266,28 @@ function Statement({ report }: { report: ProfitAndLoss }) {
   );
 }
 
-/** The trips behind the figures, largest contribution first. */
+/**
+ * The trips behind the figures, oldest first.
+ *
+ * CHRONOLOGICAL, in the order the API returns them — the period read as its own
+ * record, running down the calendar the way `/shipments` does. Nothing is
+ * re-sorted here: the ordering is a fact about the report, and a browser that
+ * imposed its own would break ties differently from the server.
+ *
+ * WHICH IS WHAT THE MARGIN COLUMN IS FOR. Ranked-by-profit ordering used to
+ * answer "which trip should I look at"; date ordering does not, and the rate
+ * answers it better anyway — the peso column is dominated by the big hauls, so
+ * a small trip returning 45% and a large one returning 8% only become
+ * comparable once both rates are on the page.
+ */
 function Trips({ report }: { report: ProfitAndLoss }) {
   return (
     <Card>
       <CardHeader>
         <h2 className="text-lg font-semibold">Trips in this period</h2>
         <p className="text-muted-foreground text-sm">
-          Each trip&rsquo;s own figures, as its shipment page shows them. The gross profit column
-          adds up to the total above.
+          Each trip&rsquo;s own figures, as its shipment page shows them, oldest first. The gross
+          profit column adds up to the total above.
         </p>
       </CardHeader>
       <CardContent>
@@ -287,6 +300,7 @@ function Trips({ report }: { report: ProfitAndLoss }) {
               <TableHead className="text-right">Revenue</TableHead>
               <TableHead className="text-right">Cost</TableHead>
               <TableHead className="text-right">Gross profit</TableHead>
+              <TableHead className="text-right">Margin</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -314,6 +328,19 @@ function Trips({ report }: { report: ProfitAndLoss }) {
                   }`}
                 >
                   {formatMoney(trip.grossProfit)}
+                </TableCell>
+                {/* Null when the trip billed nothing — an em dash rather than
+                    "0.0%", which would read as a real margin that broke even. */}
+                <TableCell
+                  className={`text-right tabular-nums ${
+                    trip.margin !== null && Number(trip.margin) < 0 ? 'text-destructive' : ''
+                  }`}
+                >
+                  {trip.margin === null ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : (
+                    formatPercent(trip.margin)
+                  )}
                 </TableCell>
               </TableRow>
             ))}
