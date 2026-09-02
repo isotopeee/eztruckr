@@ -17,6 +17,7 @@ import {
   type GrossProfit,
   type Page,
   type Shipment,
+  type ShipmentSortField,
 } from '@eztruckr/types';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
@@ -42,6 +43,13 @@ import {
   UpdateShipmentDto,
 } from './shipments.dto';
 import { ShipmentsService } from './shipments.service';
+
+/**
+ * Where a crew list falls back to when it asks for an ordering it may not
+ * have. The same column `shipmentListQuerySchema` defaults to, named here so
+ * the two cannot drift.
+ */
+const DEFAULT_SHIPMENT_SORT: ShipmentSortField = 'date';
 
 @Controller('shipments')
 export class ShipmentsController {
@@ -239,7 +247,15 @@ export class ShipmentsController {
       throw new ForbiddenException('This crew account is not linked to a crew member.');
     }
 
-    return { ...query, staffId: user.staffId };
+    // SORTING BY NET RATE IS PART OF THE REDACTION, not a separate concern.
+    // The figures come back null for crew, but an ordering computed from them
+    // hands back their ranking — enough to read off which of their own trips
+    // earned the company most, which is exactly what nulling the column
+    // refuses to say. Rewritten to the default rather than refused, for the
+    // same reason `staffId` is: there is no query string that widens this.
+    const sort = query.sort === 'netRate' ? DEFAULT_SHIPMENT_SORT : query.sort;
+
+    return { ...query, staffId: user.staffId, sort };
   }
 
   /**

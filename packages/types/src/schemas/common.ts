@@ -149,6 +149,18 @@ export const paginationQuerySchema = z.object({
 export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 
 /**
+ * Which way a sorted list runs.
+ *
+ * Lives here rather than beside the one list that sorts today, because the
+ * direction is the half of a sort that is never specific to an entity — what
+ * differs per list is the set of COLUMNS it will order by, and that set stays
+ * with the list's own query schema.
+ */
+export const sortDirectionSchema = z.enum(['asc', 'desc']);
+
+export type SortDirection = z.infer<typeof sortDirectionSchema>;
+
+/**
  * Query string for any master data list.
  *
  * `includeInactive` defaults to false because the common case is choosing a

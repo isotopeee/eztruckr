@@ -39,6 +39,8 @@ import {
   type SetGasRateOverrideInput,
   type Shipment,
   type ShipmentListQuery,
+  type ShipmentSortField,
+  type SortDirection,
   type TransitionShipmentInput,
   type UpdateRateChainInput,
   type UpdateShipmentInput,
@@ -70,6 +72,50 @@ const SHIPMENT_INCLUDE = {
 } satisfies Prisma.ShipmentInclude;
 
 type ShipmentRow = Prisma.ShipmentGetPayload<{ include: typeof SHIPMENT_INCLUDE }>;
+
+/**
+ * The list's ordering, as Prisma clauses.
+ *
+ * SORTED IN THE DATABASE, not in the browser, because the list is paginated:
+ * ordering the twenty-five rows already fetched would answer "the largest net
+ * rate on this page", which is not a question anybody asks and is indeed the
+ * bug that looks most like a working feature.
+ *
+ * STATUS ORDERS BY ITS NUMERIC CODE, which is the one clause here that needs
+ * defending — `@eztruckr/types` is emphatic that workflow order comes from
+ * SHIPMENT_STATUS_SEQUENCE and never from the value. It holds today only
+ * because the codes happen to ascend with that sequence, and Prisma cannot
+ * express "order by position in this list" without dropping the whole query to
+ * raw SQL. So the coincidence is pinned by a test instead
+ * (`shipment-status-sort.test.ts`): append a status that belongs mid-workflow
+ * and it fails, which is the moment to write the CASE mapping rather than ship
+ * a list that quietly sorts Closed before Draft.
+ */
+function orderFor(
+  sort: ShipmentSortField,
+  direction: SortDirection,
+): Prisma.ShipmentOrderByWithRelationInput[] {
+  // Trips with no container number are the ones the sort has nothing to say
+  // about, so they go last whichever way it runs rather than filling the top
+  // of a descending list with blanks.
+  const blanksLast = { sort: direction, nulls: 'last' } as const;
+
+  const column: Record<ShipmentSortField, Prisma.ShipmentOrderByWithRelationInput> = {
+    date: { shipmentDate: direction },
+    number: { shipmentNumber: direction },
+    // Through the relation: the stored column is a foreign key, which sorts by
+    // nothing a reader recognises.
+    client: { client: { name: direction } },
+    container: { containerNumber: blanksLast },
+    netRate: { netRate: direction },
+    status: { status: direction },
+  };
+
+  // Ties broken on the id, which is a uuidv7 — unique, and minted in creation
+  // order. Without it two trips sharing a date could swap places between one
+  // page request and the next, so a row would appear twice or not at all.
+  return [column[sort], { id: 'desc' }];
+}
 
 /**
  * How many times a booking will recompute its number before giving up.
@@ -137,7 +183,7 @@ export class ShipmentsService {
       this.shipments.findMany({
         where,
         include: SHIPMENT_INCLUDE,
-        orderBy: [{ createdAt: 'desc' }],
+        orderBy: orderFor(query.sort, query.direction),
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
       }),

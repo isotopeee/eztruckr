@@ -167,3 +167,67 @@ describe('a crew session is served no money figures for a trip', () => {
     await expect(controllerFor(other).get('any', crew)).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
+
+/**
+ * The ordering a crew list is allowed to ask for.
+ *
+ * A SORT IS A DISCLOSURE, which is the whole reason this is here and not
+ * filed as a UI concern. Every money field above comes back null, and then
+ * `?sort=netRate` hands back the ranking anyway: the rows arrive ordered by
+ * the figure that was withheld, so a crew member reads off which of their own
+ * trips earned the company most without ever being shown a peso. Nulling the
+ * column and ordering by it are contradictory answers to the same question.
+ *
+ * Rewritten rather than refused, exactly as `staffId` is: an error would tell
+ * a caller the ordering exists and is worth retrying, and there is no query
+ * string that widens what a crew session is served.
+ */
+function listSpy() {
+  const seen: { sort?: string; direction?: string; staffId?: string }[] = [];
+
+  const shipments = {
+    list: (query: { sort?: string; direction?: string; staffId?: string }) => {
+      seen.push(query);
+      return Promise.resolve({ items: [], total: 0, page: 1, pageSize: 25 } as Page<Shipment>);
+    },
+  } as unknown as ShipmentsService;
+
+  const controller = new ShipmentsController(
+    shipments,
+    {} as CommissionService,
+    {} as GrossProfitService,
+    {} as AdjustmentsService,
+  );
+
+  return { controller, seen };
+}
+
+describe('a crew session may not order its trips by the net rate it cannot see', () => {
+  it('rewrites that ordering to the default, keeping the direction asked for', async () => {
+    const { controller, seen } = listSpy();
+
+    await controller.list({ sort: 'netRate', direction: 'desc' } as never, crew);
+
+    expect(seen[0]?.sort).toBe('date');
+    expect(seen[0]?.direction).toBe('desc');
+    // And the scoping is still applied — this is the same rewrite, not a
+    // branch that returns early before it.
+    expect(seen[0]?.staffId).toBe(CREW_STAFF_ID);
+  });
+
+  it('leaves an ordering that discloses nothing alone', async () => {
+    const { controller, seen } = listSpy();
+
+    await controller.list({ sort: 'container', direction: 'asc' } as never, crew);
+
+    expect(seen[0]?.sort).toBe('container');
+  });
+
+  it('lets an office session order by net rate, which is the point of the rule', async () => {
+    const { controller, seen } = listSpy();
+
+    await controller.list({ sort: 'netRate', direction: 'desc' } as never, accounting);
+
+    expect(seen[0]?.sort).toBe('netRate');
+  });
+});

@@ -11,10 +11,12 @@ import {
   type Client,
   type Page as PageResult,
   type Route as RouteRecord,
+  type ShipmentSortField,
+  type SortDirection,
   type ThirdParty,
   type Truck,
 } from '@eztruckr/types';
-import { Loader2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronsUpDown, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -49,14 +51,34 @@ import { ApiError, apiFetch } from '@/lib/api-client';
 import { formatDate, formatMoney } from '@/lib/format';
 import { createShipment, listShipments, shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
+import { cn } from '@/lib/utils';
 
 const ALL = '__all__';
 const NONE = '__none__';
+
+/**
+ * Which way a column runs the FIRST time it is clicked.
+ *
+ * Not one answer for every column: the useful end of a date, a shipment number
+ * (which is a date with a sequence on it) and a peso figure is the large end,
+ * while a name or a container number is read from A. Starting each where its
+ * reader starts saves the second click that otherwise always follows the first.
+ */
+const FIRST_DIRECTION: Readonly<Record<ShipmentSortField, SortDirection>> = {
+  date: 'desc',
+  number: 'desc',
+  client: 'asc',
+  container: 'asc',
+  netRate: 'desc',
+  status: 'asc',
+};
 
 export default function Page() {
   const { user } = useCurrentUser();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<string>(ALL);
+  const [sort, setSort] = useState<ShipmentSortField>('date');
+  const [direction, setDirection] = useState<SortDirection>('desc');
 
   /**
    * The net rate column is dropped for crew rather than shown empty.
@@ -71,6 +93,26 @@ export default function Page() {
     page: 1,
     search,
     status: status === ALL ? undefined : (Number(status) as ShipmentStatus),
+    sort,
+    direction,
+  };
+
+  /**
+   * Clicking a heading. The same one flips direction; a different one starts
+   * at whichever end that column is normally read from.
+   *
+   * The ordering is sent to the API rather than applied to `rows`, because
+   * `rows` is one page: sorting it here would order twenty-five trips out of
+   * however many match, and label the result "by net rate".
+   */
+  const sortBy = (field: ShipmentSortField) => {
+    if (field === sort) {
+      setDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+
+    setSort(field);
+    setDirection(FIRST_DIRECTION[field]);
   };
 
   const shipments = useQuery({
@@ -144,15 +186,54 @@ export default function Page() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Number</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Client</TableHead>
+                  <SortableHead
+                    field="number"
+                    label="Number"
+                    sort={sort}
+                    direction={direction}
+                    onSort={sortBy}
+                  />
+                  <SortableHead
+                    field="date"
+                    label="Date"
+                    sort={sort}
+                    direction={direction}
+                    onSort={sortBy}
+                  />
+                  <SortableHead
+                    field="client"
+                    label="Client"
+                    sort={sort}
+                    direction={direction}
+                    onSort={sortBy}
+                  />
                   <TableHead>Route</TableHead>
-                  <TableHead>Container</TableHead>
+                  <SortableHead
+                    field="container"
+                    label="Container"
+                    sort={sort}
+                    direction={direction}
+                    onSort={sortBy}
+                  />
                   <TableHead>Crew</TableHead>
                   <TableHead>Truck</TableHead>
-                  {showNetRate ? <TableHead className="text-right">Net rate</TableHead> : null}
-                  <TableHead>Status</TableHead>
+                  {showNetRate ? (
+                    <SortableHead
+                      field="netRate"
+                      label="Net rate"
+                      className="text-right"
+                      sort={sort}
+                      direction={direction}
+                      onSort={sortBy}
+                    />
+                  ) : null}
+                  <SortableHead
+                    field="status"
+                    label="Status"
+                    sort={sort}
+                    direction={direction}
+                    onSort={sortBy}
+                  />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -207,6 +288,54 @@ export default function Page() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * A column heading that sorts.
+ *
+ * A real `<button>` inside the `<th>` rather than a click handler on the cell,
+ * so the heading is reachable and operable from the keyboard; `aria-sort`
+ * carries the current ordering to a screen reader, which is the only way it is
+ * announced — the arrow is decorative and hidden from the tree.
+ */
+function SortableHead({
+  field,
+  label,
+  sort,
+  direction,
+  onSort,
+  className,
+}: {
+  field: ShipmentSortField;
+  label: string;
+  sort: ShipmentSortField;
+  direction: SortDirection;
+  onSort: (field: ShipmentSortField) => void;
+  className?: string;
+}) {
+  const active = field === sort;
+  // Unsorted columns show the neutral pair, so a heading looks sortable before
+  // anybody has clicked it rather than only after.
+  const Icon = !active ? ChevronsUpDown : direction === 'asc' ? ArrowUp : ArrowDown;
+
+  return (
+    <TableHead
+      className={className}
+      aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(field)}
+        className={cn(
+          'hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1 rounded-sm focus-visible:ring-2 focus-visible:outline-none',
+          active ? 'text-foreground' : 'text-muted-foreground',
+        )}
+      >
+        {label}
+        <Icon aria-hidden className={cn('h-3.5 w-3.5', active ? 'opacity-100' : 'opacity-50')} />
+      </button>
+    </TableHead>
   );
 }
 

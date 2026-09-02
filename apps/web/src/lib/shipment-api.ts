@@ -21,7 +21,9 @@ import type {
   RecordClientPaymentInput,
   RuleCoverageReport,
   Shipment,
+  ShipmentSortField,
   ShipmentStatus,
+  SortDirection,
   UpdateRateChainInput,
   UpdateShipmentInput,
 } from '@eztruckr/types';
@@ -59,6 +61,9 @@ export interface ShipmentFilters {
   page: number;
   search: string;
   status?: ShipmentStatus;
+  /** Ordering, applied by the API — the list is paginated, so it has to be. */
+  sort: ShipmentSortField;
+  direction: SortDirection;
 }
 
 export function listShipments(filters: ShipmentFilters): Promise<Page<Shipment>> {
@@ -67,6 +72,8 @@ export function listShipments(filters: ShipmentFilters): Promise<Page<Shipment>>
       page: filters.page,
       search: filters.search,
       status: filters.status,
+      sort: filters.sort,
+      direction: filters.direction,
     })}`,
   );
 }

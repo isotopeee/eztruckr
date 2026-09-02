@@ -9,6 +9,7 @@ import {
   optionalText,
   rateStringSchema,
   requiredText,
+  sortDirectionSchema,
 } from './common';
 
 /**
@@ -530,6 +531,33 @@ export type SetGasRateOverrideInput = z.infer<typeof setGasRateOverrideSchema>;
 // Listing
 // ---------------------------------------------------------------------------
 
+/**
+ * Columns the shipment list may be ordered by.
+ *
+ * NAMED FOR THE COLUMN A READER SEES, not for the database field behind it:
+ * `date` is the date the trip ran, which is `shipmentDate` and deliberately
+ * not the row's `createdAt` — a trip typed up a week late belongs where the
+ * paperwork puts it, and those two columns disagree precisely when it matters.
+ * `client` orders by the client's name through the relation, because the
+ * foreign key it is stored as sorts by nothing a human recognises.
+ *
+ * The set is closed rather than free text: an ordering clause built from an
+ * arbitrary caller-supplied string is a way to ask the database about columns
+ * the API never meant to expose.
+ */
+export const SHIPMENT_SORT_FIELDS = [
+  'date',
+  'number',
+  'client',
+  'container',
+  'netRate',
+  'status',
+] as const;
+
+export type ShipmentSortField = (typeof SHIPMENT_SORT_FIELDS)[number];
+
+export const shipmentSortFieldSchema = z.enum(SHIPMENT_SORT_FIELDS);
+
 export const shipmentListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(25),
@@ -539,6 +567,11 @@ export const shipmentListQuerySchema = z.object({
   status: z.coerce.number().int().refine(isShipmentStatus, 'unknown shipment status').optional(),
   clientId: idSchema.optional(),
   staffId: idSchema.optional(),
+  // Newest trip first, which is the list the office opens the screen to read.
+  // Defaulted here rather than in the service so that the API's own default
+  // and the web app's initial header state cannot drift apart.
+  sort: shipmentSortFieldSchema.default('date'),
+  direction: sortDirectionSchema.default('desc'),
 });
 
 export type ShipmentListQuery = z.infer<typeof shipmentListQuerySchema>;
