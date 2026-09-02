@@ -501,6 +501,21 @@ Run one by hand:
 ssh deploy@<DROPLET_IP> '/opt/eztruckr/infra/backup.sh'
 ```
 
+Check that the nightly one ran — the log is the only place it reports:
+
+```bash
+ssh deploy@<DROPLET_IP> 'tail -40 /opt/eztruckr/logs/backup.log'
+```
+
+**The cron log must live somewhere `deploy` can write, and `/var/log` is not that place.** It is
+`root:syslog 0775`, and this crontab belongs to `deploy`. A redirection that cannot open its file
+fails _before_ the command it redirects, so the cron entry pointing at
+`/var/log/eztruckr-backup.log` ran `backup.sh` exactly zero times over its whole life — while
+looking correct in `crontab -l`, and while the same script run by hand (no redirection) worked
+every time. Cron's "permission denied" went to a local mailbox nobody reads. The log now goes to
+`/opt/eztruckr/logs/`, created by `provision.sh` and by the deploy itself, and rotated weekly by
+`/etc/logrotate.d/eztruckr`.
+
 ### Restoring
 
 **Do this once, deliberately, before you ever need it.** A backup nobody has restored is a

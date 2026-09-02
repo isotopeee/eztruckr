@@ -53,7 +53,11 @@ log "Updating base packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get upgrade -y -qq
-apt-get install -y -qq ca-certificates curl gnupg ufw unattended-upgrades
+# `cron` is present on the stock Ubuntu image and absent from some minimal
+# and container-derived ones. The nightly backup is a crontab entry, so a
+# box without the daemon takes no backups while looking entirely healthy.
+apt-get install -y -qq ca-certificates curl gnupg ufw unattended-upgrades cron
+systemctl enable --now cron
 
 # ---------------------------------------------------------------------------
 log "Enabling automatic security updates"
@@ -175,6 +179,27 @@ install -d -m 0750 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$APP_DIR"
 install -d -m 0750 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$APP_DIR/infra"
 # 0700: this holds the Cloudflare origin private key.
 install -d -m 0700 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$APP_DIR/certs"
+# Cron output goes here rather than /var/log, which the deploy user cannot
+# write to. A cron line redirecting into a file it cannot create does not run
+# the command at all, which is how the nightly backup silently never happened.
+install -d -m 0750 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "$APP_DIR/logs"
+
+# ---------------------------------------------------------------------------
+log "Rotating ${APP_DIR}/logs"
+# ---------------------------------------------------------------------------
+# Small — a few lines a night — but it is appended to forever, and an unrotated
+# log on a 4 GB droplet is a slow leak with a date on it.
+cat >/etc/logrotate.d/eztruckr <<EOF
+${APP_DIR}/logs/*.log {
+	weekly
+	rotate 8
+	compress
+	missingok
+	notifempty
+	copytruncate
+	su ${DEPLOY_USER} ${DEPLOY_USER}
+}
+EOF
 
 # ---------------------------------------------------------------------------
 log "Configuring the firewall"

@@ -254,7 +254,19 @@ jobs:
           # Nightly backup at 18:10 UTC — 02:10 Manila, after the working day.
           # Written here rather than in provision.sh so it is re-asserted on
           # every deploy and cannot quietly go missing.
-          CRON='10 18 * * * /opt/eztruckr/infra/backup.sh >>/var/log/eztruckr-backup.log 2>&1'
+          #
+          # THE LOG LIVES UNDER $APP_DIR, NOT /var/log, AND THAT IS THE WHOLE
+          # REASON NO NIGHTLY BACKUP EVER EXISTED. This crontab belongs to
+          # `deploy`; /var/log is root:syslog 0775, so cron's shell could not
+          # create /var/log/eztruckr-backup.log — and a redirection that cannot
+          # be opened fails BEFORE the command it redirects, so backup.sh was
+          # never executed at all. Every symptom pointed away from it: the
+          # crontab line was present and correct, the script worked perfectly by
+          # hand (running it by hand has no redirection), and cron's "permission
+          # denied" went to a local mailbox nobody reads. Keep this path
+          # somewhere the deploy user owns.
+          mkdir -p /opt/eztruckr/logs
+          CRON='10 18 * * * /opt/eztruckr/infra/backup.sh >>/opt/eztruckr/logs/backup.log 2>&1'
           # `|| true` because `grep -v` exits 1 when it selects NO lines, which
           # is the ordinary case on a box whose crontab is empty or holds only
           # the line being replaced. Under `pipefail` that non-zero propagates,
@@ -262,6 +274,21 @@ jobs:
           # whole step dies one line short of finishing — with the crontab left
           # empty, which is precisely the state this line exists to prevent.
           ( crontab -l 2>/dev/null | grep -vF '/opt/eztruckr/infra/backup.sh' || true; echo "$CRON" ) | crontab -
+
+          # Read it back, and check something is there to run it. `crontab -`
+          # can reject a file and `set -e` will catch that, but neither says
+          # anything about whether the cron daemon exists on this box — and the
+          # cost of finding out the usual way is discovering, months later,
+          # that the bucket is empty.
+          crontab -l | grep -qF '/opt/eztruckr/infra/backup.sh' || {
+            echo "FAILED: the backup crontab did not install." >&2
+            exit 1
+          }
+          systemctl is-active --quiet cron || {
+            echo "FAILED: cron is not running, so the nightly backup will not fire." \
+                 "Re-run infra/provision.sh on this droplet." >&2
+            exit 1
+          }
 
           echo "__RELEASE_COMPLETE__"
           REMOTE

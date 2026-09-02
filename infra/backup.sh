@@ -53,6 +53,11 @@ RETENTION_DAYS="${RETENTION_DAYS:-30}"
 
 STAMP="$(date -u +%Y-%m-%dT%H%M%SZ)"
 FILE="eztruckr-${STAMP}.dump"
+
+# Under cron every run appends to the same log. Without this header a failure
+# reads as a wall of context-free output with no way to tell which night it
+# came from, or whether the file is stale.
+echo "=== ${STAMP} — backup.sh starting ==="
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

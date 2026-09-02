@@ -502,6 +502,10 @@ throughout, because `replica` suspends triggers only.
   (verified: object listing matches `receipt` rows, filenames are forwarded phone photos) and
   `backup.sh` has completed against production (verified: 211 KB landed and was listed back).
   `WHEN_REQUIRED` and the scoped token are confirmed correct in both directions, not assumed.
+  That verified run was a manual one. **The nightly cron run had never fired at all** — its log
+  redirect pointed at `/var/log`, which `deploy` cannot write, and cron does not run a command
+  whose redirection it cannot open. Fixed 2026-09-03; the log is `/opt/eztruckr/logs/backup.log`
+  and the deploy now fails if the crontab or the cron daemon is missing.
 - **Known flake, open.** `adjustments.test.ts > survives a recompute…` and now three whole
   api-suite runs — the latest during phase 14, one failed test out of 385, which did not reproduce
   in five consecutive full runs afterwards and whose name was not captured. All of them smell like
