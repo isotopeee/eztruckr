@@ -1093,15 +1093,15 @@ export class ShipmentsService {
   async isComputationStale(shipmentId: string): Promise<boolean> {
     const shipment = await this.load(shipmentId);
 
+    // Short-circuited before the queries, not merely inside the predicate: a
+    // trip whose commissions were never computed cannot have fallen behind
+    // anything, and asking two tables about it is two round trips for an
+    // answer already known.
     if (shipment.commissionsComputedAt === null) {
       return false;
     }
 
     const computedAt = shipment.commissionsComputedAt;
-
-    if (shipment.rateChainUpdatedAt !== null && shipment.rateChainUpdatedAt > computedAt) {
-      return true;
-    }
 
     const [expense, charge] = await Promise.all([
       this.prisma.client.billableExpense.findFirst({
@@ -1114,7 +1114,11 @@ export class ShipmentsService {
       }),
     ]);
 
-    return expense !== null || charge !== null;
+    return computationIsStale({
+      commissionsComputedAt: computedAt,
+      rateChainUpdatedAt: shipment.rateChainUpdatedAt,
+      chargesChangedSince: expense !== null || charge !== null,
+    });
   }
 
   private explainDeadEnd(from: ShipmentStatus, shipmentNumber: string): string {
@@ -1422,4 +1426,39 @@ export function toShipment(row: ShipmentRow): Shipment {
 
     ...auditFields(row),
   };
+}
+
+/**
+ * The staleness RULE, separated from the two queries that answer it.
+ *
+ * `isComputationStale` asks the database one shipment at a time, which is right
+ * for a trip screen and wrong for a period: `ProfitAndLossService` reads a
+ * month of shipments and already holds every billable expense and additional
+ * charge in memory, so it can answer `chargesChangedSince` without a query per
+ * trip. What neither of them may do is decide independently what "stale" MEANS
+ * — a report calling a trip final while its own screen calls it provisional is
+ * a disagreement nobody would think to look for.
+ *
+ * Hence a boolean rather than the rows: the caller owns how it establishes that
+ * a charge moved, and this owns what follows from it.
+ */
+export function computationIsStale(input: {
+  commissionsComputedAt: Date | null;
+  rateChainUpdatedAt: Date | null;
+  /** A billable expense or additional charge changed after the computation. */
+  chargesChangedSince: boolean;
+}): boolean {
+  // Never computed, so nothing to fall behind. Not the same as "up to date",
+  // and `commissionsComputed` is the flag that says which.
+  if (input.commissionsComputedAt === null) {
+    return false;
+  }
+
+  // A corrected gross rate, client or route moves the base for every crew
+  // member on the trip, which is precisely what this flag announces.
+  if (input.rateChainUpdatedAt !== null && input.rateChainUpdatedAt > input.commissionsComputedAt) {
+    return true;
+  }
+
+  return input.chargesChangedSince;
 }

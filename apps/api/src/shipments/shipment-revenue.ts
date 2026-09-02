@@ -66,6 +66,25 @@ export interface ShipmentRevenue {
   companyPaidBillableExpenses: Money;
 }
 
+/**
+ * The rebill rows this sum reads, and nothing more.
+ *
+ * Structural rather than a Prisma payload type, so `revenueOf` can be handed
+ * rows from a one-shipment read or from a batched `IN` read over a whole month
+ * without either caller casting. The columns are the three the arithmetic
+ * actually touches — a wider type would let a caller believe a field it
+ * supplied was being used.
+ */
+export interface BillableExpenseRow {
+  amount: { toString(): string };
+  billedAmount: { toString(): string };
+  liquidationId: string | null;
+}
+
+export interface AdditionalChargeRow {
+  amount: { toString(): string };
+}
+
 export async function shipmentRevenue(
   prisma: PrismaService,
   shipmentId: string,
@@ -79,6 +98,28 @@ export async function shipmentRevenue(
     prisma.client.additionalCharge.findMany({ where: { shipmentId }, select: { amount: true } }),
   ]);
 
+  return revenueOf(netRate, billable, additional);
+}
+
+/**
+ * The same sum, over rows somebody else loaded.
+ *
+ * THE ARITHMETIC LIVES HERE AND THE QUERY LIVES ABOVE, which is what lets the
+ * period report reuse this without either re-spelling the sum or reading one
+ * shipment at a time. `ProfitAndLossService` fetches a month's rebills in one
+ * `IN` query, groups them, and calls this per trip; the totals it reports are
+ * therefore the trips' own figures by construction rather than by a second
+ * implementation happening to agree.
+ *
+ * PURE, AND THAT IS THE POINT. No Prisma, no soft-delete filter, no knowledge
+ * of which shipment the rows came from — the caller owns all three, and the one
+ * thing that must not be duplicated is what the columns MEAN.
+ */
+export function revenueOf(
+  netRate: { toString(): string },
+  billable: readonly BillableExpenseRow[],
+  additional: readonly AdditionalChargeRow[],
+): ShipmentRevenue {
   // BILLED, not spent. The client owes what was agreed, not what it cost.
   const billableExpenses = sum(billable.map((row) => row.billedAmount));
   const additionalCharges = sum(additional.map((row) => row.amount));

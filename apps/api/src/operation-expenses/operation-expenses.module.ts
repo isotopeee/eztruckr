@@ -16,5 +16,9 @@ import { OperationExpensesService } from './operation-expenses.service';
   imports: [PrismaModule],
   controllers: [OperationExpensesController],
   providers: [OperationExpensesService],
+  // Exported for `ProfitAndLossModule`, whose overhead line IS this service's
+  // summary — the same total and category breakdown `/operation-expenses`
+  // renders, rather than a second `where` over the same table.
+  exports: [OperationExpensesService],
 })
 export class OperationExpensesModule {}

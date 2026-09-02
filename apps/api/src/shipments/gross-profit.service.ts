@@ -8,7 +8,12 @@ import {
   type GrossProfit,
 } from '@eztruckr/types';
 import { PrismaService } from '../prisma/prisma.service';
-import { revenueAsStrings, shipmentRevenue } from './shipment-revenue';
+import {
+  revenueAsStrings,
+  revenueOf,
+  type AdditionalChargeRow,
+  type BillableExpenseRow,
+} from './shipment-revenue';
 import { ShipmentsService } from './shipments.service';
 
 /**
@@ -45,111 +50,180 @@ export class GrossProfitService {
   async forShipment(shipmentId: string): Promise<GrossProfit> {
     const shipment = await this.shipments.load(shipmentId);
 
-    const [income, companyPaid, commissions, liquidations, commissionsStale] = await Promise.all([
-      // The revenue side, computed by the one function that also answers what
-      // the CLIENT OWES — see `shipment-revenue.ts`. It also supplies the
-      // billable total the cost side reads below, so the same rows are summed
-      // once and the two halves cannot disagree about them.
-      shipmentRevenue(this.prisma, shipmentId, shipment.netRate),
-      this.prisma.client.companyPaidExpense.findMany({
-        where: { shipmentId },
-        select: { amount: true },
-      }),
-      this.prisma.client.commission.findMany({
-        where: { shipmentId },
-        select: { amount: true },
-      }),
-      this.prisma.client.liquidation.findMany({
-        where: { shipmentId },
-        select: { status: true, totalLiquidated: true },
-      }),
-      this.shipments.isComputationStale(shipmentId),
-    ]);
+    const [billable, additional, companyPaid, commissions, liquidations, commissionsStale] =
+      await Promise.all([
+        // The revenue side's rows. Summed by `revenueOf`, which is also what
+        // answers what the CLIENT OWES — see `shipment-revenue.ts` — so an
+        // invoice and a margin cannot be built on different arithmetic. The
+        // same read supplies the billable total the cost side needs, so the
+        // two halves cannot disagree about which rebills exist.
+        this.prisma.client.billableExpense.findMany({
+          where: { shipmentId },
+          select: { amount: true, billedAmount: true, liquidationId: true },
+        }),
+        this.prisma.client.additionalCharge.findMany({
+          where: { shipmentId },
+          select: { amount: true },
+        }),
+        this.prisma.client.companyPaidExpense.findMany({
+          where: { shipmentId },
+          select: { amount: true },
+        }),
+        this.prisma.client.commission.findMany({
+          where: { shipmentId },
+          select: { amount: true },
+        }),
+        this.prisma.client.liquidation.findMany({
+          where: { shipmentId },
+          select: { status: true, totalLiquidated: true },
+        }),
+        this.shipments.isComputationStale(shipmentId),
+      ]);
 
-    const revenue = income.revenue;
-
-    // EVERY ACCOUNT, not any one of them. A trip carries one liquidation per
-    // cash holder, so reading a single row counted the driver's claims and
-    // dropped the helper's — a cost understated by exactly one custodian's
-    // spending, on the trips most likely to have a lot of it. The same
-    // correction was already made where a trip closes; this was the copy of
-    // the old one-account assumption that outlived it.
-    //
-    // THE RUNNING TOTAL, not just the approved one. `totalLiquidated` is
-    // refreshed on every line change while a liquidation is open and frozen at
-    // approval, so this one column is the right read in both states — and
-    // reading it rather than re-summing the lines means an approved figure is
-    // the figure that was actually approved.
-    const liquidatedExpenses = sum(liquidations.map((row) => row.totalLiquidated));
-
-    // APPROVED EVERYWHERE, or the cost is still moving. The driver squaring up
-    // says nothing about the helper still holding change, and `every` on an
-    // empty list is true — hence the guard, or a trip with no account at all
-    // would report its costs as settled.
-    const costsRecognised =
-      liquidations.length > 0 &&
-      liquidations.every((row) => row.status === LiquidationStatus.APPROVED);
-
-    const companyPaidExpenses = sum(companyPaid.map((row) => row.amount));
-    const crewCommissions = sum(commissions.map((row) => row.amount));
-
-    // A REBILL IS A COST ONLY IF THE OFFICE PAID FOR IT, which is what
-    // `BillableExpense.liquidationId` records.
-    //
-    // With no link the row IS the disbursement — it carries the date, payee,
-    // reference and receipt that `CompanyPaidExpense` and `LiquidationLine`
-    // carry, refused by the same shape of payee CHECK, and nothing else in the
-    // database has the permit on it. Counting it only as revenue booked the
-    // recovery and dropped the spending, so every such rebill added its whole
-    // amount to profit.
-    //
-    // With a link the crew paid for it out of cash they hold, and the cost
-    // arrives as a liquidation line inside `liquidatedExpenses` above. Charging
-    // it here as well would count the same permit twice, which is the mirror of
-    // the first mistake and just as invisible on the screen.
-    //
-    // Charged at the billed amount, because one column is what the row stores —
-    // a company-paid rebill nets to zero by construction rather than by two
-    // separately-maintained figures happening to agree. If a rebill ever needs
-    // a markup, that is a second column on the row, not a second sum here.
-    const cost = liquidatedExpenses
-      .add(companyPaidExpenses)
-      .add(income.companyPaidBillableExpenses)
-      .add(crewCommissions);
-
-    const grossProfit = revenue.subtract(cost);
-
-    const basis = {
-      costsRecognised,
+    return grossProfitOf(shipmentId, {
+      grossRate: shipment.grossRate,
+      tpcAmount: shipment.tpcAmount,
+      netRate: shipment.netRate,
+      billable,
+      additional,
+      companyPaid,
+      commissions,
+      liquidations,
       commissionsComputed: shipment.commissionsComputedAt !== null,
       commissionsStale,
-    };
-
-    return {
-      shipmentId,
-
-      // Every figure at 2dp, INCLUDING the three copied off the shipment.
-      // `Decimal.toString()` drops trailing zeros, so a raw echo would put
-      // "50000" beside a computed "48500.00" in one breakdown — and a column
-      // of numbers that disagree about their own format is the first thing
-      // that makes a reader doubt the arithmetic.
-      grossRate: toDecimalString(money(shipment.grossRate)),
-      thirdPartyCommission: toDecimalString(money(shipment.tpcAmount)),
-      ...revenueAsStrings(income),
-
-      liquidatedExpenses: toDecimalString(liquidatedExpenses),
-      companyPaidExpenses: toDecimalString(companyPaidExpenses),
-      companyPaidBillableExpenses: toDecimalString(income.companyPaidBillableExpenses),
-      crewCommissions: toDecimalString(crewCommissions),
-      cost: toDecimalString(cost),
-
-      grossProfit: toDecimalString(grossProfit),
-      margin: marginOf(grossProfit, revenue),
-
-      ...basis,
-      isProvisional: isGrossProfitProvisional(basis),
-    };
+    });
   }
+}
+
+/**
+ * The rows one trip's profit is computed from.
+ *
+ * Structural rather than Prisma payload types, for the reason spelled out on
+ * `BillableExpenseRow`: the period report loads a month of these in batched
+ * `IN` queries and groups them by shipment, and it must be able to hand them
+ * over without casting.
+ *
+ * `commissionsComputed` and `commissionsStale` arrive as ANSWERS rather than as
+ * the columns behind them. Both are derived — the first from
+ * `commissionsComputedAt`, the second by `isComputationStale` comparing four
+ * timestamps — and re-deriving either here would be a second copy of a rule
+ * that already has one home.
+ */
+export interface GrossProfitRows {
+  grossRate: { toString(): string };
+  tpcAmount: { toString(): string };
+  netRate: { toString(): string };
+  billable: readonly BillableExpenseRow[];
+  additional: readonly AdditionalChargeRow[];
+  companyPaid: readonly { amount: { toString(): string } }[];
+  commissions: readonly { amount: { toString(): string } }[];
+  liquidations: readonly { status: number; totalLiquidated: { toString(): string } }[];
+  commissionsComputed: boolean;
+  commissionsStale: boolean;
+}
+
+/**
+ * What the trip made, over rows somebody else loaded.
+ *
+ * EXTRACTED SO A PERIOD CAN BE ADDED UP WITHOUT RE-SPELLING IT.
+ * `ProfitAndLossService` needs this figure for every trip in a month, and had
+ * only two ways to get it: call `forShipment` in a loop — seven queries a trip,
+ * so a thousand-trip year is seven thousand round trips — or write the same
+ * four-term subtraction a second time against grouped aggregates. The second is
+ * the defect this codebase keeps finding: two spellings of one sum that agree
+ * until somebody edits one. Splitting the query off the arithmetic refuses both.
+ *
+ * PURE, and every decision it encodes is documented on `grossProfitSchema`:
+ * what counts as revenue, what counts as cost, why a rebill is revenue always
+ * and a cost only when the office paid, and the four things — the allowance,
+ * the gas deduction, the settlement variance and the client's payment — that
+ * are deliberately absent.
+ */
+export function grossProfitOf(shipmentId: string, rows: GrossProfitRows): GrossProfit {
+  const income = revenueOf(rows.netRate, rows.billable, rows.additional);
+  const revenue = income.revenue;
+
+  // EVERY ACCOUNT, not any one of them. A trip carries one liquidation per
+  // cash holder, so reading a single row counted the driver's claims and
+  // dropped the helper's — a cost understated by exactly one custodian's
+  // spending, on the trips most likely to have a lot of it. The same
+  // correction was already made where a trip closes; this was the copy of
+  // the old one-account assumption that outlived it.
+  //
+  // THE RUNNING TOTAL, not just the approved one. `totalLiquidated` is
+  // refreshed on every line change while a liquidation is open and frozen at
+  // approval, so this one column is the right read in both states — and
+  // reading it rather than re-summing the lines means an approved figure is
+  // the figure that was actually approved.
+  const liquidatedExpenses = sum(rows.liquidations.map((row) => row.totalLiquidated));
+
+  // APPROVED EVERYWHERE, or the cost is still moving. The driver squaring up
+  // says nothing about the helper still holding change, and `every` on an
+  // empty list is true — hence the guard, or a trip with no account at all
+  // would report its costs as settled.
+  const costsRecognised =
+    rows.liquidations.length > 0 &&
+    rows.liquidations.every((row) => row.status === LiquidationStatus.APPROVED);
+
+  const companyPaidExpenses = sum(rows.companyPaid.map((row) => row.amount));
+  const crewCommissions = sum(rows.commissions.map((row) => row.amount));
+
+  // A REBILL IS A COST ONLY IF THE OFFICE PAID FOR IT, which is what
+  // `BillableExpense.liquidationId` records.
+  //
+  // With no link the row IS the disbursement — it carries the date, payee,
+  // reference and receipt that `CompanyPaidExpense` and `LiquidationLine`
+  // carry, refused by the same shape of payee CHECK, and nothing else in the
+  // database has the permit on it. Counting it only as revenue booked the
+  // recovery and dropped the spending, so every such rebill added its whole
+  // amount to profit.
+  //
+  // With a link the crew paid for it out of cash they hold, and the cost
+  // arrives as a liquidation line inside `liquidatedExpenses` above. Charging
+  // it here as well would count the same permit twice, which is the mirror of
+  // the first mistake and just as invisible on the screen.
+  //
+  // Charged at the billed amount, because one column is what the row stores —
+  // a company-paid rebill nets to zero by construction rather than by two
+  // separately-maintained figures happening to agree. If a rebill ever needs
+  // a markup, that is a second column on the row, not a second sum here.
+  const cost = liquidatedExpenses
+    .add(companyPaidExpenses)
+    .add(income.companyPaidBillableExpenses)
+    .add(crewCommissions);
+
+  const grossProfit = revenue.subtract(cost);
+
+  const basis = {
+    costsRecognised,
+    commissionsComputed: rows.commissionsComputed,
+    commissionsStale: rows.commissionsStale,
+  };
+
+  return {
+    shipmentId,
+
+    // Every figure at 2dp, INCLUDING the three copied off the shipment.
+    // `Decimal.toString()` drops trailing zeros, so a raw echo would put
+    // "50000" beside a computed "48500.00" in one breakdown — and a column
+    // of numbers that disagree about their own format is the first thing
+    // that makes a reader doubt the arithmetic.
+    grossRate: toDecimalString(money(rows.grossRate)),
+    thirdPartyCommission: toDecimalString(money(rows.tpcAmount)),
+    ...revenueAsStrings(income),
+
+    liquidatedExpenses: toDecimalString(liquidatedExpenses),
+    companyPaidExpenses: toDecimalString(companyPaidExpenses),
+    companyPaidBillableExpenses: toDecimalString(income.companyPaidBillableExpenses),
+    crewCommissions: toDecimalString(crewCommissions),
+    cost: toDecimalString(cost),
+
+    grossProfit: toDecimalString(grossProfit),
+    margin: marginOf(grossProfit, revenue),
+
+    ...basis,
+    isProvisional: isGrossProfitProvisional(basis),
+  };
 }
 
 /**

@@ -8,8 +8,9 @@ profit and loss.
 > **Status: Phase 4 (Shipments and the money engine).** The monorepo, containers
 > and both apps are up, the complete domain schema is migrated and seeded, and
 > you can sign in, manage master data, book and dispatch a shipment, record its
-> charges, and compute crew commissions against any of five commission methods.
-> Still to come: allowance and liquidation, payout runs, and P&L.
+> charges, compute crew commissions against any of five commission methods,
+> release and liquidate trip cash, record the company's own overhead, and read
+> the profit and loss for any date range. Still to come: payout runs.
 
 ---
 

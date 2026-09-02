@@ -427,12 +427,15 @@ isolated by a reserved **uuid block** each — `testUuid(block, name)` fixes the
 liquidation-lifecycle · `00000003` shipment-booking · `00000004` truck-assignment · `00000005`
 trip-profit · `00000006` adjustments · `00000007` invitations · `00000008` system · `00000009`
 crew-licence · `0000000a` client-payments · `0000000b` shipment-list-sort · `0000000c`
-shipment-removal · `0000000d` operation-expenses. **operation-expenses also reserves the YEAR
-2029**, because its summary is a global aggregate and an assertion about "what August cost" is an
-assertion about every row in the shared database — a single expense recorded by hand while
-verifying against a running server broke it two days later, from a seeded category and outside the
-suite's id block, so neither cleanup clause could see it. Reserving a window on the axis the table
-is queried by is `testUuid`'s trick on the other dimension. Cleanup matches child rows **by relationship, not by id**.
+shipment-removal · `0000000d` operation-expenses · `0000000e` profit-and-loss.
+**operation-expenses also reserves the YEAR 2029**, because its summary is a global aggregate and
+an assertion about "what August cost" is an assertion about every row in the shared database — a
+single expense recorded by hand while verifying against a running server broke it two days later,
+from a seeded category and outside the suite's id block, so neither cleanup clause could see it.
+Reserving a window on the axis the table is queried by is `testUuid`'s trick on the other
+dimension. **profit-and-loss reserves 2031 the same way, and needs it on two axes**: the report
+aggregates `shipment.shipmentDate` AND `operation_expense.spentAt`, so it deletes its window from
+both tables rather than one. Cleanup matches child rows **by relationship, not by id**.
 
 **Cleanup suspends the payout triggers only via `withTriggersSuspended`.**
 `session_replication_role` is per-CONNECTION and Prisma pools, so `SET replica` / deletes /

@@ -75,6 +75,14 @@ export const PAGE_ROLES = {
   // courtesy rather than the thing that closes a hole. Dispatch is refused the
   // overhead ledger by the server whether or not the link is drawn.
   operationExpenses: OFFICE_BEYOND_DISPATCH,
+  // Also not a master data screen, and also here so there is one map of who may
+  // open what. Same three roles as the overhead ledger, and NOT because it is
+  // the same kind of screen — the report CONTAINS that ledger, naming every
+  // category and what it cost, so anyone who may read it could reconstruct
+  // `/operation-expenses` from it. A wider list here would hand dispatch the
+  // overhead they are refused one line above, by the back door. The API's
+  // `CAN_READ_PROFIT_AND_LOSS` is the same three and is what actually closes it.
+  profitAndLoss: OFFICE_BEYOND_DISPATCH,
 } satisfies Record<string, readonly UserRole[]>;
 
 export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
@@ -129,6 +137,15 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
         href: '/operation-expenses',
         label: 'Operation expenses',
         roles: PAGE_ROLES.operationExpenses,
+      },
+      // Last in Finance because it is the only screen here that READS the other
+      // three rather than keeping anything: it is where the trips and the
+      // overhead above meet, and the one place overhead is subtracted from
+      // anything.
+      {
+        href: '/profit-and-loss',
+        label: 'Profit and loss',
+        roles: PAGE_ROLES.profitAndLoss,
       },
     ],
   },

@@ -302,6 +302,30 @@ export const CAN_READ_OPERATION_EXPENSES = [
   UserRole.MANAGEMENT,
 ] as const;
 
+/**
+ * The company's profit and loss over a period.
+ *
+ * THE SAME LIST AS THE OVERHEAD LEDGER, and derived from it rather than
+ * repeated, because the report CONTAINS that ledger: its bottom line is gross
+ * profit minus every operation expense in the window, and the breakdown names
+ * each category and what it cost. Anyone who may read this can therefore
+ * reconstruct `/operation-expenses` from it, so a wider list here would hand
+ * dispatch the overhead they are deliberately refused one screen over — by the
+ * back door, and while the front one stayed locked.
+ *
+ * THAT IS THE WHOLE ARGUMENT, and it is worth stating because the instinct runs
+ * the other way. A dispatcher may already read any single trip's gross profit —
+ * `CAN_READ_SHIPMENTS` admits them, because a trip is what their job turns on —
+ * so the trip half of this report is nothing new to them. The overhead half is,
+ * and there is no version of this report without it: a P&L that stopped at
+ * gross profit would not be one.
+ *
+ * MANAGEMENT IS ALREADY IN IT, which matters more here than anywhere else in
+ * this file. They answer for the company's margin and record none of it, and
+ * this is the screen that question is asked from.
+ */
+export const CAN_READ_PROFIT_AND_LOSS = CAN_READ_OPERATION_EXPENSES;
+
 export const CAN_REQUEST_ALLOWANCE = [UserRole.ADMINISTRATOR, UserRole.DISPATCH_MANAGER] as const;
 
 /**

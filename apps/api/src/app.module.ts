@@ -11,6 +11,7 @@ import { MailModule } from './mail/mail.module';
 import { MasterDataModule } from './master-data/master-data.module';
 import { OperationExpensesModule } from './operation-expenses/operation-expenses.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ProfitAndLossModule } from './profit-and-loss/profit-and-loss.module';
 import { SettingsModule } from './settings/settings.module';
 import { SystemModule } from './system/system.module';
 import { ShipmentsModule } from './shipments/shipments.module';
@@ -32,6 +33,7 @@ import { UsersModule } from './users/users.module';
     ShipmentsModule,
     LiquidationModule,
     OperationExpensesModule,
+    ProfitAndLossModule,
   ],
   providers: [
     // Order matters: authentication decides who you are, then roles decide
