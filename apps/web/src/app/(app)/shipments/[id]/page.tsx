@@ -17,6 +17,7 @@ import { GrossProfitCard } from '@/components/shipments/gross-profit-card';
 import { LiquidationCard } from '@/components/shipments/liquidation-card';
 import { PaymentsCard } from '@/components/shipments/payments-card';
 import { RateChainCard } from '@/components/shipments/rate-chain-card';
+import { RemoveShipmentButton } from '@/components/shipments/remove-shipment-button';
 import { SettlementCard } from '@/components/shipments/settlement-card';
 import { Badge } from '@/components/ui/badge';
 import { ApiError } from '@/lib/api-client';
@@ -76,9 +77,17 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
             {data.containerNumber ? ` · container ${data.containerNumber}` : ''}
           </p>
         </div>
-        {/* Office-only and status-gated, both decided inside the component so a
-            crew session cannot be shown an edit it would be refused. */}
-        {isCrew ? null : <BookingDetailsDialog shipment={data} />}
+        {/* Office-only and status-gated, both decided inside the components so
+            a crew session cannot be shown an edit it would be refused. The bin
+            gates itself twice over — dispatch may undo a draft, an
+            administrator may remove a trip that has run — and renders nothing
+            for anybody else rather than a control that always refuses. */}
+        {isCrew ? null : (
+          <div className="flex items-center gap-2">
+            <BookingDetailsDialog shipment={data} />
+            <RemoveShipmentButton shipment={data} />
+          </div>
+        )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">

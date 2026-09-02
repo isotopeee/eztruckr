@@ -204,3 +204,34 @@ export function areBookingDetailsCorrectable(status: ShipmentStatus): boolean {
 export function areChargesEditable(status: ShipmentStatus): boolean {
   return status !== ShipmentStatus.CLOSED;
 }
+
+/**
+ * Statuses at which removing a trip is an ORDINARY CORRECTION — the booking
+ * form's own undo, available to everybody who may book one.
+ *
+ * DRAFT ALONE, and the bound is narrower than every other rule in this file
+ * because it answers a different question. The three above ask what may still
+ * be corrected about a trip that ran; this one asks whether the trip ever
+ * happened. A draft has not been dispatched — nothing left the yard against its
+ * figures and nobody is on the road holding paperwork that names it — so it is
+ * a booking somebody typed, and a booking typed twice or against the wrong
+ * client is the whole case this exists for.
+ *
+ * NOT A CEILING ON REMOVAL, which is the thing to read carefully: an
+ * ADMINISTRATOR may remove a trip at any status, and this predicate has nothing
+ * to say about that path. What it draws is the line between the two — below it
+ * removal is dispatch correcting its own typing, above it an intervention by
+ * the one role that answers for the record as a whole. Hence the name: this is
+ * the DISPATCH half. See `CAN_REMOVE_DRAFT_SHIPMENTS` and
+ * `CAN_REMOVE_ANY_SHIPMENT` for who each half is.
+ *
+ * NEITHER HALF IS THE WHOLE RULE, and neither can be. Dispatch is additionally
+ * refused a draft that already carries a charge, a payment, released cash or an
+ * adjustment; the administrator is refused any trip whose money has actually
+ * moved — a paid commission, a paid adjustment, a recovered deduction. Both are
+ * facts about rows rather than about status, so `ShipmentsService.remove`
+ * enforces them and this predicate stays a statement about the workflow.
+ */
+export function isShipmentRemovableByDispatch(status: ShipmentStatus): boolean {
+  return status === ShipmentStatus.DRAFT;
+}

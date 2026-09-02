@@ -103,6 +103,21 @@ export function updateShipment(id: string, input: UpdateShipmentInput): Promise<
 }
 
 /**
+ * Removing a trip.
+ *
+ * ONE ENDPOINT, TWO REMOVALS, decided by the API from the trip's status and the
+ * caller's role: dispatch may undo a DRAFT with nothing recorded against it,
+ * and an administrator may remove a trip that has run — which soft-deletes its
+ * charges, payments, cash accounts and unpaid commissions with it. Neither
+ * bound is knowable from here, and the harder one is a fact about rows this
+ * screen has not loaded, so the refusal arrives as an error naming what is in
+ * the way and the caller shows it.
+ */
+export function removeShipment(id: string): Promise<void> {
+  return apiFetch<void>(`/shipments/${id}`, { method: 'DELETE' });
+}
+
+/**
  * Correcting the gross rate or the broker cut after booking.
  *
  * Its own endpoint rather than `PATCH /shipments/:id`, and the difference is

@@ -372,7 +372,8 @@ fixture now**; `pnpm db:seed` gives development demo data. Suites share the test
 isolated by a reserved **uuid block** each — `testUuid(block, name)` fixes the first 32 bits. `00000001` `packages/db` (deleted wholesale) · `00000002`
 liquidation-lifecycle · `00000003` shipment-booking · `00000004` truck-assignment · `00000005`
 trip-profit · `00000006` adjustments · `00000007` invitations · `00000008` system · `00000009`
-crew-licence. Cleanup matches child rows **by relationship, not by id**.
+crew-licence · `0000000a` client-payments · `0000000b` shipment-list-sort · `0000000c`
+shipment-removal. Cleanup matches child rows **by relationship, not by id**.
 
 **Cleanup suspends the payout triggers only via `withTriggersSuspended`.**
 `session_replication_role` is per-CONNECTION and Prisma pools, so `SET replica` / deletes /

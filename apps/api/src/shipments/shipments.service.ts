@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import {
   isAllowedManualTransition,
   isRateChainCorrectable,
   isRateChainEditable,
+  isShipmentRemovableByDispatch,
   isShipmentStatus,
   liquidationAccountLabel,
   LiquidationStatus,
@@ -44,13 +46,17 @@ import {
   type TransitionShipmentInput,
   type UpdateRateChainInput,
   type UpdateShipmentInput,
+  type UserRole,
 } from '@eztruckr/types';
+import { CAN_REMOVE_ANY_SHIPMENT } from '../auth/role-policy';
+import type { RequestUser } from '../auth/request-user';
 import { computeRateChain } from '../commission/commission-chain';
 import {
   ensureAccountForCustodian,
   ensurePendingLiquidation,
 } from '../liquidation/pending-liquidation';
 import { PrismaService } from '../prisma/prisma.service';
+import { collectReferences, type ReferenceProbe } from '../master-data/removal';
 import { auditFields, dateToIso, decimalToString } from '../master-data/serialize';
 
 /**
@@ -741,6 +747,236 @@ export class ShipmentsService {
         include: SHIPMENT_INCLUDE,
       }),
     );
+  }
+
+  /**
+   * Removes a trip: dispatch undoing a booking, or an administrator taking one
+   * out of the record.
+   *
+   * TWO PATHS THROUGH ONE ENDPOINT, and the difference is not how much role
+   * somebody has — it is what the removal MEANS. Before dispatch the trip never
+   * happened, so removing it is the booking form's undo and belongs to whoever
+   * may book one; after it the trip ran, so removing it is an intervention in
+   * the record and belongs to the administrator alone. The guard cannot tell
+   * them apart because it cannot see the shipment's status, which is why the
+   * decision is made here — the same shape as the transition map and the client
+   * payment's verification check.
+   *
+   * A SOFT DELETE EITHER WAY: the row stays, stamped with who removed it and
+   * when, and disappears from every list because the client extension filters
+   * it. Nothing in this codebase destroys a business row, and a trip is not the
+   * place to start.
+   *
+   * DISPATCH IS BOUNDED BY THE ROWS AS WELL AS THE STATUS, and the second bound
+   * is the one that does the work — the same shape as `assertNothingPaid` on
+   * the edits above. A draft can already carry released
+   * cash, a client's deposit, a rebilled expense or an adjustment to somebody's
+   * pay — every one a row that means something on its own — so the probes refuse
+   * and name what is in the way. A dispatcher who genuinely needs that trip gone
+   * asks an administrator, which is the path below.
+   *
+   * THE ADMINISTRATOR'S PATH CASCADES rather than refuses, because past DRAFT
+   * refusing on the rows would refuse every trip: a delivered trip always has
+   * charges, an account, a commission. So the trip's dependants go with it, in
+   * one transaction — and that is exactly why this path is one role wide.
+   *
+   * WHAT NO ROLE CROSSES is money that has actually moved. `assertNothingMoved`
+   * refuses a trip whose commission or adjustment has been paid, or whose crew
+   * deduction has been recovered from a payout: the vouchers behind those have
+   * to keep reconciling, and unlike everything else here that is not a decision
+   * about tidiness. The database says the same thing from underneath — see
+   * `paid_commission_no_soft_delete` — and this refuses first so the answer is a
+   * sentence rather than a constraint name.
+   */
+  async remove(id: string, actor: RequestUser): Promise<{ removed: true }> {
+    const current = await this.load(id);
+    const status = this.statusOf(current);
+    const mayRemoveAnything = (CAN_REMOVE_ANY_SHIPMENT as readonly UserRole[]).includes(actor.role);
+
+    if (!mayRemoveAnything) {
+      if (!isShipmentRemovableByDispatch(status)) {
+        throw new ForbiddenException(
+          `Shipment ${current.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; the trip has left the yard, so removing it now takes its charges, payments and cash accounts with it. An administrator can do that — your role can remove a booking that is still a draft.`,
+        );
+      }
+
+      const references = await collectReferences(this.removalProbes(id));
+
+      if (references.length > 0) {
+        const found = references
+          .map((reference) => `${reference.count} ${reference.entity}`)
+          .join(', ');
+
+        throw new ConflictException(
+          `Shipment ${current.shipmentNumber} has ${found} recorded against it, so it is a trip that has started rather than a booking made in error. Remove those first if they were mistakes too, or ask an administrator to remove the trip.`,
+        );
+      }
+    }
+
+    await this.assertNothingMoved(current);
+
+    await this.softDeleteWithDependants(id);
+
+    return { removed: true };
+  }
+
+  /**
+   * The trip and everything hanging off it, in one transaction.
+   *
+   * CHILDREN FIRST, PARENTS AFTER, which buys nothing from the foreign keys —
+   * a soft delete is an UPDATE, so no constraint fires either way — and
+   * everything from a failure landing halfway: stopping short leaves a trip
+   * standing with some of its rows removed, which somebody can look at and
+   * unpick, rather than a removed trip whose live charges are still being
+   * counted by the P&L.
+   *
+   * EVERY LIST HERE IS READ DIRECTLY BY SOMETHING. A liquidation account
+   * appears in accounting's queue, a client payment in the verification queue,
+   * an unpaid commission in the next payout run — none of them reached through
+   * the shipment, so none of them filtered by its removal. Leaving one behind
+   * would not be untidy, it would be a queue entry pointing at a trip that no
+   * longer exists.
+   *
+   * ON A DRAFT REMOVED BY DISPATCH almost all of it is a no-op: the probes have
+   * already established there is nothing to find, and only the empty cash
+   * account a helper's assignment opens is actually removed. That account is
+   * why the cascade cannot be skipped for drafts — refusing on it would make
+   * any trip with a helper on it permanently unremovable.
+   */
+  private async softDeleteWithDependants(shipmentId: string): Promise<void> {
+    await this.prisma.client.$transaction(async (tx) => {
+      const accounts = await tx.liquidation.findMany({
+        where: { shipmentId },
+        select: { id: true },
+      });
+      const liquidationId = { in: accounts.map((account) => account.id) };
+
+      // The settlement's half: what came back, and any debt carried out of it.
+      // The deduction goes with the settlement that created it rather than
+      // becoming a free-floating balance nobody can explain — the same pairing
+      // `LiquidationService.reverse` makes.
+      await tx.crewDeduction.softDelete({ shipmentId });
+      await tx.settlement.softDelete({ shipmentId });
+
+      // Crew pay. Both are unpaid by `assertNothingMoved`, so neither names a
+      // voucher; a recomputation soft-deletes commissions in exactly this way.
+      await tx.commission.softDelete({ shipmentId });
+      await tx.adjustment.softDelete({ shipmentId });
+
+      // The accounts' contents, then the accounts.
+      await tx.liquidationLine.softDelete({ liquidationId });
+      await tx.liquidationHistory.softDelete({ liquidationId });
+      await tx.allowance.softDelete({ shipmentId });
+      await tx.allowanceRequest.softDelete({ shipmentId });
+      await tx.liquidation.softDelete({ shipmentId });
+
+      // The trip's own money, on both sides of the P&L.
+      await tx.billableExpense.softDelete({ shipmentId });
+      await tx.additionalCharge.softDelete({ shipmentId });
+      await tx.companyPaidExpense.softDelete({ shipmentId });
+      await tx.clientPayment.softDelete({ shipmentId });
+
+      await tx.shipment.softDelete({ id: shipmentId });
+    });
+  }
+
+  /**
+   * The one refusal no role gets past: cash that has left the building.
+   *
+   * THREE FACTS, NOT ONE, and they are three because the money leaves by three
+   * routes. A commission or an adjustment linked to a payout line is on a
+   * voucher somebody has been handed; a recovered crew deduction is a slice
+   * already taken out of a later payout. Removing the trip under any of them
+   * would leave a voucher naming work the system says never happened.
+   *
+   * `assertNothingPaid` covers the commissions and is reused rather than
+   * restated, so the line that governs a late correction is literally the same
+   * line that governs this.
+   */
+  private async assertNothingMoved(shipment: ShipmentRow): Promise<void> {
+    await this.assertNothingPaid(shipment, 'Removing the shipment');
+
+    const [paidAdjustments, recovered] = await Promise.all([
+      this.prisma.client.adjustment.count({
+        where: { shipmentId: shipment.id, payoutLineId: { not: null } },
+      }),
+      this.prisma.client.crewDeductionRecovery.count({
+        where: { crewDeduction: { shipmentId: shipment.id } },
+      }),
+    ]);
+
+    if (paidAdjustments > 0) {
+      throw new ConflictException(
+        `Shipment ${shipment.shipmentNumber} cannot be removed: ${paidAdjustments} of its pay adjustments have already been paid, and the figures behind a payout cannot move.`,
+      );
+    }
+
+    if (recovered > 0) {
+      throw new ConflictException(
+        `Shipment ${shipment.shipmentNumber} cannot be removed: a variance from it is being recovered from the crew's pay and ${recovered} slice(s) have already been taken.`,
+      );
+    }
+  }
+
+  /**
+   * Everything that would make a trip more than a typing mistake.
+   *
+   * ONLY EVER ASKED ABOUT A DRAFT, because only dispatch's path consults them —
+   * the administrator's cascades instead. That is what makes the omissions
+   * below safe rather than lucky.
+   *
+   * COMMISSIONS, SETTLEMENTS AND CREW DEDUCTIONS ARE DELIBERATELY ABSENT.
+   * None can exist before PENDING_LIQUIDATION — computing is refused below it,
+   * and the other two are made out of an approved liquidation — so on a DRAFT
+   * they would be three counts that can only ever return zero. If dispatch is
+   * ever let past DRAFT, they are the probes to add, and this comment is where
+   * to look.
+   *
+   * Named the way the screens name them, because the refusal is read by
+   * whoever pressed the button.
+   */
+  private removalProbes(shipmentId: string): readonly ReferenceProbe[] {
+    const db = this.prisma.client;
+
+    return [
+      {
+        entity: 'billable expense(s)',
+        count: () => db.billableExpense.count({ where: { shipmentId } }),
+      },
+      {
+        entity: 'additional charge(s)',
+        count: () => db.additionalCharge.count({ where: { shipmentId } }),
+      },
+      {
+        entity: 'company-paid expense(s)',
+        count: () => db.companyPaidExpense.count({ where: { shipmentId } }),
+      },
+      {
+        entity: 'client payment(s)',
+        count: () => db.clientPayment.count({ where: { shipmentId } }),
+      },
+      {
+        entity: 'cash release(s)',
+        count: () => db.allowance.count({ where: { shipmentId } }),
+      },
+      {
+        entity: 'allowance request(s)',
+        count: () => db.allowanceRequest.count({ where: { shipmentId } }),
+      },
+      {
+        // Through the account rather than the trip, because a line names the
+        // account it was claimed against and nothing else. The line's own
+        // `deletedAt` is filtered by the extension; the account's cannot be,
+        // and does not need to be — an account is refused removal while it
+        // still has lines, so a live line under a removed one cannot arise.
+        entity: 'claimed expense(s)',
+        count: () => db.liquidationLine.count({ where: { liquidation: { shipmentId } } }),
+      },
+      {
+        entity: 'pay adjustment(s)',
+        count: () => db.adjustment.count({ where: { shipmentId } }),
+      },
+    ];
   }
 
   /**

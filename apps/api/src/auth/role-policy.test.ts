@@ -9,6 +9,8 @@ import {
   CAN_READ_MASTER_DATA,
   CAN_READ_SHIPMENTS,
   CAN_RECORD_CLIENT_PAYMENT,
+  CAN_REMOVE_ANY_SHIPMENT,
+  CAN_REMOVE_DRAFT_SHIPMENTS,
   CAN_SUBMIT_LIQUIDATION,
   CAN_UPLOAD_RECEIPTS,
   CAN_VERIFY_CLIENT_PAYMENT,
@@ -171,6 +173,43 @@ describe('correcting the rate chain', () => {
       UserRole.CREW,
     ]) {
       expect(may(CAN_EDIT_RATE_CHAIN, role)).toBe(false);
+    }
+  });
+});
+
+/**
+ * Removing a trip, which is two decisions wearing one endpoint.
+ *
+ * THE SPLIT IS THE POLICY. Undoing a draft is the booking form's own undo and
+ * belongs to everybody who books; removing a trip that ran cascades its
+ * charges, payments and cash accounts and belongs to the administrator. Pinned
+ * as data because the two are one careless `...spread` away from collapsing
+ * into each other, and the collapse reads like tidying up.
+ */
+describe('removing a shipment', () => {
+  it('lets everybody who books a trip undo a draft', () => {
+    expect([...CAN_REMOVE_DRAFT_SHIPMENTS]).toEqual([...CAN_WRITE_SHIPMENTS]);
+
+    for (const role of [UserRole.ADMINISTRATOR, UserRole.OPERATIONS, UserRole.DISPATCH_MANAGER]) {
+      expect(may(CAN_REMOVE_DRAFT_SHIPMENTS, role)).toBe(true);
+    }
+
+    // Nobody outside dispatch, including the desk that decides the trip's
+    // money: removing a booking is not a money decision.
+    for (const role of [UserRole.ACCOUNTING, UserRole.MANAGEMENT, UserRole.CREW]) {
+      expect(may(CAN_REMOVE_DRAFT_SHIPMENTS, role)).toBe(false);
+    }
+  });
+
+  it('leaves a trip that has already run to the administrator alone', () => {
+    expect([...CAN_REMOVE_ANY_SHIPMENT]).toEqual([UserRole.ADMINISTRATOR]);
+
+    // The two dispatch roles book trips and may undo a draft, and neither may
+    // remove one that has left the yard. That asymmetry is the whole point of
+    // there being two lists.
+    for (const role of [UserRole.OPERATIONS, UserRole.DISPATCH_MANAGER]) {
+      expect(may(CAN_REMOVE_DRAFT_SHIPMENTS, role)).toBe(true);
+      expect(may(CAN_REMOVE_ANY_SHIPMENT, role)).toBe(false);
     }
   });
 });

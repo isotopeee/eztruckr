@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Param,
@@ -24,6 +25,8 @@ import type { RequestUser } from '../auth/request-user';
 import {
   CAN_EDIT_RATE_CHAIN,
   CAN_READ_SHIPMENTS,
+  CAN_REMOVE_ANY_SHIPMENT,
+  CAN_REMOVE_DRAFT_SHIPMENTS,
   CAN_TRANSITION_SHIPMENTS,
   CAN_WRITE_SHIPMENT_MONEY,
   CAN_WRITE_SHIPMENTS,
@@ -102,6 +105,24 @@ export class ShipmentsController {
   @Roles(...CAN_WRITE_SHIPMENTS)
   update(@Param('id') id: string, @Body() dto: UpdateShipmentDto): Promise<Shipment> {
     return this.shipments.update(id, dto);
+  }
+
+  /**
+   * Removing a trip: dispatch undoing a booking, or an administrator taking a
+   * trip that ran out of the record.
+   *
+   * THE GUARD IS THE UNION OF THE TWO LISTS, necessarily — `RolesGuard` cannot
+   * see the shipment's status, and the status is what decides which of the two
+   * removals this is. The service applies the real policy, the same way the
+   * transition endpoint applies `ROLES_BY_TRANSITION` for a decision the guard
+   * cannot see either. `CAN_REMOVE_ANY_SHIPMENT` is a subset of the draft list
+   * today, so the spread is about saying which lists govern this route rather
+   * than about widening it.
+   */
+  @Delete(':id')
+  @Roles(...CAN_REMOVE_DRAFT_SHIPMENTS, ...CAN_REMOVE_ANY_SHIPMENT)
+  remove(@Param('id') id: string, @CurrentUser() user: RequestUser): Promise<{ removed: true }> {
+    return this.shipments.remove(id, user);
   }
 
   /**

@@ -139,6 +139,46 @@ export const CAN_WRITE_SHIPMENTS = [
 ] as const;
 
 /**
+ * Removing a booking made in error: the same hands that book one.
+ *
+ * DERIVED FROM `CAN_WRITE_SHIPMENTS` RATHER THAN REPEATED, because removing a
+ * draft is the booking form's own undo and not a separate authority. A
+ * dispatcher who types the same trip twice at eight in the morning fixes it
+ * themselves; the alternative is a duplicate sitting in the list until an
+ * administrator is free, which is how people learn to work around the list.
+ *
+ * WHAT KEEPS THIS SAFE IS NOT THE LIST, it is the pair of bounds the service
+ * applies underneath: DRAFT only (`isShipmentRemovableByDispatch`), and only
+ * while nothing — no charge, no payment, no released cash, no adjustment — has
+ * been recorded against the trip. A draft carrying any of those is a trip that
+ * started, and dispatch is refused it.
+ */
+export const CAN_REMOVE_DRAFT_SHIPMENTS = CAN_WRITE_SHIPMENTS;
+
+/**
+ * Removing a trip that has already run: the administrator alone.
+ *
+ * A SEPARATE AUTHORITY, not a wider version of the list above. Past DRAFT the
+ * crew went out against these figures and the paperwork exists outside the
+ * system, so removing the trip is an intervention in the record rather than a
+ * correction to a booking — and the trip's charges, payments, cash accounts and
+ * unpaid commissions are soft-deleted with it, which is not a thing a
+ * dispatcher should be able to set off.
+ *
+ * THE LINE THE ADMINISTRATOR DOES NOT CROSS is money that has actually moved: a
+ * paid commission, a paid adjustment or a recovered deduction refuses the
+ * removal outright, exactly as `assertNothingPaid` refuses a late correction.
+ * The vouchers behind those have to keep reconciling, and no amount of role
+ * beats that.
+ *
+ * The route guard is necessarily the UNION of this and the list above —
+ * `RolesGuard` cannot see the shipment's status — so the service makes the
+ * decision, in the same shape as the transition map and the client payment's
+ * verification check.
+ */
+export const CAN_REMOVE_ANY_SHIPMENT = [UserRole.ADMINISTRATOR] as const;
+
+/**
  * Charges, the gas rate override, releasing cash, and computing commissions.
  *
  * All of it decides money rather than movement, so it belongs to accounting
