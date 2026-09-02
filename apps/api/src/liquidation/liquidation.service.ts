@@ -43,7 +43,7 @@ import {
 import type { RequestUser } from '../auth/request-user';
 import { auditFields, dateToIso } from '../master-data/serialize';
 import { PrismaService } from '../prisma/prisma.service';
-import { resolvePayeeRequirement } from '../master-data/payee-requirement';
+import { resolveExpenseCategoryRules } from '../master-data/expense-category-rules';
 import { assertMayHoldTripCash } from './trip-cash-participants';
 import { ReceiptsService } from './receipts.service';
 
@@ -434,11 +434,12 @@ export class LiquidationService {
     await this.receipts.assertExists(input.receiptId);
     await this.assertPayeeExists(input.payeeId);
 
-    // Also the category's existence check — see `resolvePayeeRequirement`.
-    const payeeRequired = await resolvePayeeRequirement(
+    // Also the category's existence check — see `resolveExpenseCategoryRules`.
+    const { payeeRequired } = await resolveExpenseCategoryRules(
       this.prisma.client.expenseCategory,
       input.expenseCategoryId,
       input.payeeId,
+      'trips',
     );
 
     const row = await this.prisma.client.liquidationLine.create({
@@ -1098,11 +1099,14 @@ export class LiquidationService {
       throw new NotFoundException(`No liquidation line ${lineId}`);
     }
 
-    return resolvePayeeRequirement(
+    const { payeeRequired } = await resolveExpenseCategoryRules(
       this.prisma.client.expenseCategory,
       input.expenseCategoryId ?? current.expenseCategoryId,
       input.payeeId === undefined ? current.payeeId : input.payeeId,
+      'trips',
     );
+
+    return payeeRequired;
   }
 
   /**
@@ -1113,7 +1117,7 @@ export class LiquidationService {
    *
    * Absence is not this function's business either way: `null` is a line with
    * no payee and `undefined` is a PATCH that did not mention one. Whether
-   * absence is ALLOWED is `resolvePayeeRequirement`'s question, asked against
+   * absence is ALLOWED is `resolveExpenseCategoryRules`'s question, asked against
    * the expense category — checking it here as well would put half the rule in
    * two places.
    */

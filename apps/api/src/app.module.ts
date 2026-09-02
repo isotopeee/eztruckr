@@ -9,6 +9,7 @@ import { HealthModule } from './health/health.module';
 import { LiquidationModule } from './liquidation/liquidation.module';
 import { MailModule } from './mail/mail.module';
 import { MasterDataModule } from './master-data/master-data.module';
+import { OperationExpensesModule } from './operation-expenses/operation-expenses.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { SettingsModule } from './settings/settings.module';
 import { SystemModule } from './system/system.module';
@@ -30,6 +31,7 @@ import { UsersModule } from './users/users.module';
     SystemModule,
     ShipmentsModule,
     LiquidationModule,
+    OperationExpensesModule,
   ],
   providers: [
     // Order matters: authentication decides who you are, then roles decide

@@ -115,7 +115,7 @@ async function seedAdministrator() {
   });
 }
 
-/** fuel, toll, food, parking, ferry, gate pass, miscellaneous */
+/** fuel, toll, food, parking, ferry, gate pass, miscellaneous, and the overhead four */
 /**
  * `requiresPayee` is a STARTING POSITION, not a rule the code depends on — the
  * office moves it per category on the Expense categories screen.
@@ -130,29 +130,118 @@ async function seedAdministrator() {
  * rather than the lax one. They are stated anyway: which side a category falls
  * on is the point of the feature, and inferring it from silence is how it ends
  * up wrong.
+ *
+ * `offeredOnTrips` / `offeredOnOverhead` say WHERE each one appears, and every
+ * entry states both for the same reason. The column defaults are asymmetric —
+ * trips true, overhead false — so silence would have made the whole list
+ * trip-only and left the operation-expense picker EMPTY on a fresh install,
+ * which is a feature that looks broken rather than one that looks new.
+ *
+ * FUEL IS THE INTERESTING ROW: offered on both, because a fleet card fills a
+ * truck on a job and the office pickup between them, and "what did we spend on
+ * fuel this year" should be one category rather than two that somebody keeps in
+ * step by hand. That case is the entire reason overhead did not get a category
+ * table of its own.
  */
 const EXPENSE_CATEGORIES = [
-  { name: 'Fuel', requiresReceipt: true, requiresPayee: true, sortOrder: 10 },
-  { name: 'Toll', requiresReceipt: true, requiresPayee: false, sortOrder: 20 },
-  { name: 'Food', requiresReceipt: false, requiresPayee: false, sortOrder: 30 },
+  // Both: a fleet card fills a truck on a job and the office pickup between
+  // them. The row that makes one shared category table the right answer.
+  {
+    name: 'Fuel',
+    requiresReceipt: true,
+    requiresPayee: true,
+    offeredOnTrips: true,
+    offeredOnOverhead: true,
+    sortOrder: 10,
+  },
+  {
+    name: 'Toll',
+    requiresReceipt: true,
+    requiresPayee: false,
+    offeredOnTrips: true,
+    offeredOnOverhead: false,
+    sortOrder: 20,
+  },
+  {
+    name: 'Food',
+    requiresReceipt: false,
+    requiresPayee: false,
+    offeredOnTrips: true,
+    offeredOnOverhead: false,
+    sortOrder: 30,
+  },
   {
     name: 'Parking',
     requiresReceipt: true,
     requiresPayee: false,
+    offeredOnTrips: true,
+    offeredOnOverhead: false,
     sortOrder: 40,
   },
-  { name: 'Ferry', requiresReceipt: true, requiresPayee: true, sortOrder: 50 },
+  {
+    name: 'Ferry',
+    requiresReceipt: true,
+    requiresPayee: true,
+    offeredOnTrips: true,
+    offeredOnOverhead: false,
+    sortOrder: 50,
+  },
   {
     name: 'Gate pass',
     requiresReceipt: true,
     requiresPayee: true,
+    offeredOnTrips: true,
+    offeredOnOverhead: false,
     sortOrder: 60,
   },
   {
     name: 'Miscellaneous',
     requiresReceipt: false,
     requiresPayee: false,
+    offeredOnTrips: true,
+    offeredOnOverhead: false,
     sortOrder: 70,
+  },
+
+  // The overhead side. Spaced from 100 so the two groups stay visually apart on
+  // the categories screen and a new trip category still has room at 80 or 90.
+  //
+  // Repairs is the second both-sides row: a workshop invoice for a truck on a
+  // job is that trip's cost, and one for a truck sitting idle is the company's.
+  {
+    name: 'Repairs and maintenance',
+    requiresReceipt: true,
+    requiresPayee: true,
+    offeredOnTrips: true,
+    offeredOnOverhead: true,
+    sortOrder: 100,
+  },
+  {
+    name: 'Office rent',
+    requiresReceipt: true,
+    requiresPayee: true,
+    offeredOnTrips: false,
+    offeredOnOverhead: true,
+    sortOrder: 110,
+  },
+  {
+    name: 'Utilities',
+    requiresReceipt: true,
+    requiresPayee: true,
+    offeredOnTrips: false,
+    offeredOnOverhead: true,
+    sortOrder: 120,
+  },
+  // Registration, insurance and permits: an LTO renewal and a comprehensive
+  // policy are the same kind of annual, per-unit obligation and the office
+  // files them together.
+  {
+    name: 'Registration and insurance',
+    requiresReceipt: true,
+    requiresPayee: true,
+    offeredOnTrips: false,
+    offeredOnOverhead: true,
+    sortOrder: 130,
   },
 ];
 

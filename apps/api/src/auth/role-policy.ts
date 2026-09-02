@@ -265,6 +265,43 @@ export const CAN_RECORD_CLIENT_PAYMENT = [
  */
 export const CAN_VERIFY_CLIENT_PAYMENT = CAN_WRITE_SHIPMENT_MONEY;
 
+/**
+ * The overhead ledger: what it costs to keep the company open.
+ *
+ * NOT `CAN_WRITE_SHIPMENT_MONEY`, and the difference is not cosmetic. That
+ * bundle is about a TRIP's money and every controller behind it takes a
+ * shipment id; this record has no trip, so borrowing the name would put a
+ * shipment-shaped authority on a company-shaped record and the next person to
+ * read it would look for the trip it guards.
+ *
+ * It resolves to the same two roles as `CAN_WRITE_FINANCIAL_MASTER_DATA`, and
+ * that agreement is the point rather than a coincidence: the desk that decides
+ * how a peso is CLASSIFIED is the desk that records the company's own costs.
+ * Declared separately all the same — expense categories are a directory and
+ * this is a ledger, so one moving is not a reason for the other to.
+ *
+ * BOTH DISPATCH ROLES ARE ABSENT, and here that is a job description rather
+ * than a control. Nothing a dispatcher does touches the office lease; they are
+ * excluded from the READ side too, which is the narrower call and the
+ * deliberate one — `CAN_READ_SHIPMENTS` admits them to a trip's costs because
+ * they run the trip, and there is no equivalent claim on the payroll bill.
+ */
+export const CAN_WRITE_OPERATION_EXPENSES = [UserRole.ADMINISTRATOR, UserRole.ACCOUNTING] as const;
+
+/**
+ * Reading it: the two above plus MANAGEMENT, which is the shape every read
+ * bundle in this file takes. They answer for the company's margin and record
+ * none of it.
+ *
+ * CREW ARE ABSENT for the reason `CompanyPaidExpensesController` spells out and
+ * more so: a portal session that could read the overhead ledger could assemble
+ * the company's cost base from a phone.
+ */
+export const CAN_READ_OPERATION_EXPENSES = [
+  ...CAN_WRITE_OPERATION_EXPENSES,
+  UserRole.MANAGEMENT,
+] as const;
+
 export const CAN_REQUEST_ALLOWANCE = [UserRole.ADMINISTRATOR, UserRole.DISPATCH_MANAGER] as const;
 
 /**

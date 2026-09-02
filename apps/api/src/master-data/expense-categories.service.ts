@@ -3,7 +3,7 @@ import type { Prisma } from '@eztruckr/db';
 import type {
   CreateExpenseCategoryInput,
   ExpenseCategory,
-  MasterDataListQuery,
+  ExpenseCategoryListQuery,
   Page,
   RemovalResult,
   UpdateExpenseCategoryInput,
@@ -32,9 +32,22 @@ export class ExpenseCategoriesService {
     return this.prisma.client.expenseCategory;
   }
 
-  async list(query: MasterDataListQuery): Promise<Page<ExpenseCategory>> {
+  /**
+   * `offeredFor` is what keeps each picker to its own side of the house.
+   *
+   * Without it every form fetched this list unfiltered, so the first overhead
+   * category anybody created — "Office rent", "SSS contributions" — appeared in
+   * a crew member's liquidation dropdown on the road, beside Fuel and Toll.
+   *
+   * OMITTING IT MEANS EVERY CATEGORY, which is what the management screen
+   * wants: it is the one caller that EDITS the flags, so it has to be able to
+   * see a category that is currently offered nowhere it can reach.
+   */
+  async list(query: ExpenseCategoryListQuery): Promise<Page<ExpenseCategory>> {
     const where: Prisma.ExpenseCategoryWhereInput = {
       ...(query.includeInactive ? {} : { isActive: true }),
+      ...(query.offeredFor === 'trips' ? { offeredOnTrips: true } : {}),
+      ...(query.offeredFor === 'overhead' ? { offeredOnOverhead: true } : {}),
       ...(query.search
         ? {
             OR: [{ name: { contains: query.search, mode: 'insensitive' } }],
@@ -84,10 +97,14 @@ export class ExpenseCategoriesService {
   /**
    * Unused: really deleted. Used: deactivated.
    *
-   * Billable expenses are probed alongside liquidation lines. Both foreign
-   * keys are ON DELETE RESTRICT, so a category referenced only by a billable
-   * expense would otherwise reach the database as a delete and fail there —
-   * a 409 the user cannot act on, instead of the deactivation they wanted.
+   * ALL FOUR TABLES THAT CLASSIFY AGAINST A CATEGORY ARE PROBED, and the list
+   * has to stay complete. Every one of those foreign keys is ON DELETE
+   * RESTRICT, so a category referenced only by a table missing from here
+   * reaches the database as a delete and fails there — a 409 the user cannot
+   * act on, instead of the deactivation they wanted. `company_paid_expense` was
+   * missing from this list and is the reason it is now spelled out;
+   * `operation_expense` is the newest, and is the only one of the four that
+   * hangs off no shipment.
    */
   async remove(id: string): Promise<RemovalResult> {
     await this.get(id);
@@ -104,6 +121,16 @@ export class ExpenseCategoriesService {
           count: () =>
             this.prisma.client.billableExpense.count({ where: { expenseCategoryId: id } }),
         },
+        {
+          entity: 'company-paid expenses',
+          count: () =>
+            this.prisma.client.companyPaidExpense.count({ where: { expenseCategoryId: id } }),
+        },
+        {
+          entity: 'operation expenses',
+          count: () =>
+            this.prisma.client.operationExpense.count({ where: { expenseCategoryId: id } }),
+        },
       ],
       deactivate: () => this.categories.update({ where: { id }, data: { isActive: false } }),
       softDelete: () => this.categories.softDelete({ id }),
@@ -119,6 +146,8 @@ function toExpenseCategory(row: ExpenseCategoryRow): ExpenseCategory {
     requiresReceipt: row.requiresReceipt,
     requiresPayee: row.requiresPayee,
     defaultCommissionable: row.defaultCommissionable,
+    offeredOnTrips: row.offeredOnTrips,
+    offeredOnOverhead: row.offeredOnOverhead,
     sortOrder: row.sortOrder,
     isActive: row.isActive,
     ...auditFields(row),

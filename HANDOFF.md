@@ -3,7 +3,7 @@
 Trucking operations system. Turborepo monorepo, Philippine haulage domain (₱, Asia/Manila).
 
 **LIVE** at `https://eztruckr.optimuslogisticscorp.com`, phase 9 shipped. `pnpm run check` green
-(140 types + 314 api + 63 db), no schema drift. **No default logins** — every install starts empty
+(146 types + 397 api + 63 db), no schema drift. **No default logins** — every install starts empty
 and is set up at `/setup`.
 
 ```
@@ -48,9 +48,9 @@ Ports are deliberately non-standard: postgres **5433**, minio **9010/9011**, api
 - **Derived, not stored**: `recognisedCost`, `commissionsStale`, `totalAdvanced`, `grossProfit`,
   crew-pay net.
 
-**Counts (verified live):** 34 tables (31 business + 3 Better Auth), 29 `_created_by_required`,
-31 `_soft_delete_consistent`, 25 partial uniques, 9 payout triggers, 11 functions, 79
-column comments, 195 `uuid` columns, **10 migrations**. `code-constraints.test.ts` asserts
+**Counts (verified live):** 35 tables (32 business + 3 Better Auth), 30 `_created_by_required`,
+32 `_soft_delete_consistent`, 27 partial uniques, 9 payout triggers, 11 functions, 89
+column comments, 204 `uuid` columns, **18 migrations**. `code-constraints.test.ts` asserts
 the table count and reads every code CHECK back out of the catalog, so both a new table and a
 code appended without a migration fail there rather than at the first write.
 
@@ -96,6 +96,8 @@ Shipment ──┬── Liquidation (one per CASH PILE) ──┬── Liquida
            ├── ClientPayment        money in from the client → NOT revenue
            ├── Commission           frozen, self-verifying
            └── Adjustment           manual ± to crew pay, with a reason
+
+OperationExpense    NOT on this diagram, and that is the point — see below
 ```
 
 **A liquidation is one account of one trip's cash — one per PILE, not per person.** One row per
@@ -191,6 +193,58 @@ exists. `allowance` gained no column; the join is `allowance_request.allowanceId
 billable expense is revenue whose cost lands wherever the money left, so counting both
 double-counts; an adjustment is never an edit to a `Commission`, which states its own arithmetic
 so a voucher is re-derivable a year later.
+
+### What the company spends on itself
+
+**An `OperationExpense` is a running cost of the BUSINESS, and belongs to no trip.** Office rent,
+electricity, the accountant's retainer, comprehensive insurance, an LTO renewal, a workshop invoice
+for a truck between jobs. Every other money line in the system answers a question about ONE trip;
+this answers what it costs to keep the company open, and until it existed that lived in a
+spreadsheet — so "what did we make in August" could be answered per trip and not for the business.
+
+- **Not `CompanyPaidExpense` with a nullable `shipmentId`**, which is the change it looks like.
+  That column is what every per-trip cost read joins on, so a nullable one would make a trip's
+  margin depend on a WHERE clause rather than on which table a row is in — the first
+  `findMany({ where: { shipmentId } })` written without thinking puts the office rent in a
+  shipment's costs — and the shipment's own removal cascade would have no meaning for the null
+  rows. One column, one job.
+- **Nothing in a trip's P&L reads it, and nothing should start.** Overhead is by definition not
+  attributable to one shipment, and apportioning it — by revenue, by distance, by count — invents a
+  number. It is named in `grossProfitSchema`'s deliberate absences beside the allowance, the gas
+  deduction and the client payment, and `operation-expenses.test.ts` asserts a shipment's gross
+  profit is unchanged, field for field, before and after one is recorded.
+- **Same `expense_category` as the trip-level costs**, so "Fuel" means one thing across both and a
+  report spanning them needs no reconciliation. The payee rule comes from the shared
+  `resolveExpenseCategoryRules` and is frozen onto the row, paired with a CHECK, exactly as on a
+  liquidation line.
+- **A category says WHERE it is offered** — `offeredOnTrips` / `offeredOnOverhead`, with
+  `expense_category_offered_somewhere` refusing neither. Sharing the table without this was a real
+  defect for one commit: all four pickers fetched the list unfiltered, so the first "Office rent"
+  anybody created appeared in a **crew member's liquidation dropdown**. The fix was the missing
+  column, not a second table — **both flags may be true**, which is the case a second table cannot
+  express, and fuel and repairs genuinely are both. Defaults are asymmetric (trips true, overhead
+  false) so the migration backfilled every existing row correctly with no `UPDATE` and the crew's
+  picker did not move. **Not frozen onto the rows**, unlike `payeeRequired`: this decides what a
+  form OFFERS, which is the `isActive` question. The picker filter is a courtesy —
+  `resolveExpenseCategoryRules` refuses a mismatch at write time, both ways.
+- **Read as a PERIOD, and the window is half-open** — `from` counts, `to` does not — so consecutive
+  months tile and no expense lands in both. `spentAt` leads the index for the same reason
+  `shipmentId` leads on every trip-scoped table: it is what the ledger is actually searched by. The
+  screen offers a MONTH rather than two dates, which is what keeps the exclusive bound away from
+  whoever is typing.
+- **The summary and the list are built from one `where`.** A heading that totals a different set of
+  rows than the table under it is worse than no heading, and two filter builders eventually narrow
+  differently.
+- **No status, and no lock.** The money left before the row was typed, so there is nothing to wait
+  for. A trip's costs freeze when the trip CLOSES; this has no trip, and the system has no
+  accounting period to close instead — inventing a freeze here would be a rule with no event behind
+  it. **When a period close exists, this is the table that wants it.**
+- **Its own role bundles**, `CAN_READ_OPERATION_EXPENSES` / `CAN_WRITE_OPERATION_EXPENSES`. The
+  write list resolves to the same two roles as `CAN_WRITE_FINANCIAL_MASTER_DATA` — the desk that
+  decides how a peso is classified records the company's own costs — and is declared separately so
+  one moving is not a reason for the other to. **The read list is the narrow half and the
+  deliberate one**: every other read bundle admits both dispatch roles because a trip is what
+  everyone's job turns on, and nothing a dispatcher does touches the office lease.
 
 ### What the client has paid
 
@@ -373,7 +427,12 @@ isolated by a reserved **uuid block** each — `testUuid(block, name)` fixes the
 liquidation-lifecycle · `00000003` shipment-booking · `00000004` truck-assignment · `00000005`
 trip-profit · `00000006` adjustments · `00000007` invitations · `00000008` system · `00000009`
 crew-licence · `0000000a` client-payments · `0000000b` shipment-list-sort · `0000000c`
-shipment-removal. Cleanup matches child rows **by relationship, not by id**.
+shipment-removal · `0000000d` operation-expenses. **operation-expenses also reserves the YEAR
+2029**, because its summary is a global aggregate and an assertion about "what August cost" is an
+assertion about every row in the shared database — a single expense recorded by hand while
+verifying against a running server broke it two days later, from a seeded category and outside the
+suite's id block, so neither cleanup clause could see it. Reserving a window on the axis the table
+is queried by is `testUuid`'s trick on the other dimension. Cleanup matches child rows **by relationship, not by id**.
 
 **Cleanup suspends the payout triggers only via `withTriggersSuspended`.**
 `session_replication_role` is per-CONNECTION and Prisma pools, so `SET replica` / deletes /
@@ -385,30 +444,41 @@ throughout, because `replica` suspends triggers only.
 
 ### Where the machinery already is
 
-| Need                                  | Use                                                                              |
-| ------------------------------------- | -------------------------------------------------------------------------------- |
-| Money arithmetic                      | `money()`, `multiplyByRate()`, `sum()`, `toDecimalString()` in `@eztruckr/types` |
-| Exact arithmetic, no 2dp rounding     | `apps/api/src/commission/rational.ts`                                            |
-| Reference-aware removal               | `apps/api/src/master-data/removal.ts` — probe, then deactivate vs delete         |
-| Whether a payee is required           | `apps/api/src/master-data/payee-requirement.ts`                                  |
-| Role policy                           | `apps/api/src/auth/role-policy.ts` — declared once, never inline                 |
-| Sending any email                     | `apps/api/src/mail/mail.service.ts` — returns a result, never throws             |
-| Whether a login may sign in yet       | `apps/api/src/users/invitation-gate.ts`                                          |
-| Standing up the test database         | `packages/db/src/test-database.ts`                                               |
-| Soft-delete escape hatches            | `withDeleted()`, `withHardDelete()`                                              |
-| Single live row from a partial-unique | `liveOne()` / `liveOneOrThrow()`                                                 |
-| Row → response conversion             | `apps/api/src/master-data/serialize.ts`                                          |
-| Declarative master-data screens       | `apps/web/src/lib/resource-spec.ts` + `resources.tsx` — eight of them            |
-| Uploads                               | `StorageService` + `ReceiptsService`                                             |
-| Trip- and account-level read scoping  | `apps/api/src/liquidation/shipment-access.service.ts`                            |
-| Who may hold a trip's cash            | `apps/api/src/liquidation/trip-cash-participants.ts`                             |
-| The same list, for the web's pickers  | `apps/web/src/components/shipments/trip-cash-holders.tsx`                        |
-| Whose account a session may edit      | `assertMayAccountForThisFloat` in `liquidation.service.ts`                       |
-| Who may open which web screen         | `PAGE_ROLES` in `apps/web/src/lib/nav.ts` — nav and `ResourcePage` both          |
-| DB-backed service tests               | `apps/api/src/liquidation/liquidation-lifecycle.test.ts` — the pattern           |
+| Need                                  | Use                                                                                         |
+| ------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Money arithmetic                      | `money()`, `multiplyByRate()`, `sum()`, `toDecimalString()` in `@eztruckr/types`            |
+| Exact arithmetic, no 2dp rounding     | `apps/api/src/commission/rational.ts`                                                       |
+| Reference-aware removal               | `apps/api/src/master-data/removal.ts` — probe, then deactivate vs delete                    |
+| What a category decides about a row   | `apps/api/src/master-data/expense-category-rules.ts` — payee rule AND where it may be filed |
+| The company's own running costs       | `apps/api/src/operation-expenses/` — no shipment anywhere in it                             |
+| Role policy                           | `apps/api/src/auth/role-policy.ts` — declared once, never inline                            |
+| Sending any email                     | `apps/api/src/mail/mail.service.ts` — returns a result, never throws                        |
+| Whether a login may sign in yet       | `apps/api/src/users/invitation-gate.ts`                                                     |
+| Standing up the test database         | `packages/db/src/test-database.ts`                                                          |
+| Soft-delete escape hatches            | `withDeleted()`, `withHardDelete()`                                                         |
+| Single live row from a partial-unique | `liveOne()` / `liveOneOrThrow()`                                                            |
+| Row → response conversion             | `apps/api/src/master-data/serialize.ts`                                                     |
+| Declarative master-data screens       | `apps/web/src/lib/resource-spec.ts` + `resources.tsx` — eight of them                       |
+| Uploads                               | `StorageService` + `ReceiptsService`                                                        |
+| Trip- and account-level read scoping  | `apps/api/src/liquidation/shipment-access.service.ts`                                       |
+| Who may hold a trip's cash            | `apps/api/src/liquidation/trip-cash-participants.ts`                                        |
+| The same list, for the web's pickers  | `apps/web/src/components/shipments/trip-cash-holders.tsx`                                   |
+| Whose account a session may edit      | `assertMayAccountForThisFloat` in `liquidation.service.ts`                                  |
+| Who may open which web screen         | `PAGE_ROLES` in `apps/web/src/lib/nav.ts` — nav and `ResourcePage` both                     |
+| DB-backed service tests               | `apps/api/src/liquidation/liquidation-lifecycle.test.ts` — the pattern                      |
 
 ### Still worth doing
 
+- **`.partial()` carries defaults into a PATCH, in eleven more schemas.** `updateUserSchema`,
+  `updateUserProfileSchema`, `updateTruckSchema`, `updateStaffSchema`, `updateClientSchema`,
+  `updateThirdPartySchema`, `updatePayeeSchema`, `updateRouteSchema`, `updateCommissionRuleSchema`,
+  `updateAdditionalChargeSchema` and `updateBillableExpenseSchema` all inject their create defaults
+  for fields a PATCH omits — mostly `isActive: true`, so **a partial PATCH reactivates a
+  deactivated record**, and `isCommissionable` on the two charge schemas. `expense-category.ts`
+  shows the fix: a defaults-free fields object for the patch, defaults layered onto the create.
+  The web app masks all of it, because `ResourcePage` sends every field on every save — which is
+  also why nobody has hit it. Enumerate them with
+  `Object.keys(schema.parse({}))` over every `update*Schema`, which is how these eleven were found.
 - **An API e2e harness (supertest).** The biggest hole: `crew-visibility.test.ts` pins the
   redaction against a controller instance, but that a 403 actually comes back is proved only by
   hand — it needs the Nest request pipeline.
@@ -429,9 +499,11 @@ throughout, because `replica` suspends triggers only.
   (verified: object listing matches `receipt` rows, filenames are forwarded phone photos) and
   `backup.sh` has completed against production (verified: 211 KB landed and was listed back).
   `WHEN_REQUIRED` and the scoped token are confirmed correct in both directions, not assumed.
-- **Known flake, open.** `adjustments.test.ts > survives a recompute…` and one whole api-suite
-  run, neither reproducible since. Both smell like cross-suite interference through global master
-  data in the shared test database.
+- **Known flake, open.** `adjustments.test.ts > survives a recompute…` and now three whole
+  api-suite runs — the latest during phase 14, one failed test out of 385, which did not reproduce
+  in five consecutive full runs afterwards and whose name was not captured. All of them smell like
+  cross-suite interference through global master data in the shared test database. `vitest.config`
+  already sets `fileParallelism: false`, so whatever this is, it is not two files racing.
 
 ---
 
@@ -668,6 +740,39 @@ both the margin and the invoice, and `repeatedReferenceNumbers()` states the dup
 rule once for both allowances and payments. Fixed in passing: `ReceiptsService.referenceCount`
 omitted `company_paid_expense`, so the orphan sweep could hard-delete a receipt a live expense was
 still showing.
+
+**14** — operation expenses: what it costs to keep the company open, as opposed to what a trip
+costs. One new table hanging off no shipment, one new pair of role bundles, and nothing in any
+trip's P&L reads it. Design notes under _What the company spends on itself_; the call worth
+restating is **not a nullable `shipmentId` on `CompanyPaidExpense`**, because that column is what
+every per-trip cost read joins on.
+Sharing `expense_category` with the trip-level costs was right and incomplete: for one commit all
+four pickers fetched it unfiltered, so the first overhead category created would have shown up in a
+crew member's liquidation dropdown. **The fix was the missing column, not a second table** —
+`offeredOnTrips` / `offeredOnOverhead`, both allowed at once, which is precisely what a second
+table could not have said about fuel or repairs.
+
+**Three defects it surfaced, all pre-existing, all invisible to `pnpm run check`:**
+
+- `ExpenseCategoriesService.remove` probed only liquidation lines and billable expenses, so a
+  category used solely by a **company-paid** expense reached the database as a hard delete and came
+  back as an FK violation instead of the deactivation the user asked for — the same omission
+  `ReceiptsService.referenceCount` had in phase 12, in the neighbouring list.
+- `PrismaExceptionFilter` never caught `PrismaClientUnknownRequestError`, which is how Prisma
+  reports a CHECK violation — it models unique and foreign-key violations and has no code for a
+  CHECK. **Every CHECK in the schema reached the user as a 500**, the exact thing that filter's
+  docblock promises not to let happen. Now a 400 naming the constraint, logged at WARN because
+  reaching one means a service above it did not refuse first.
+- **`.partial()` does not strip `.default()`.** `updateExpenseCategorySchema` was
+  `createExpenseCategorySchema.partial()`, so a PATCH naming one field wrote every OTHER column at
+  its create value: renaming a category silently re-armed `requiresPayee`, and — once these flags
+  existed — moved it back onto the trip forms. Fixed structurally here: the fields object carries
+  no defaults and the create schema layers them on. **Eleven other update schemas still have it**;
+  see _Still worth doing_.
+
+**The lesson, and it is the phase-9 one again:** the control sat where the UI happened to look. The
+picker filter is a courtesy; `resolveExpenseCategoryRules` is what actually refuses, both ways, and
+the suite asserts the trip direction as well as the overhead one.
 
 **13** — payment verification. Dispatch records what a client paid; accounting checks it against the
 bank. No new role and no new table — a state on the payment row, in the liquidation's shape. Design

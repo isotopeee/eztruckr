@@ -7,6 +7,7 @@ import {
   CAN_EDIT_RATE_CHAIN,
   CAN_READ_LIQUIDATION_REFERENCE_DATA,
   CAN_READ_MASTER_DATA,
+  CAN_READ_OPERATION_EXPENSES,
   CAN_READ_SHIPMENTS,
   CAN_RECORD_CLIENT_PAYMENT,
   CAN_REMOVE_ANY_SHIPMENT,
@@ -17,6 +18,7 @@ import {
   CAN_WRITE_PAYEES,
   CAN_TRANSITION_SHIPMENTS,
   CAN_WRITE_FINANCIAL_MASTER_DATA,
+  CAN_WRITE_OPERATION_EXPENSES,
   CAN_WRITE_OPERATIONAL_MASTER_DATA,
   CAN_WRITE_ROUTES,
   CAN_WRITE_SHIPMENT_MONEY,
@@ -275,6 +277,46 @@ describe('the money lists stay accounting’s', () => {
       expect(may(CAN_DECIDE_LIQUIDATION, role)).toBe(false);
       expect(may(CAN_WRITE_SHIPMENT_MONEY, role)).toBe(false);
     }
+  });
+});
+
+/**
+ * The company's own running costs, which are nobody's trip.
+ *
+ * WHAT IS WORTH PINNING is the READ side. Every other read bundle in the policy
+ * is wide — a trip is the unit everyone's job is organised around, so
+ * `CAN_READ_SHIPMENTS` admits both dispatch roles and a shipment's costs come
+ * with it. This one is narrow on purpose: overhead is what the company spends
+ * on itself, and nothing a dispatcher does touches the office lease. Widening
+ * it later is a decision somebody should have to make here.
+ */
+describe('the overhead ledger is the office\u2019s, on both sides', () => {
+  it('is written by exactly the desk that keeps the expense categories', () => {
+    expect([...CAN_WRITE_OPERATION_EXPENSES]).toEqual([...CAN_WRITE_FINANCIAL_MASTER_DATA]);
+  });
+
+  it('is read by those two and management, and by nobody else', () => {
+    expect([...CAN_READ_OPERATION_EXPENSES]).toEqual([
+      UserRole.ADMINISTRATOR,
+      UserRole.ACCOUNTING,
+      UserRole.MANAGEMENT,
+    ]);
+  });
+
+  it('keeps out both dispatch roles and the crew, unlike every trip read', () => {
+    for (const role of [UserRole.OPERATIONS, UserRole.DISPATCH_MANAGER, UserRole.CREW]) {
+      expect(may(CAN_READ_OPERATION_EXPENSES, role)).toBe(false);
+      expect(may(CAN_WRITE_OPERATION_EXPENSES, role)).toBe(false);
+    }
+
+    // The contrast that makes the narrowing deliberate rather than an omission:
+    // the dispatch roles DO read a trip's costs, and are refused these.
+    expect(may(CAN_READ_SHIPMENTS, UserRole.DISPATCH_MANAGER)).toBe(true);
+  });
+
+  it('lets management read the company\u2019s costs and write none of them', () => {
+    expect(may(CAN_READ_OPERATION_EXPENSES, UserRole.MANAGEMENT)).toBe(true);
+    expect(may(CAN_WRITE_OPERATION_EXPENSES, UserRole.MANAGEMENT)).toBe(false);
   });
 });
 

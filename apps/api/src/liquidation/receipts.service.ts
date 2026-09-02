@@ -296,17 +296,20 @@ export class ReceiptsService {
       // schema rather than remembered: a column missing from here is a receipt
       // this sweep will call an orphan and hard-delete out from under a row
       // that is still showing it. `company_paid_expense` was missing and is the
-      // reason this is now spelled out; `client_payment` is the newest.
-      const [lines, billable, companyPaid, allowances, settlements, payments] = await Promise.all([
-        this.prisma.client.liquidationLine.count({ where: { receiptId } }),
-        this.prisma.client.billableExpense.count({ where: { receiptId } }),
-        this.prisma.client.companyPaidExpense.count({ where: { receiptId } }),
-        this.prisma.client.allowance.count({ where: { receiptId } }),
-        this.prisma.client.settlement.count({ where: { receiptId } }),
-        this.prisma.client.clientPayment.count({ where: { receiptId } }),
-      ]);
+      // reason this is now spelled out; `operation_expense` is the newest, and
+      // is the first entry here that hangs off no shipment at all.
+      const [lines, billable, companyPaid, overhead, allowances, settlements, payments] =
+        await Promise.all([
+          this.prisma.client.liquidationLine.count({ where: { receiptId } }),
+          this.prisma.client.billableExpense.count({ where: { receiptId } }),
+          this.prisma.client.companyPaidExpense.count({ where: { receiptId } }),
+          this.prisma.client.operationExpense.count({ where: { receiptId } }),
+          this.prisma.client.allowance.count({ where: { receiptId } }),
+          this.prisma.client.settlement.count({ where: { receiptId } }),
+          this.prisma.client.clientPayment.count({ where: { receiptId } }),
+        ]);
 
-      return lines + billable + companyPaid + allowances + settlements + payments;
+      return lines + billable + companyPaid + overhead + allowances + settlements + payments;
     });
   }
 

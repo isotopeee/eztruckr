@@ -74,10 +74,10 @@ export class PayeesService {
   async remove(id: string): Promise<RemovalResult> {
     await this.get(id);
 
-    // Both cost rows that can name a payee. Missing either would let a vendor
-    // be soft-deleted out from under a liquidation somebody still has to
-    // approve — the ON DELETE RESTRICT foreign keys would catch a hard delete,
-    // but nothing would catch the soft one.
+    // EVERY cost row that can name a payee. Missing one would let a vendor be
+    // soft-deleted out from under a liquidation somebody still has to approve —
+    // the ON DELETE RESTRICT foreign keys would catch a hard delete, but
+    // nothing would catch the soft one.
     return removeRecord({
       probes: [
         {
@@ -87,6 +87,10 @@ export class PayeesService {
         {
           entity: 'company-paid expenses',
           count: () => this.prisma.client.companyPaidExpense.count({ where: { payeeId: id } }),
+        },
+        {
+          entity: 'operation expenses',
+          count: () => this.prisma.client.operationExpense.count({ where: { payeeId: id } }),
         },
       ],
       deactivate: () => this.payees.update({ where: { id }, data: { isActive: false } }),

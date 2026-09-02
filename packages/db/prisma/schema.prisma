@@ -215,6 +215,10 @@ model User {
   companyPaidExpensesUpdated CompanyPaidExpense[] @relation("CompanyPaidExpenseUpdatedBy")
   companyPaidExpensesDeleted CompanyPaidExpense[] @relation("CompanyPaidExpenseDeletedBy")
 
+  operationExpensesCreated OperationExpense[] @relation("OperationExpenseCreatedBy")
+  operationExpensesUpdated OperationExpense[] @relation("OperationExpenseUpdatedBy")
+  operationExpensesDeleted OperationExpense[] @relation("OperationExpenseDeletedBy")
+
   additionalChargesCreated AdditionalCharge[] @relation("AdditionalChargeCreatedBy")
   additionalChargesUpdated AdditionalCharge[] @relation("AdditionalChargeUpdatedBy")
   additionalChargesDeleted AdditionalCharge[] @relation("AdditionalChargeDeletedBy")
@@ -647,6 +651,7 @@ model Payee {
   liquidationLines    LiquidationLine[]
   billableExpenses    BillableExpense[]
   companyPaidExpenses CompanyPaidExpense[]
+  operationExpenses   OperationExpense[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -732,6 +737,32 @@ model ExpenseCategory {
   /// Default for the commissionable flag when this category is used as a
   /// billable expense. The per-row flag still wins.
   defaultCommissionable Boolean @default(false)
+
+  /// WHERE THIS CATEGORY IS OFFERED, and why the two ledgers share one table.
+  ///
+  /// A trip's money and the company's overhead are classified in the same
+  /// terms — fuel is fuel whether it went into a truck on a job or the office
+  /// pickup — so a second `operation_expense_category` table would make "what
+  /// did we spend on repairs this year" a UNION over two lists whose names
+  /// somebody keeps in step by hand. What was missing was not a table but a
+  /// statement of where each category APPLIES.
+  ///
+  /// BOTH MAY BE TRUE, which is the case a second table could not express:
+  /// fuel, tolls, parking and repairs genuinely occur on both sides. Neither
+  /// may be — `expense_category_offered_somewhere` refuses a category that
+  /// cannot be filed against anywhere.
+  ///
+  /// THE DEFAULTS ARE ASYMMETRIC ON PURPOSE. Everything that existed before
+  /// overhead did was a trip category, so these leave every row as it was and
+  /// keep a crew member's liquidation picker unchanged; marking one as overhead
+  /// is a deliberate act.
+  ///
+  /// NOT COPIED ONTO THE ROWS THEY GOVERN, unlike `requiresPayee`. That is a
+  /// rule about what a written row had to contain; this decides what a picker
+  /// OFFERS, which is the `isActive` question — relaxing it later leaves every
+  /// past row reading correctly.
+  offeredOnTrips        Boolean @default(true)
+  offeredOnOverhead     Boolean @default(false)
   /// 10, not 0: the seeded categories are spaced 10 apart, so a category added
   /// without a stated order lands beside the first rather than ahead of
   /// everything — and 0 made "unspecified" indistinguishable from "first".
@@ -741,6 +772,7 @@ model ExpenseCategory {
   liquidationLines    LiquidationLine[]
   billableExpenses    BillableExpense[]
   companyPaidExpenses CompanyPaidExpense[]
+  operationExpenses   OperationExpense[]
 
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
@@ -1541,6 +1573,7 @@ model Receipt {
   liquidationLines    LiquidationLine[]
   billableExpenses    BillableExpense[]
   companyPaidExpenses CompanyPaidExpense[]
+  operationExpenses   OperationExpense[]
   allowances          Allowance[]
   settlements         Settlement[]
   clientPayments      ClientPayment[]
@@ -1852,6 +1885,90 @@ model CompanyPaidExpense {
   @@index([payeeId])
   @@index([deletedAt])
   @@map("company_paid_expense")
+}
+
+/// A running cost of the BUSINESS, belonging to no trip.
+///
+/// Office rent, electricity, the accountant's retainer, comprehensive
+/// insurance, an LTO registration renewal, a workshop invoice for a truck
+/// sitting idle between jobs. Real money leaving the company that no shipment
+/// caused and none should be charged for.
+///
+/// WHY THIS IS NOT `CompanyPaidExpense` WITH A NULLABLE `shipmentId`, which is
+/// the change it looks like. That column is what every per-trip cost read joins
+/// on, and making it nullable would mean a trip's margin depended on a WHERE
+/// clause rather than on which table a row is in: `GrossProfitService` would
+/// include the office rent in August's haulage costs the first time somebody
+/// wrote `findMany({ where: { shipmentId } })` without thinking, and the
+/// shipment's own removal cascade — `softDelete({ shipmentId })` — would have
+/// no meaning at all for the null rows. One column, one job; a nullable
+/// discriminator that decides which P&L a row lands in is the shape of defect
+/// this schema keeps refusing.
+///
+/// NOTHING IN A TRIP'S P&L READS THIS TABLE, and nothing should start. Gross
+/// profit is per shipment and overhead is by definition not attributable to
+/// one — apportioning it across trips would invent a number, which is the one
+/// thing the money path never does. What this table answers is the company-wide
+/// question: what did running the business cost in August, and on what.
+///
+/// RECOGNISED WHEN RECORDED, exactly as a company-paid expense is, and for the
+/// same reason: the money left before anybody typed the row, so there is no
+/// lifecycle to wait for and a status column would only pretend otherwise.
+///
+/// NO LOCK, and its absence is deliberate rather than unfinished. A trip's
+/// costs freeze when the trip CLOSES; this has no trip, and the system has no
+/// accounting period to close instead. Until one exists, inventing a freeze
+/// here would be a rule with no event behind it — a correction to last
+/// quarter's rent stays possible, and the soft delete records who made it.
+model OperationExpense {
+  id String @id @default(dbgenerated("uuidv7()")) @db.Uuid
+
+  /// Required, and the SAME table the trip-level expenses classify against.
+  /// A second category list would let "Fuel" mean two different things
+  /// depending on which screen typed it, and a report over both would have to
+  /// reconcile them.
+  expenseCategoryId String          @db.Uuid
+  expenseCategory   ExpenseCategory @relation(fields: [expenseCategoryId], references: [id], onDelete: Restrict)
+
+  description String?
+  amount      Decimal  @db.Decimal(15, 4)
+  /// When the money left, which is not when the row was typed. This is the
+  /// column the ledger is read by — "what did we spend in August" is a
+  /// question about `spentAt`, never about `createdAt`.
+  spentAt     DateTime @db.Timestamptz(6)
+
+  /// Who the company paid. Required only when `payeeRequired` says so.
+  payeeId String? @db.Uuid
+  payee   Payee?  @relation(fields: [payeeId], references: [id], onDelete: Restrict)
+
+  /// Copied from the expense category when the row was written. Frozen for the
+  /// same reason as `LiquidationLine.payeeRequired` — see the note there.
+  payeeRequired Boolean @default(true)
+
+  /// Invoice, official receipt or transaction reference. Optional and never
+  /// unique, the same rule as `CompanyPaidExpense.referenceNumber`.
+  referenceNumber String?
+
+  /// Partial-unique WHERE "deletedAt" IS NULL — a receipt backs at most one
+  /// live row, the same rule as every other attachment in the system.
+  receiptId String?  @db.Uuid
+  receipt   Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
+  createdBy     String?   @db.Uuid
+  createdByUser User?     @relation("OperationExpenseCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  updatedBy     String?   @db.Uuid
+  updatedByUser User?     @relation("OperationExpenseUpdatedBy", fields: [updatedBy], references: [id], onDelete: Restrict)
+  deletedAt     DateTime? @db.Timestamptz(6)
+  deletedBy     String?   @db.Uuid
+  deletedByUser User?     @relation("OperationExpenseDeletedBy", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([spentAt])
+  @@index([expenseCategoryId])
+  @@index([payeeId])
+  @@index([deletedAt])
+  @@map("operation_expense")
 }
 
 /// A fee or surcharge with no underlying cost (extra drop, detention, fuel

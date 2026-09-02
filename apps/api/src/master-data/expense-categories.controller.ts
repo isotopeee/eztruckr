@@ -8,7 +8,7 @@ import {
 import { ExpenseCategoriesService } from './expense-categories.service';
 import {
   CreateExpenseCategoryDto,
-  ListQueryDto,
+  ExpenseCategoryListQueryDto,
   UpdateExpenseCategoryDto,
 } from './master-data.dto';
 
@@ -23,7 +23,7 @@ export class ExpenseCategoriesController {
    */
   @Get()
   @Roles(...CAN_READ_LIQUIDATION_REFERENCE_DATA)
-  list(@Query() query: ListQueryDto): Promise<Page<ExpenseCategory>> {
+  list(@Query() query: ExpenseCategoryListQueryDto): Promise<Page<ExpenseCategory>> {
     return this.categories.list(query);
   }
 

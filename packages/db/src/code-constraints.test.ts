@@ -214,13 +214,13 @@ describe('createdBy stays mandatory in the database', () => {
          AND conname LIKE '%_created_by_required'
     `;
 
-    // 31 business tables, minus user and user_profile. The most recent is
-    // client_payment; before it, allowance_request.
+    // 32 business tables, minus user and user_profile. The most recent is
+    // operation_expense; before it, client_payment.
     //
     // Bumping this number is the intended way to add a table — the assertion
     // exists so that forgetting the CHECK fails here rather than surfacing
     // years later as a row nobody can attribute.
-    expect(rows).toHaveLength(29);
+    expect(rows).toHaveLength(30);
     expect(rows.some((row) => row.conname.startsWith('user_'))).toBe(false);
   });
 });

@@ -11,7 +11,7 @@ import {
   type CreateCompanyPaidExpenseInput,
   type UpdateCompanyPaidExpenseInput,
 } from '@eztruckr/types';
-import { resolvePayeeRequirement } from '../master-data/payee-requirement';
+import { resolveExpenseCategoryRules } from '../master-data/expense-category-rules';
 import { auditFields } from '../master-data/serialize';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShipmentsService } from './shipments.service';
@@ -68,11 +68,12 @@ export class CompanyPaidExpensesService {
     await this.assertPayeeExists(input.payeeId);
     await this.assertReceiptExists(input.receiptId);
 
-    // Also the category's existence check — see `resolvePayeeRequirement`.
-    const payeeRequired = await resolvePayeeRequirement(
+    // Also the category's existence check — see `resolveExpenseCategoryRules`.
+    const { payeeRequired } = await resolveExpenseCategoryRules(
       this.prisma.client.expenseCategory,
       input.expenseCategoryId,
       input.payeeId,
+      'trips',
     );
 
     const row = await this.expenses.create({
@@ -192,11 +193,14 @@ export class CompanyPaidExpensesService {
       throw new NotFoundException(`No company-paid expense with id ${id}`);
     }
 
-    return resolvePayeeRequirement(
+    const { payeeRequired } = await resolveExpenseCategoryRules(
       this.prisma.client.expenseCategory,
       input.expenseCategoryId ?? current.expenseCategoryId,
       input.payeeId === undefined ? current.payeeId : input.payeeId,
+      'trips',
     );
+
+    return payeeRequired;
   }
 
   /**
@@ -207,7 +211,7 @@ export class CompanyPaidExpensesService {
    *
    * Absence is not this function's business either way: `null` is an expense
    * with no payee and `undefined` is a PATCH that did not mention one. Whether
-   * absence is ALLOWED is `resolvePayeeRequirement`'s question, asked against
+   * absence is ALLOWED is `resolveExpenseCategoryRules`'s question, asked against
    * the expense category — checking it here as well would put half the rule in
    * two places.
    */

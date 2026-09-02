@@ -1,19 +1,20 @@
 import {
   createClientSchema,
   createCommissionRuleSchema,
-  createStaffSchema,
   createExpenseCategorySchema,
   createPayeeSchema,
   createRouteSchema,
+  createStaffSchema,
   createThirdPartySchema,
   createTruckSchema,
+  expenseCategoryListQuerySchema,
   masterDataListQuerySchema,
   updateClientSchema,
   updateCommissionRuleSchema,
-  updateStaffSchema,
   updateExpenseCategorySchema,
   updatePayeeSchema,
   updateRouteSchema,
+  updateStaffSchema,
   updateThirdPartySchema,
   updateTruckSchema,
 } from '@eztruckr/types';
@@ -30,6 +31,12 @@ import { createZodDto } from '../common/create-zod-dto';
  */
 
 export class ListQueryDto extends createZodDto(masterDataListQuerySchema) {}
+
+/**
+ * Expense categories take one filter no other master data does: which side of
+ * the house is asking. See `ExpenseCategoriesService.list`.
+ */
+export class ExpenseCategoryListQueryDto extends createZodDto(expenseCategoryListQuerySchema) {}
 
 export class CreateTruckDto extends createZodDto(createTruckSchema) {}
 export class UpdateTruckDto extends createZodDto(updateTruckSchema) {}

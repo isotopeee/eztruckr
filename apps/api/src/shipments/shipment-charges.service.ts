@@ -11,7 +11,7 @@ import type {
 } from '@eztruckr/types';
 import { PrismaService } from '../prisma/prisma.service';
 import { auditFields } from '../master-data/serialize';
-import { resolvePayeeRequirement } from '../master-data/payee-requirement';
+import { resolveExpenseCategoryRules } from '../master-data/expense-category-rules';
 import { ShipmentsService } from './shipments.service';
 
 /**
@@ -36,7 +36,7 @@ import { ShipmentsService } from './shipments.service';
  * payee with its frozen requirement, a reference and a receipt. The two are the
  * same act of spending recorded from opposite sides, and this one asking fewer
  * questions was an accident of which was written first, not a rule. The payee
- * requirement is resolved through the same `resolvePayeeRequirement` and backed
+ * requirement is resolved through the same `resolveExpenseCategoryRules` and backed
  * by the same shape of CHECK, so the three disbursement tables refuse the same
  * rows rather than each being trusted separately.
  *
@@ -365,21 +365,28 @@ export class ShipmentChargesService {
    * The payee rule to freeze onto a billable expense, which may have no
    * category to take one from.
    *
-   * `resolvePayeeRequirement` is the shared statement of the rule and it
+   * `resolveExpenseCategoryRules` is the shared statement of the rule and it
    * requires a category, because a liquidation line and a company-paid expense
    * always carry one. A billable expense need not, and an uncategorised row has
    * no rule to freeze: it freezes FALSE, which is also the only value the CHECK
    * accepts without a payee beside it.
    */
-  private freezePayeeRule(
+  private async freezePayeeRule(
     expenseCategoryId: string | null,
     payeeId: string | null,
   ): Promise<boolean> {
     if (expenseCategoryId === null) {
-      return Promise.resolve(false);
+      return false;
     }
 
-    return resolvePayeeRequirement(this.prisma.client.expenseCategory, expenseCategoryId, payeeId);
+    const { payeeRequired } = await resolveExpenseCategoryRules(
+      this.prisma.client.expenseCategory,
+      expenseCategoryId,
+      payeeId,
+      'trips',
+    );
+
+    return payeeRequired;
   }
 
   /**

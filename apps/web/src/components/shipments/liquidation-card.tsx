@@ -650,8 +650,10 @@ function Lines({
   });
 
   const categories = useQuery({
-    queryKey: ['expense-categories', 'selectable'],
-    queryFn: () => apiFetch<Page<ExpenseCategory>>('/expense-categories?pageSize=200'),
+    // Trip categories only. Unfiltered, this picker offered the office lease.
+    queryKey: ['expense-categories', 'selectable', 'trips'],
+    queryFn: () =>
+      apiFetch<Page<ExpenseCategory>>('/expense-categories?pageSize=200&offeredFor=trips'),
     enabled: canEdit,
   });
 

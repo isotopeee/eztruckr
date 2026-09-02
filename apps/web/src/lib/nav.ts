@@ -66,6 +66,15 @@ export const PAGE_ROLES = {
   routes: EVERY_DESK,
   expenseCategories: OFFICE_BEYOND_DISPATCH,
   commissionRules: OFFICE_BEYOND_DISPATCH,
+  // NOT a master data screen — a ledger. It is in this map anyway because the
+  // question the map answers ("who may open this?") is the same one, and a
+  // second list of page roles somewhere else is a second place to forget.
+  //
+  // The API's read guard, `CAN_READ_OPERATION_EXPENSES`, is exactly these three
+  // rather than being wider — so unlike every entry above, this line is a
+  // courtesy rather than the thing that closes a hole. Dispatch is refused the
+  // overhead ledger by the server whether or not the link is drawn.
+  operationExpenses: OFFICE_BEYOND_DISPATCH,
 } satisfies Record<string, readonly UserRole[]>;
 
 export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
@@ -113,6 +122,14 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
         roles: PAGE_ROLES.expenseCategories,
       },
       { href: '/commission-rules', label: 'Commission rules', roles: PAGE_ROLES.commissionRules },
+      // Under Finance rather than Operations despite the name: this is what it
+      // costs to keep the company open, and the desk that reads it is the one
+      // that keeps the categories directly above.
+      {
+        href: '/operation-expenses',
+        label: 'Operation expenses',
+        roles: PAGE_ROLES.operationExpenses,
+      },
     ],
   },
   {

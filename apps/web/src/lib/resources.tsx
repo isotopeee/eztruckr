@@ -423,7 +423,8 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
   apiPath: '/expense-categories',
   title: 'Expense categories',
   singular: 'Expense category',
-  description: 'How spend is classified on liquidations and billable expenses.',
+  description:
+    'How spend is classified, on a trip and on the company\u2019s own overhead. Each category says where it is offered, so a trip form and the operation-expense ledger show different lists.',
   pageRoles: PAGE_ROLES.expenseCategories,
   writeRoles: WRITE_FINANCIAL,
   removalNote:
@@ -449,6 +450,16 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
       label: 'Commissionable by default',
       render: (row) => (row.defaultCommissionable ? 'Yes' : 'No'),
     },
+    {
+      key: 'offeredOn',
+      label: 'Offered on',
+      // One column for both flags: they are read together — "where does this
+      // appear?" — and two Yes/No columns would make the reader do the join.
+      render: (row) =>
+        [row.offeredOnTrips ? 'Trips' : null, row.offeredOnOverhead ? 'Overhead' : null]
+          .filter(Boolean)
+          .join(' + ') || '—',
+    },
     { key: 'sortOrder', label: 'Order', numeric: true, render: (row) => row.sortOrder },
   ],
   fields: [
@@ -472,18 +483,32 @@ export const expenseCategoryResource: ResourceSpec<ExpenseCategory> = {
       help: 'The per-expense flag still wins over this.',
     },
     {
+      name: 'offeredOnTrips',
+      label: 'Offered on trips',
+      type: 'boolean',
+      help: 'Shows on liquidation lines, billable expenses and company-paid expenses \u2014 anything belonging to a shipment.',
+    },
+    {
+      name: 'offeredOnOverhead',
+      label: 'Offered on operation expenses',
+      type: 'boolean',
+      help: "Shows on the company's own running costs, which belong to no trip. A category can be offered in both places \u2014 fuel and repairs happen on the road and off it \u2014 but it must be offered in at least one.",
+    },
+    {
       name: 'sortOrder',
       label: 'Sort order',
       type: 'integer',
       help: 'Lower appears first on expense forms. Leave it blank for 10 — the standard categories are spaced 10 apart, so there is room to slot one between two others.',
     },
-    { name: 'isActive', label: 'Offered on new liquidations', type: 'boolean' },
+    { name: 'isActive', label: 'Offered for new work', type: 'boolean' },
   ],
   toFormValues: (row) => ({
     name: row.name,
     requiresReceipt: row.requiresReceipt,
     requiresPayee: row.requiresPayee,
     defaultCommissionable: row.defaultCommissionable,
+    offeredOnTrips: row.offeredOnTrips,
+    offeredOnOverhead: row.offeredOnOverhead,
     sortOrder: row.sortOrder,
     isActive: row.isActive,
   }),

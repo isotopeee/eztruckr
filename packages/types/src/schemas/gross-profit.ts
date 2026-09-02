@@ -109,6 +109,13 @@ import { z } from 'zod';
  *   company and the crew to square an advance; the cost was whatever was
  *   liquidated, which is already counted above.
  *
+ *   AN OPERATION EXPENSE is not a cost of any trip. Office rent, insurance and
+ *   the accountant's retainer are what it costs to keep the company open, and
+ *   no rule says which shipment owes which share of them. Apportioning overhead
+ *   across trips — by revenue, by distance, by count — would invent a number
+ *   and then report it as this trip's margin. `OperationExpenseSummary` is
+ *   where that money is answered for, over a period rather than a trip.
+ *
  *   A CLIENT PAYMENT is not revenue, and this is the one most likely to be
  *   "fixed" by somebody. Revenue is recognised when the trip runs — it is the
  *   three figures above. A `ClientPayment` is the COLLECTION of that revenue,

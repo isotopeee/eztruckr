@@ -20,6 +20,7 @@ export * from './schemas/expense-category';
 export * from './schemas/commission-rule';
 export * from './schemas/shipment';
 export * from './schemas/company-paid-expense';
+export * from './schemas/operation-expense';
 export * from './schemas/gross-profit';
 export * from './schemas/client-payment';
 export * from './schemas/commission';
