@@ -491,7 +491,7 @@ this goes through `exec` rather than a connection string.
 
 ## Backups
 
-`infra/backup.sh` runs nightly at **02:10 Manila** (18:10 UTC) from cron, installed and re-asserted
+`infra/backup.sh` runs nightly at **02:00 Manila** (18:00 UTC) from cron, installed and re-asserted
 by every deploy. It takes a `pg_dump --format=custom`, refuses to upload anything implausibly
 small, ships it to `eztruckr-optimus-app-prod-backups`, and prunes past 30 days.
 
@@ -533,7 +533,7 @@ docker run --rm -v /tmp:/backup \
   -e AWS_DEFAULT_REGION=auto \
   -e AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
   amazon/aws-cli --endpoint-url "$S3_ENDPOINT" \
-  s3 cp "s3://$BACKUP_BUCKET/eztruckr-2026-08-20T181000Z.dump" /backup/restore.dump
+  s3 cp "s3://$BACKUP_BUCKET/eztruckr-2026-08-20T180000Z.dump" /backup/restore.dump
 
 # restore it beside the live database, not over it
 docker compose -f docker-compose.prod.yml exec -T postgres \

@@ -251,7 +251,9 @@ jobs:
           # get removed.
           docker image prune -af
 
-          # Nightly backup at 18:10 UTC — 02:10 Manila, after the working day.
+          # Nightly backup at 18:00 UTC — 02:00 Manila, after the working day.
+          # The Philippines has never observed DST and is UTC+8 year-round, so a
+          # fixed UTC time stays fixed in Manila; nothing here needs CRON_TZ.
           # Written here rather than in provision.sh so it is re-asserted on
           # every deploy and cannot quietly go missing.
           #
@@ -266,7 +268,7 @@ jobs:
           # denied" went to a local mailbox nobody reads. Keep this path
           # somewhere the deploy user owns.
           mkdir -p /opt/eztruckr/logs
-          CRON='10 18 * * * /opt/eztruckr/infra/backup.sh >>/opt/eztruckr/logs/backup.log 2>&1'
+          CRON='0 18 * * * /opt/eztruckr/infra/backup.sh >>/opt/eztruckr/logs/backup.log 2>&1'
           # `|| true` because `grep -v` exits 1 when it selects NO lines, which
           # is the ordinary case on a box whose crontab is empty or holds only
           # the line being replaced. Under `pipefail` that non-zero propagates,
