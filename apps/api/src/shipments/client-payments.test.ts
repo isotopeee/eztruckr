@@ -11,6 +11,8 @@ import {
   PaymentVerificationStatus,
   ShipmentStatus,
   UserRole,
+  shipmentListQuerySchema,
+  type ShipmentListQuery,
 } from '@eztruckr/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { RequestUser } from '../auth/request-user';
@@ -294,6 +296,72 @@ describe('what the trip is owed', () => {
     expect(summary.billableExpenses).toBe('1500.00');
     expect(summary.additionalCharges).toBe('2500.00');
     expect(summary.amountDue).toBe('49000.00');
+  });
+
+  /**
+   * AND THE SAME PAIR THE LIST SHOWS. The shipments table puts "Total billed"
+   * and "Balance" on every row, computed over a whole page at once rather than
+   * by one summary per trip — a different query shape reaching the same two
+   * numbers, which is exactly the arrangement that drifts. Asserted against
+   * this card rather than against literals, so a change to either definition
+   * fails here instead of leaving a client chased on one figure and reassured
+   * on the other.
+   */
+  it('is the same pair the shipments list puts on the row', async () => {
+    if (!available) return;
+
+    await act(() =>
+      charges.addAdditionalCharge(SHIPMENT_ID, {
+        description: 'Extra drop',
+        amount: '2500.00',
+        isCommissionable: false,
+      }),
+    );
+
+    // Billed BELOW cost, so the row that reads `amount` instead of
+    // `billedAmount` fails rather than coinciding.
+    await act(() =>
+      charges.addBillableExpense(SHIPMENT_ID, {
+        expenseCategoryId: null,
+        description: 'Port charges',
+        amount: '1500.00',
+        billedAmount: '1200.00',
+        spentAt: '2026-08-11T00:00:00.000Z',
+        isCommissionable: false,
+        payeeId: null,
+        liquidationLineId: null,
+        referenceNumber: null,
+        receiptId: null,
+      }),
+    );
+
+    await pay('20000.00');
+    // Returned, so a list that counted every receipt would report a balance
+    // 5,000 lighter than the card beside it.
+    const returned = await pay('5000.00');
+    await act(() =>
+      payments.returnForCorrection(
+        returned.id,
+        { reason: 'Not on any statement.' },
+        asAccounting(),
+      ),
+    );
+
+    const [summary, page] = await Promise.all([
+      payments.summary(SHIPMENT_ID),
+      shipments.list(
+        shipmentListQuerySchema.parse({ clientId, pageSize: 100 }) as ShipmentListQuery,
+      ),
+    ]);
+
+    const row = page.items.find((item) => item.id === SHIPMENT_ID);
+
+    expect(row?.amountDue).toBe(summary.amountDue);
+    expect(row?.balance).toBe(summary.balance);
+    // Pinned as well as compared: two implementations that agree on the wrong
+    // number would satisfy the two lines above on their own.
+    expect(summary.amountDue).toBe('48700.00');
+    expect(summary.balance).toBe('28700.00');
   });
 
   /**

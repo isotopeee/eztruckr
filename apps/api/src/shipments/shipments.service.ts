@@ -58,6 +58,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { collectReferences, type ReferenceProbe } from '../master-data/removal';
 import { auditFields, dateToIso, decimalToString } from '../master-data/serialize';
+import { receivablesOf, type Receivable } from './receivables';
 
 /**
  * Shipments: the rate chain, the crew, and the status lifecycle.
@@ -196,7 +197,47 @@ export class ShipmentsService {
       this.shipments.count({ where }),
     ]);
 
-    return { items: rows.map(toShipment), total, page: query.page, pageSize: query.pageSize };
+    const receivables = await this.receivablesFor(rows);
+
+    return {
+      items: rows.map((row) => ({ ...toShipment(row), ...receivables.get(row.id) })),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
+  }
+
+  /**
+   * What each trip on the page was billed and what is left on it.
+   *
+   * THREE QUERIES FOR THE WHOLE PAGE, by `IN`, rather than one summary per row:
+   * the per-trip route costs three round trips of its own, so a page of
+   * twenty-five would have been seventy-five. The same shape, and for the same
+   * reason, as `ProfitAndLossService` reading a month of trips.
+   *
+   * The arithmetic is `receivablesOf`'s, which the payments card's summary also
+   * uses — a list that disagreed with the screen one click away would be worse
+   * than a list without the columns.
+   */
+  private async receivablesFor(rows: readonly ShipmentRow[]): Promise<Map<string, Receivable>> {
+    const shipmentId = { in: rows.map((row) => row.id) };
+
+    const [billable, additional, payments] = await Promise.all([
+      this.prisma.client.billableExpense.findMany({
+        where: { shipmentId },
+        select: { shipmentId: true, amount: true, billedAmount: true, liquidationId: true },
+      }),
+      this.prisma.client.additionalCharge.findMany({
+        where: { shipmentId },
+        select: { shipmentId: true, amount: true },
+      }),
+      this.prisma.client.clientPayment.findMany({
+        where: { shipmentId },
+        select: { shipmentId: true, amount: true, verificationStatus: true },
+      }),
+    ]);
+
+    return receivablesOf(rows, billable, additional, payments);
   }
 
   async get(id: string): Promise<Shipment> {
@@ -1423,6 +1464,11 @@ export function toShipment(row: ShipmentRow): Shipment {
     // Likewise: one query per shipment, so the list leaves it at zero and the
     // detail endpoint answers it properly.
     totalAdvanced: '0.00',
+    // The other way round from those two: the LIST answers these, over its
+    // whole page at once, and the detail leaves them null because the payments
+    // card asks the same question with every receipt beside it.
+    amountDue: null,
+    balance: null,
 
     ...auditFields(row),
   };

@@ -322,6 +322,12 @@ export class ShipmentsController {
       gasRateOverrideReason: null,
       commissionableBase: null,
       totalAdvanced: '0.00',
+      // What the client was billed and what they still owe. Neither is on the
+      // detail response at all, but the LIST carries both, so leaving them out
+      // of this would be the same screen-private-payload-public mistake the
+      // rate chain made.
+      amountDue: null,
+      balance: null,
     };
   }
 

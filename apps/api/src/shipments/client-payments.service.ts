@@ -7,7 +7,6 @@ import {
 import type { Prisma } from '@eztruckr/db';
 import {
   areChargesEditable,
-  countsAsCollected,
   isPaymentMethod,
   isPaymentVerificationStatus,
   money,
@@ -32,6 +31,7 @@ import {
 } from '../common/repeated-references';
 import { auditFields, dateToIso } from '../master-data/serialize';
 import { PrismaService } from '../prisma/prisma.service';
+import { collectedAmount } from './receivables';
 import { revenueAsStrings, shipmentRevenue } from './shipment-revenue';
 import { ShipmentsService } from './shipments.service';
 
@@ -122,14 +122,6 @@ export class ClientPaymentsService {
       }),
     );
 
-    // A RETURNED payment is left out of what the trip has collected: somebody
-    // looked and stated they could not match it, which is a different thing
-    // from nobody having looked yet. It rejoins the moment it is corrected.
-    const counted = rows.filter(
-      (row) =>
-        !isPaymentVerificationStatus(row.verificationStatus) ||
-        countsAsCollected(row.verificationStatus),
-    );
     const verified = rows.filter(
       (row) => row.verificationStatus === PaymentVerificationStatus.VERIFIED,
     );
@@ -137,7 +129,11 @@ export class ClientPaymentsService {
       (row) => row.verificationStatus === PaymentVerificationStatus.RETURNED,
     );
 
-    const amountPaid = sum(counted.map((row) => row.amount));
+    // Which payments count is `collectedAmount`'s rule, not this method's: the
+    // shipments list shows the same balance on every row and must exclude the
+    // same returned check. Two spellings of "collected" is how the list and
+    // this card would start disagreeing about one trip.
+    const amountPaid = collectedAmount(rows);
     const amountDue = income.revenue;
 
     // The P&L calls this sum `revenue`; an invoice calls it what is owed. Same

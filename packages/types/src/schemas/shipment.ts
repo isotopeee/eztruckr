@@ -285,6 +285,29 @@ export const shipmentSchema = auditFieldsSchema.extend({
    * `commissionsStale`; the list does not pay for the extra query.
    */
   totalAdvanced: z.string().default('0.00'),
+
+  /**
+   * Where the trip stands with its client: the whole invoice, and what is
+   * still outstanding against it.
+   *
+   * THE LIST'S FIGURES, and the mirror image of the two above — a table of
+   * trips is exactly where "who still owes us" is asked, and answering it a
+   * row at a time meant opening every trip in turn. Both come from
+   * `receivablesOf`, which shares its arithmetic with
+   * `ClientPaymentsService.summary`, so the pair on a row and the pair on that
+   * trip's payments card are one computation rather than two that agree today.
+   *
+   * `balance` is `amountDue` less what has been collected, and is NEGATIVE on
+   * an overpayment rather than clamped: money owed back is a fact somebody has
+   * to act on.
+   *
+   * NULL MEANS NOT ANSWERED HERE — the detail endpoint leaves both null and
+   * points at the payments card, which asks the same question with the
+   * per-payment detail beside it. A CREW session is served nulls too, for the
+   * reason every other revenue field is redacted; see `redactRevenueForCrew`.
+   */
+  amountDue: z.string().nullable().default(null),
+  balance: z.string().nullable().default(null),
 });
 
 export type Shipment = z.infer<typeof shipmentSchema>;

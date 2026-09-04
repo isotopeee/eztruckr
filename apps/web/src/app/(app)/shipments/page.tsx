@@ -81,13 +81,14 @@ export default function Page() {
   const [direction, setDirection] = useState<SortDirection>('desc');
 
   /**
-   * The net rate column is dropped for crew rather than shown empty.
+   * The money columns are dropped for crew rather than shown empty.
    *
-   * The API serves them nulls there (`redactRevenueForCrew`), so keeping the
-   * column would print a heading about freight revenue over a column of "—",
-   * which reads as a broken screen and still tells them the figure exists.
+   * The API serves them nulls there (`redactRevenueForCrew`), so keeping them
+   * would print headings about freight revenue and what a client owes over
+   * columns of "—", which reads as a broken screen and still tells them the
+   * figures exist.
    */
-  const showNetRate = user?.role !== UserRole.CREW;
+  const showRevenue = user?.role !== UserRole.CREW;
 
   const filters = {
     page: 1,
@@ -215,17 +216,25 @@ export default function Page() {
                     direction={direction}
                     onSort={sortBy}
                   />
-                  <TableHead>Crew</TableHead>
                   <TableHead>Truck</TableHead>
-                  {showNetRate ? (
-                    <SortableHead
-                      field="netRate"
-                      label="Net rate"
-                      className="text-right"
-                      sort={sort}
-                      direction={direction}
-                      onSort={sortBy}
-                    />
+                  {showRevenue ? (
+                    <>
+                      <SortableHead
+                        field="netRate"
+                        label="Net rate"
+                        className="text-right"
+                        sort={sort}
+                        direction={direction}
+                        onSort={sortBy}
+                      />
+                      {/* Not sortable, unlike the net rate beside them: both are
+                          summed per trip after the page has been chosen, so a
+                          heading offering to order by them could only order the
+                          twenty-five rows already fetched — the bug the note on
+                          `orderFor` exists to prevent. */}
+                      <TableHead className="text-right">Total billed</TableHead>
+                      <TableHead className="text-right">Balance</TableHead>
+                    </>
                   ) : null}
                   <SortableHead
                     field="status"
@@ -258,16 +267,33 @@ export default function Page() {
                       {shipment.containerNumber ?? '—'}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
-                      {shipment.driverName ?? 'no driver'}
-                      {shipment.helperName ? ` · ${shipment.helperName}` : ''}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">
                       {shipment.truckPlateNumber ?? 'no truck'}
                     </TableCell>
-                    {showNetRate ? (
-                      <TableCell className="text-right tabular-nums">
-                        {shipment.netRate === null ? '—' : formatMoney(shipment.netRate)}
-                      </TableCell>
+                    {showRevenue ? (
+                      <>
+                        <TableCell className="text-right tabular-nums">
+                          {shipment.netRate === null ? '—' : formatMoney(shipment.netRate)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {shipment.amountDue === null ? '—' : formatMoney(shipment.amountDue)}
+                        </TableCell>
+                        {/* Settled reads quieter than outstanding: a zero
+                            balance is the row nobody has to act on, and a
+                            negative one is money owed back, which is not the
+                            same news as money owed. */}
+                        <TableCell
+                          className={cn(
+                            'text-right font-medium tabular-nums',
+                            shipment.balance === null || shipment.balance === '0.00'
+                              ? 'text-muted-foreground font-normal'
+                              : shipment.balance.startsWith('-')
+                                ? 'text-destructive'
+                                : undefined,
+                          )}
+                        >
+                          {shipment.balance === null ? '—' : formatMoney(shipment.balance)}
+                        </TableCell>
+                      </>
                     ) : null}
                     <TableCell>
                       <Badge
