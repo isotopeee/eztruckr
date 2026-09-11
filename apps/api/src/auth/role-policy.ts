@@ -337,22 +337,31 @@ export const CAN_DECIDE_ALLOWANCE_REQUEST = CAN_WRITE_SHIPMENT_MONEY;
 /**
  * Correcting the gross rate or the broker cut after the trip has left DRAFT.
  *
- * A SEPARATE LIST FROM BOTH ITS NEIGHBOURS, and it has to be. The rate chain
- * is not `CAN_WRITE_SHIPMENT_MONEY`: it is the figure agreed with the client
- * when the trip was sold, and the people who negotiate it are the ones running
- * dispatch, not the ones deciding what to pay out against it. Nor is it
- * `CAN_WRITE_SHIPMENTS`, which is every dispatcher — a gross rate moves the
+ * A SEPARATE LIST FROM BOTH ITS NEIGHBOURS, and it has to be. The rate chain is
+ * not `CAN_WRITE_SHIPMENTS`, which is every dispatcher — a gross rate moves the
  * commission base for everyone on the trip, so correcting one after the crew
- * are on the road is the supervisor's call.
+ * are on the road is not the booking form's business. Nor is it
+ * `CAN_WRITE_SHIPMENT_MONEY`: that list decides what gets PAID OUT against the
+ * figure, and the two are different questions even where the people overlap.
+ *
+ * ACCOUNTING RATHER THAN THE DISPATCH MANAGER, which is a narrowing and not the
+ * obvious one, so it is written down here. The correction used to sit with the
+ * supervisor who sold the trip, on the reading that the negotiator owns the
+ * agreed figure. What it is in practice is a book correction: it now runs to
+ * CLOSED, which means most of the corrections it will carry arrive after the
+ * accounts were approved, against a figure the dispatch side already signed off
+ * once. Leaving it with them lets the seller restate their own sale after the
+ * trip is settled; accounting restates it against the paperwork instead.
  *
  * WHAT STOPS THIS BEING A BACK DOOR is not the role list, it is the guard the
- * service applies underneath: the correction is refused once the trip is
- * liquidated or any commission has been PAID, exactly as a late charge is.
- * Commissions computed but unpaid go stale and are recomputed. Anyone who
- * widens this list should read `assertNothingPaid` first — that is the line
- * that matters, and it does not move.
+ * service applies underneath: the correction is refused once any commission has
+ * been PAID, exactly as a late charge is. Commissions computed but unpaid go
+ * stale and are recomputed. That guard carries more weight than it used to —
+ * the status half now stops only at CLOSED — so anyone who widens this list
+ * should read `assertNothingPaid` first. That is the line that matters, and it
+ * does not move.
  */
-export const CAN_EDIT_RATE_CHAIN = [UserRole.ADMINISTRATOR, UserRole.DISPATCH_MANAGER] as const;
+export const CAN_EDIT_RATE_CHAIN = [UserRole.ADMINISTRATOR, UserRole.ACCOUNTING] as const;
 
 /**
  * Submitting a liquidation, and editing the lines that go into it.

@@ -137,21 +137,26 @@ export function isRateChainEditable(status: ShipmentStatus): boolean {
  * road can fix — the rate was simply recorded wrong, and refusing to correct it
  * means the trip's revenue is knowingly false for ever.
  *
- * ONCE THE SAME BOUND AS THE CHARGES, AND NO LONGER. Charges now stay open to
- * CLOSED, because a port fee is discovered late and the record is wrong
- * without it. A rate is not discovered late — it was agreed with the broker on
- * the day — so nothing moved here, and the parity that used to carry this line
- * is gone rather than merely restated. What still stands is the reason:
- * LIQUIDATED means every account was approved against this figure.
+ * THE SAME BOUND AS THE CHARGES AGAIN, and the argument that separated them no
+ * longer decides it. A rate is not discovered late, so LIQUIDATED once looked
+ * like the honest stop: every account had been approved against that figure.
+ * What the stop actually produced was a trip whose revenue was known to be
+ * wrong and could never be fixed — the approval had been given against a
+ * mistyped number, so preserving it preserved the mistake rather than the
+ * agreement. Correcting it restates what the broker agreed; CLOSED is where the
+ * trip's record stops for good, and that is now the only status bound.
  *
  * And the harder bound is not here at all — a correction is refused once any
  * commission has been PAID, which is a fact about the payout rather than about
- * the status, so `assertNothingPaid` enforces it and this cannot.
+ * the status, so `assertNothingPaid` enforces it and this cannot. That line did
+ * not move, and it is what keeps this from being a back door: a correction
+ * after liquidation reaches only figures nobody has been paid against.
  *
- * Restricted by role as well: see `CAN_EDIT_RATE_CHAIN`.
+ * Restricted by role as well, and more narrowly than it used to be: see
+ * `CAN_EDIT_RATE_CHAIN`.
  */
 export function isRateChainCorrectable(status: ShipmentStatus): boolean {
-  return !shipmentStatusAtLeast(status, ShipmentStatus.LIQUIDATED);
+  return status !== ShipmentStatus.CLOSED;
 }
 
 /**
@@ -167,28 +172,33 @@ export function isRateChainCorrectable(status: ShipmentStatus): boolean {
  * wrong client is one nobody can find, and refusing the correction does not
  * make the record true, it just makes it permanently false.
  *
- * BOUNDED AT LIQUIDATED, where the trip's record closes for good — the same
- * point as the rate correction above, and for the same reason. It was the
- * charges' bound too until they moved out to CLOSED; these did not follow,
- * because paperwork that renames a trip is not the same as a cost the trip
- * genuinely incurred. And as with the rate chain, the status is not the only
- * bound: changing the client or the route moves which commission RULE applies
- * (see `ruleMatches`), so those two are additionally refused once a commission
- * has been paid — a fact about the payout that no status can express.
+ * BOUNDED AT CLOSED, where the trip's record stops for good — the same point as
+ * the rate correction above and the charges below, so the three rules now agree
+ * on where a trip stops being writable and differ only in WHO and WHAT. It was
+ * LIQUIDATED until the rate chain's bound moved, and holding these back would
+ * have left the odd state where a liquidated trip's gross could be corrected
+ * but the client it was filed under could not. A trip under the wrong client is
+ * one nobody can find, and liquidating it does not make it findable.
+ *
+ * And as with the rate chain, the status is not the only bound: changing the
+ * client or the route moves which commission RULE applies (see `ruleMatches`),
+ * so those two are additionally refused once a commission has been paid — a
+ * fact about the payout that no status can express.
  */
 export function areBookingDetailsCorrectable(status: ShipmentStatus): boolean {
-  return !shipmentStatusAtLeast(status, ShipmentStatus.LIQUIDATED);
+  return status !== ShipmentStatus.CLOSED;
 }
 
 /**
  * Charges and billable expenses stay open until the trip is CLOSED.
  *
- * THEY ARE DISCOVERED, NOT AGREED, which is what separates them from the two
- * rules above. Port fees and detention turn up en route, and the invoice for
- * them routinely lands after the liquidation has been approved. Refusing it
- * does not make the trip cheaper — it makes the record false and the client
- * under-invoiced, and there is no later trip to put the charge on, because a
- * charge belongs to this one or to none.
+ * THEY ARE DISCOVERED, NOT AGREED, which used to be what separated them from
+ * the two rules above and now only explains why they reached CLOSED first. Port
+ * fees and detention turn up en route, and the invoice for them routinely lands
+ * after the liquidation has been approved. Refusing it does not make the trip
+ * cheaper — it makes the record false and the client under-invoiced, and there
+ * is no later trip to put the charge on, because a charge belongs to this one
+ * or to none.
  *
  * WHICH LEAVES THE COMMISSION BASE, and the status was never what protected
  * it. `assertChargesEditable` also refuses once any commission has been PAID,

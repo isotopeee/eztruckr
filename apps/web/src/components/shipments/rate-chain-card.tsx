@@ -86,7 +86,7 @@ export function RateChainCard({ shipment }: { shipment: Shipment }) {
    * silently missing button would be.
    */
   const mayCorrect =
-    (user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.DISPATCH_MANAGER) &&
+    (user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING) &&
     isRateChainCorrectable(shipment.status);
 
   /**

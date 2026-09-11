@@ -160,22 +160,27 @@ describe('a dispatcher works trips and keeps no directory but the routes', () =>
  * Correcting an agreed rate after dispatch.
  *
  * The list is narrow because the figure moves the commission base for everyone
- * on the trip. It is NOT `CAN_WRITE_SHIPMENT_MONEY` — a rate is negotiated by
- * the people running dispatch, not decided by the people paying out against it
- * — and it is NOT `CAN_WRITE_SHIPMENTS`, which is every dispatcher.
+ * on the trip. It is NOT `CAN_WRITE_SHIPMENTS`, which is every dispatcher, and
+ * it is NOT `CAN_WRITE_SHIPMENT_MONEY` — deciding what to pay out against a
+ * figure is a different question from restating the figure.
  */
 describe('correcting the rate chain', () => {
-  it('is the administrator and the dispatch manager, and nobody else', () => {
-    expect([...CAN_EDIT_RATE_CHAIN]).toEqual([UserRole.ADMINISTRATOR, UserRole.DISPATCH_MANAGER]);
+  it('is the administrator and accounting, and nobody else', () => {
+    expect([...CAN_EDIT_RATE_CHAIN]).toEqual([UserRole.ADMINISTRATOR, UserRole.ACCOUNTING]);
 
-    for (const role of [
-      UserRole.OPERATIONS,
-      UserRole.ACCOUNTING,
-      UserRole.MANAGEMENT,
-      UserRole.CREW,
-    ]) {
+    for (const role of [UserRole.OPERATIONS, UserRole.MANAGEMENT, UserRole.CREW]) {
       expect(may(CAN_EDIT_RATE_CHAIN, role)).toBe(false);
     }
+  });
+
+  /**
+   * The dispatch side is out, and this is the half worth asserting: they sold
+   * the trip and signed the figure off once, and the correction now runs to
+   * CLOSED — so leaving it with them would let the seller restate their own
+   * sale after the accounts were approved against it.
+   */
+  it('keeps the dispatch side out, supervisor included', () => {
+    expect(may(CAN_EDIT_RATE_CHAIN, UserRole.DISPATCH_MANAGER)).toBe(false);
   });
 });
 

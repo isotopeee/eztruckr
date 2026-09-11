@@ -436,14 +436,58 @@ describe('the rate chain stays correctable after dispatch', () => {
   });
 
   /**
-   * LIQUIDATED means every account was approved against these figures. The
-   * harder bound is not a status at all — a PAID commission stops a correction
-   * through `assertNothingPaid`, the same line that governs a late charge.
+   * LIQUIDATION IS NO LONGER THE BOUND, and the pair of assertions below is the
+   * point: approval against a mistyped gross does not make the mistype true, so
+   * the correction survives it and stops only at CLOSED, where the trip's
+   * record ends.
+   *
+   * What actually protects the approved accounts is not a status at all — a
+   * PAID commission stops a correction through `assertNothingPaid`, the same
+   * line that governs a late charge, and that is covered on its own below.
    */
-  it('is refused once the trip is liquidated', async () => {
+  it('survives liquidation and is refused only once the trip is closed', async () => {
     if (!available) return;
 
     const shipment = await book();
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { status: ShipmentStatus.LIQUIDATED },
+      }),
+    );
+
+    const corrected = await withActor({ userId: adminId }, () =>
+      shipments.updateRateChain(shipment.id, { grossRate: '25000.00' }),
+    );
+
+    expect(corrected.grossRate).toBe('25000');
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { status: ShipmentStatus.CLOSED },
+      }),
+    );
+
+    await expect(
+      withActor({ userId: adminId }, () =>
+        shipments.updateRateChain(shipment.id, { grossRate: '26000.00' }),
+      ),
+    ).rejects.toThrow(/record is final/i);
+  });
+
+  /**
+   * The bound that did not move, asserted at the status where it now does all
+   * the work: a commission paid against the old figure names a voucher that has
+   * to keep reconciling, and liquidation no longer stands in front of it.
+   */
+  it('is still refused after liquidation once a commission has been paid', async () => {
+    if (!available) return;
+
+    const shipment = await dispatched();
+
+    await payACommissionOn(shipment.id);
 
     await withActor({ userId: adminId }, async () =>
       prisma.shipment.update({
@@ -456,7 +500,7 @@ describe('the rate chain stays correctable after dispatch', () => {
       withActor({ userId: adminId }, () =>
         shipments.updateRateChain(shipment.id, { grossRate: '25000.00' }),
       ),
-    ).rejects.toThrow(/part of the settled record/i);
+    ).rejects.toThrow(/paid/i);
   });
 
   /**
@@ -640,10 +684,12 @@ describe('the trip’s own details stay correctable after dispatch', () => {
   });
 
   /**
-   * LIQUIDATED closes the trip's record for good — the same bound as the
-   * charges and the rate correction, because it is the same reason.
+   * CLOSED closes the trip's record for good — the same bound as the charges
+   * and the rate correction, because it is the same reason. Liquidation is
+   * asserted alongside it deliberately: a liquidated trip filed under the wrong
+   * client is still one nobody can find.
    */
-  it('is refused once the trip is liquidated', async () => {
+  it('survives liquidation and is refused only once the trip is closed', async () => {
     if (!available) return;
 
     const shipment = await book();
@@ -655,10 +701,23 @@ describe('the trip’s own details stay correctable after dispatch', () => {
       }),
     );
 
+    const corrected = await withActor({ userId: adminId }, () =>
+      shipments.update(shipment.id, { containerNumber: 'LATE1234567' }),
+    );
+
+    expect(corrected.containerNumber).toBe('LATE1234567');
+
+    await withActor({ userId: adminId }, async () =>
+      prisma.shipment.update({
+        where: { id: shipment.id },
+        data: { status: ShipmentStatus.CLOSED },
+      }),
+    );
+
     await expect(
       withActor({ userId: adminId }, () =>
-        shipments.update(shipment.id, { containerNumber: 'LATE1234567' }),
+        shipments.update(shipment.id, { containerNumber: 'SHUT1234567' }),
       ),
-    ).rejects.toThrow(/part of the settled record/i);
+    ).rejects.toThrow(/record is final/i);
   });
 });

@@ -367,7 +367,7 @@ export class ShipmentsService {
    * silently move the commission base of work already done.
    *
    * THE FACTS THAT IDENTIFY THE TRIP do not — client, date, route, lane and
-   * container number stay correctable until LIQUIDATED, because they are
+   * container number stay correctable until CLOSED, because they are
    * transcription of paperwork that arrives after the booking rather than terms
    * anybody committed to. See `areBookingDetailsCorrectable` for why that is a
    * third rule rather than a relaxation of the first.
@@ -384,7 +384,7 @@ export class ShipmentsService {
 
     if (!areBookingDetailsCorrectable(status)) {
       throw new ConflictException(
-        `Shipment ${current.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; its booking is part of the settled record.`,
+        `Shipment ${current.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; its record is final and its booking can no longer be corrected.`,
       );
     }
 
@@ -492,14 +492,17 @@ export class ShipmentsService {
    * form: every dispatcher may use it, and it closes at DRAFT because origin,
    * cargo and route describe a trip that has not left yet. This is a correction
    * to a figure that was agreed and recorded wrong, it belongs to
-   * `CAN_EDIT_RATE_CHAIN`, and it stays open far longer.
+   * `CAN_EDIT_RATE_CHAIN` — accounting, not dispatch — and it stays open far
+   * longer.
    *
    * WHAT ACTUALLY STOPS IT is not the status, it is `assertNothingPaid` — the
    * same line that governs a late charge, for the same reason. A commission
    * computed but not paid goes STALE and is recomputed; a commission that has
    * been paid names a voucher that has to keep reconciling, and no correction is
-   * worth rewriting that. The status bound on top of it exists because
-   * LIQUIDATED means every account was approved against these figures.
+   * worth rewriting that. The status bound on top of it now stops only at
+   * CLOSED: approval against a mistyped figure is not a reason to keep the
+   * mistype, and every commission the approval covered is caught by the paid
+   * check rather than by the status.
    *
    * `rateChainUpdatedAt` is stamped here and nowhere else. Without it a
    * correction after a computation would leave the commissions quietly wrong
@@ -512,7 +515,7 @@ export class ShipmentsService {
 
     if (!isRateChainCorrectable(status)) {
       throw new ConflictException(
-        `Shipment ${current.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; its rate chain is part of the settled record.`,
+        `Shipment ${current.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; its record is final and its rate chain can no longer be corrected.`,
       );
     }
 
