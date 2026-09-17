@@ -69,7 +69,6 @@ export class ProfitAndLossService {
         shipmentDate: true,
         grossRate: true,
         tpcAmount: true,
-        netRate: true,
         commissionsComputedAt: true,
         rateChainUpdatedAt: true,
         client: { select: { name: true } },
@@ -136,7 +135,6 @@ export class ProfitAndLossService {
       const profit = grossProfitOf(shipment.id, {
         grossRate: shipment.grossRate,
         tpcAmount: shipment.tpcAmount,
-        netRate: shipment.netRate,
         billable: shipmentBillable,
         additional: shipmentAdditional,
         companyPaid: companyPaidBy.get(shipment.id) ?? [],
@@ -195,8 +193,6 @@ export class ProfitAndLossService {
       to: query.to ?? null,
 
       grossRate: sumOf(trips, (profit) => profit.grossRate),
-      thirdPartyCommission: sumOf(trips, (profit) => profit.thirdPartyCommission),
-      netRate: sumOf(trips, (profit) => profit.netRate),
       billableExpenses: sumOf(trips, (profit) => profit.billableExpenses),
       additionalCharges: sumOf(trips, (profit) => profit.additionalCharges),
       revenue: toDecimalString(revenue),
@@ -205,6 +201,7 @@ export class ProfitAndLossService {
       companyPaidExpenses: sumOf(trips, (profit) => profit.companyPaidExpenses),
       companyPaidBillableExpenses: sumOf(trips, (profit) => profit.companyPaidBillableExpenses),
       crewCommissions: sumOf(trips, (profit) => profit.crewCommissions),
+      thirdPartyCommission: sumOf(trips, (profit) => profit.thirdPartyCommission),
       directCost: toDecimalString(directCost),
 
       grossProfit: toDecimalString(grossProfit),

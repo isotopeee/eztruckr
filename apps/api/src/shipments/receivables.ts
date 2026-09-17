@@ -23,7 +23,11 @@ import { revenueOf, type AdditionalChargeRow, type BillableExpenseRow } from './
  * which is how a list quietly starts disagreeing with the card one click away.
  */
 export interface Receivable {
-  /** The whole invoice — freight, rebills and charges. `revenueOf`'s sum. */
+  /**
+   * The whole invoice — the GROSS freight, rebills and charges. `revenueOf`'s
+   * sum. The broker's cut is inside it: it is paid out of what the client
+   * pays, not taken off what they are billed.
+   */
   amountDue: string;
   /**
    * What is still outstanding. Negative when the client has overpaid, and
@@ -64,11 +68,11 @@ export function collectedAmount(
  * Pure, and grouped by shipment id, so the query above and the period report
  * that may one day want this can share the arithmetic without either re-reading
  * the other's rows. Trips with no charges and no payments still get an entry —
- * a freight-only trip owes its net rate, and omitting it would make "no rebills
+ * a freight-only trip owes its gross rate, and omitting it would make "no rebills
  * yet" look like "not computed".
  */
 export function receivablesOf(
-  shipments: readonly { id: string; netRate: { toString(): string } }[],
+  shipments: readonly { id: string; grossRate: { toString(): string } }[],
   billable: readonly ({ shipmentId: string } & BillableExpenseRow)[],
   additional: readonly ({ shipmentId: string } & AdditionalChargeRow)[],
   payments: readonly {
@@ -96,7 +100,7 @@ export function receivablesOf(
   return new Map(
     shipments.map((shipment) => {
       const income = revenueOf(
-        shipment.netRate,
+        shipment.grossRate,
         billableBy.get(shipment.id) ?? [],
         additionalBy.get(shipment.id) ?? [],
       );

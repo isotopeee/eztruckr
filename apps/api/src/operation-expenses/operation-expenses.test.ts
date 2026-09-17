@@ -536,7 +536,8 @@ describe('a trip does not pay for the office', () => {
     const after = await act(() => grossProfits.forShipment(SHIPMENT_ID));
 
     expect(after).toEqual(before);
-    expect(after.cost).toBe('0.00');
+    // The broker's cut and nothing else: the office's 42,000 is not in it.
+    expect(after.cost).toBe('5000.00');
   });
 });
 

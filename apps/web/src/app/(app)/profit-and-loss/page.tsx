@@ -199,13 +199,6 @@ function Statement({ report }: { report: ProfitAndLoss }) {
         <section className="space-y-1">
           <SectionHeading>Revenue</SectionHeading>
           <Line label="Gross freight rate" amount={report.grossRate} indent />
-          <Line
-            label="Less third-party commission"
-            amount={report.thirdPartyCommission}
-            indent
-            negated
-          />
-          <Line label="Net freight rate" amount={report.netRate} />
           <Line label="Rebilled expenses" amount={report.billableExpenses} indent />
           <Line label="Additional charges" amount={report.additionalCharges} indent />
           <Line label="Total revenue" amount={report.revenue} emphasis />
@@ -217,6 +210,7 @@ function Statement({ report }: { report: ProfitAndLoss }) {
           <Line label="Company-paid expenses" amount={report.companyPaidExpenses} indent />
           <Line label="Company-paid rebills" amount={report.companyPaidBillableExpenses} indent />
           <Line label="Crew commissions" amount={report.crewCommissions} indent />
+          <Line label="Third-party commissions" amount={report.thirdPartyCommission} indent />
           <Line label="Total trip costs" amount={report.directCost} emphasis />
           <div className="pt-2">
             <Line label="Gross profit" amount={report.grossProfit} emphasis />
@@ -392,15 +386,12 @@ function Line({
   amount,
   indent,
   emphasis,
-  negated,
   tone,
 }: {
   label: string;
   amount: string;
   indent?: boolean;
   emphasis?: boolean;
-  /** Shown as a deduction, because the line reads as one on the statement. */
-  negated?: boolean;
   tone?: 'loss';
 }) {
   return (
@@ -411,7 +402,7 @@ function Line({
     >
       <span className={indent ? 'text-muted-foreground' : ''}>{label}</span>
       <span className={`tabular-nums ${tone === 'loss' ? 'text-destructive' : ''}`}>
-        {negated && Number(amount) !== 0 ? `(${formatMoney(amount)})` : formatMoney(amount)}
+        {formatMoney(amount)}
       </span>
     </div>
   );

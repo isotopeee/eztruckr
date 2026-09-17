@@ -108,7 +108,7 @@ export class ClientPaymentsService {
         // payments recorded under one date keep the order they were entered.
         orderBy: [{ receivedAt: 'asc' }, { createdAt: 'asc' }],
       }),
-      shipmentRevenue(this.prisma, shipmentId, shipment.netRate),
+      shipmentRevenue(this.prisma, shipmentId, shipment.grossRate),
     ]);
 
     // One check legitimately settles two trips and carries one number on both,

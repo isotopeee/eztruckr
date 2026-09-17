@@ -196,7 +196,7 @@ export function PaymentsCard({ shipment }: { shipment: Shipment }) {
               shown rather than asserted. */}
           {data ? (
             <p className="text-muted-foreground text-[11px]">
-              {formatMoney(data.netRate)} freight
+              {formatMoney(data.grossRate)} freight
               {data.billableExpenses === '0.00'
                 ? ''
                 : ` · ${formatMoney(data.billableExpenses)} rebilled`}

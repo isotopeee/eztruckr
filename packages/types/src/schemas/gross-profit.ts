@@ -11,9 +11,8 @@ import { z } from 'zod';
  *
  * WHAT COUNTS AS REVENUE
  *
- *   netRate           the freight, after the broker's cut. `grossRate` and
- *                     `thirdPartyCommission` are shown so the cut is visible
- *                     as a line rather than silently netted away.
+ *   grossRate         the freight, as billed to the client. The broker's cut
+ *                     is inside it and is charged below as a cost.
  *   billableExpenses  what the client is CHARGED for the rebills — the sum of
  *                     their `billedAmount`. Every rebill is revenue, whoever
  *                     paid for it, and only the recovered part is.
@@ -32,6 +31,10 @@ import { z } from 'zod';
  *                       on a partly recovered rebill is MORE than its revenue
  *                       line above.
  *   crewCommissions     the crew's pay, from the computed rows.
+ *   thirdPartyCommission
+ *                       the broker's cut. The client is billed the gross rate
+ *                       and the cut is paid out of it, so it is spent money,
+ *                       not a discount on the invoice.
  *
  * A REBILL IS ALWAYS REVENUE, AND A COST ONLY IF THE OFFICE PAID FOR IT. Which
  * one it is, is recorded per row on `BillableExpense.liquidationId` rather than
@@ -67,7 +70,7 @@ import { z } from 'zod';
  * so the shortfall falls out of the subtraction on its own.
  *
  * `cost` therefore decomposes as `liquidatedExpenses + companyPaidExpenses +
- * companyPaidBillableExpenses + crewCommissions`, and a company-paid rebill
+ * companyPaidBillableExpenses + crewCommissions + thirdPartyCommission`, and a company-paid rebill
  * nets to zero against its own revenue line by construction — both sides read
  * the one `amount` column. Should a rebill ever need a markup, the answer is a
  * second column on the row, not a second total here.
@@ -118,7 +121,7 @@ import { z } from 'zod';
  *
  *   A CLIENT PAYMENT is not revenue, and this is the one most likely to be
  *   "fixed" by somebody. Revenue is recognised when the trip runs — it is the
- *   three figures above. A `ClientPayment` is the COLLECTION of that revenue,
+ *   three revenue figures above. A `ClientPayment` is the COLLECTION of that revenue,
  *   and adding it here would count the freight twice and make a trip's profit
  *   depend on how quickly the client's accounts payable department moves.
  *   `ClientPaymentSummary` is where the two are compared, and `revenue` here is
@@ -129,8 +132,6 @@ export const grossProfitSchema = z.object({
 
   // --- revenue -------------------------------------------------------------
   grossRate: z.string(),
-  thirdPartyCommission: z.string(),
-  netRate: z.string(),
   billableExpenses: z.string(),
   additionalCharges: z.string(),
   revenue: z.string(),
@@ -149,6 +150,7 @@ export const grossProfitSchema = z.object({
    */
   companyPaidBillableExpenses: z.string(),
   crewCommissions: z.string(),
+  thirdPartyCommission: z.string(),
   cost: z.string(),
 
   grossProfit: z.string(),

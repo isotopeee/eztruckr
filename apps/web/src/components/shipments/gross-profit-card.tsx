@@ -122,8 +122,6 @@ export function GrossProfitCard({ shipment }: { shipment: Shipment }) {
               Revenue
             </h3>
             <Line label="Gross rate" amount={data.grossRate} />
-            <Line label="Third-party cut" amount={data.thirdPartyCommission} negated />
-            <Line label="Net rate" amount={data.netRate} muted />
             <Line label="Billable expenses" amount={data.billableExpenses} note="as billed" />
             <Line label="Additional charges" amount={data.additionalCharges} />
             <Line label="Total revenue" amount={data.revenue} strong />
@@ -157,6 +155,7 @@ export function GrossProfitCard({ shipment }: { shipment: Shipment }) {
               amount={data.crewCommissions}
               note={data.commissionsComputed ? undefined : 'not computed'}
             />
+            <Line label="Third-party cut" amount={data.thirdPartyCommission} />
             <Line label="Total cost" amount={data.cost} strong />
           </section>
         </div>
@@ -193,32 +192,25 @@ export function GrossProfitCard({ shipment }: { shipment: Shipment }) {
 function Line({
   label,
   amount,
-  negated = false,
   strong = false,
-  muted = false,
   note,
 }: {
   label: string;
   amount: string;
-  negated?: boolean;
   strong?: boolean;
-  muted?: boolean;
   note?: string;
 }) {
   return (
     <div
       className={`flex items-baseline justify-between gap-3 text-sm ${
         strong ? 'border-t pt-1 font-medium' : ''
-      } ${muted ? 'text-muted-foreground' : ''}`}
+      }`}
     >
       <span>
         {label}
         {note ? <span className="text-muted-foreground text-xs"> · {note}</span> : null}
       </span>
-      <span className="tabular-nums">
-        {negated && amount !== '0.00' ? '−' : ''}
-        {formatMoney(amount)}
-      </span>
+      <span className="tabular-nums">{formatMoney(amount)}</span>
     </div>
   );
 }

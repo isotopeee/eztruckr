@@ -123,8 +123,8 @@ beforeEach(async () => {
           clientId,
           origin: 'Manila',
           destination: 'Batangas',
-          // 50,000 gross with a 5,000 broker cut leaves 45,000 net — the
-          // figure the client is billed before any rebilled expense.
+          // 50,000 gross with a 5,000 broker cut. The client is billed the
+          // whole 50,000; the cut is paid out of it.
           grossRate: '50000.0000',
           tpcAmount: '5000.0000',
           netRate: '45000.0000',
@@ -292,10 +292,10 @@ describe('what the trip is owed', () => {
 
     expect(summary.amountDue).toBe(profit.revenue);
     // And it decomposes, so a client disputing the figure can be shown it.
-    expect(summary.netRate).toBe('45000.00');
+    expect(summary.grossRate).toBe('50000.00');
     expect(summary.billableExpenses).toBe('1500.00');
     expect(summary.additionalCharges).toBe('2500.00');
-    expect(summary.amountDue).toBe('49000.00');
+    expect(summary.amountDue).toBe('54000.00');
   });
 
   /**
@@ -360,8 +360,8 @@ describe('what the trip is owed', () => {
     expect(row?.balance).toBe(summary.balance);
     // Pinned as well as compared: two implementations that agree on the wrong
     // number would satisfy the two lines above on their own.
-    expect(summary.amountDue).toBe('48700.00');
-    expect(summary.balance).toBe('28700.00');
+    expect(summary.amountDue).toBe('53700.00');
+    expect(summary.balance).toBe('33700.00');
   });
 
   /**
@@ -400,7 +400,7 @@ describe('where the trip stands', () => {
 
     expect(summary.status).toBe('UNPAID');
     expect(summary.amountPaid).toBe('0.00');
-    expect(summary.balance).toBe('45000.00');
+    expect(summary.balance).toBe('50000.00');
   });
 
   it('is PARTIALLY_PAID after a downpayment', async () => {
@@ -410,14 +410,14 @@ describe('where the trip stands', () => {
     const summary = await payments.summary(SHIPMENT_ID);
 
     expect(summary.status).toBe('PARTIALLY_PAID');
-    expect(summary.balance).toBe('25000.00');
+    expect(summary.balance).toBe('30000.00');
   });
 
   it('is PAID once the balance is settled', async () => {
     if (!available) return;
 
     await pay('20000.00');
-    await pay('25000.00');
+    await pay('30000.00');
     const summary = await payments.summary(SHIPMENT_ID);
 
     expect(summary.status).toBe('PAID');
@@ -431,7 +431,7 @@ describe('where the trip stands', () => {
   it('is OVERPAID with a negative balance, rather than refusing the payment', async () => {
     if (!available) return;
 
-    await pay('50000.00');
+    await pay('55000.00');
     const summary = await payments.summary(SHIPMENT_ID);
 
     expect(summary.status).toBe('OVERPAID');
@@ -453,9 +453,9 @@ describe('a trip that has already closed', () => {
 
     await setStatus(ShipmentStatus.CLOSED);
 
-    const payment = await pay('45000.00');
+    const payment = await pay('50000.00');
 
-    expect(payment.amount).toBe('45000.00');
+    expect(payment.amount).toBe('50000.00');
     expect((await payments.summary(SHIPMENT_ID)).status).toBe('PAID');
   });
 });
@@ -470,14 +470,14 @@ describe('reversing a payment', () => {
   it('takes it back off the balance', async () => {
     if (!available) return;
 
-    const payment = await pay('45000.00');
+    const payment = await pay('50000.00');
     expect((await payments.summary(SHIPMENT_ID)).status).toBe('PAID');
 
     await act(() => payments.remove(SHIPMENT_ID, payment.id, asAccounting()));
 
     const summary = await payments.summary(SHIPMENT_ID);
     expect(summary.status).toBe('UNPAID');
-    expect(summary.balance).toBe('45000.00');
+    expect(summary.balance).toBe('50000.00');
     expect(summary.paymentCount).toBe(0);
   });
 
@@ -581,7 +581,7 @@ describe('a payment recorded by dispatch', () => {
     const summary = await payments.summary(SHIPMENT_ID);
 
     expect(summary.amountPaid).toBe('20000.00');
-    expect(summary.balance).toBe('25000.00');
+    expect(summary.balance).toBe('30000.00');
     expect(summary.status).toBe('PARTIALLY_PAID');
     // But nobody has confirmed any of it, and the summary says so.
     expect(summary.amountVerified).toBe('0.00');

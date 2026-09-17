@@ -253,12 +253,13 @@ export const clientPaymentSummarySchema = z.object({
 
   // --- what the client owes, and out of what ------------------------------
   /**
-   * The freight after the broker's cut, plus everything rebilled to the client.
+   * The gross freight — the broker's cut is paid out of it, not taken off it —
+   * plus everything rebilled to the client.
    * The same figure `GrossProfit.revenue` reports, computed in one place so an
    * invoice and a P&L cannot disagree about what the trip was worth.
    */
   amountDue: z.string(),
-  netRate: z.string(),
+  grossRate: z.string(),
   billableExpenses: z.string(),
   additionalCharges: z.string(),
 

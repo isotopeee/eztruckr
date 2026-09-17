@@ -83,7 +83,6 @@ export class GrossProfitService {
     return grossProfitOf(shipmentId, {
       grossRate: shipment.grossRate,
       tpcAmount: shipment.tpcAmount,
-      netRate: shipment.netRate,
       billable,
       additional,
       companyPaid,
@@ -112,7 +111,6 @@ export class GrossProfitService {
 export interface GrossProfitRows {
   grossRate: { toString(): string };
   tpcAmount: { toString(): string };
-  netRate: { toString(): string };
   billable: readonly BillableExpenseRow[];
   additional: readonly AdditionalChargeRow[];
   companyPaid: readonly { amount: { toString(): string } }[];
@@ -140,7 +138,7 @@ export interface GrossProfitRows {
  * are deliberately absent.
  */
 export function grossProfitOf(shipmentId: string, rows: GrossProfitRows): GrossProfit {
-  const income = revenueOf(rows.netRate, rows.billable, rows.additional);
+  const income = revenueOf(rows.grossRate, rows.billable, rows.additional);
   const revenue = income.revenue;
 
   // EVERY ACCOUNT, not any one of them. A trip carries one liquidation per
@@ -168,6 +166,12 @@ export function grossProfitOf(shipmentId: string, rows: GrossProfitRows): GrossP
   const companyPaidExpenses = sum(rows.companyPaid.map((row) => row.amount));
   const crewCommissions = sum(rows.commissions.map((row) => row.amount));
 
+  // THE BROKER'S CUT IS A COST, not a discount on revenue. The client is billed
+  // the gross rate and the cut is paid out of it, so netting it off revenue
+  // would under-report what was invoiced; leaving it out of cost would hand
+  // the broker's money to the trip as profit.
+  const thirdPartyCommission = money(rows.tpcAmount);
+
   // A REBILL IS A COST ONLY IF THE OFFICE PAID FOR IT, which is what
   // `BillableExpense.liquidationId` records.
   //
@@ -190,7 +194,8 @@ export function grossProfitOf(shipmentId: string, rows: GrossProfitRows): GrossP
   const cost = liquidatedExpenses
     .add(companyPaidExpenses)
     .add(income.companyPaidBillableExpenses)
-    .add(crewCommissions);
+    .add(crewCommissions)
+    .add(thirdPartyCommission);
 
   const grossProfit = revenue.subtract(cost);
 
@@ -203,19 +208,18 @@ export function grossProfitOf(shipmentId: string, rows: GrossProfitRows): GrossP
   return {
     shipmentId,
 
-    // Every figure at 2dp, INCLUDING the three copied off the shipment.
+    // Every figure at 2dp, INCLUDING the two copied off the shipment.
     // `Decimal.toString()` drops trailing zeros, so a raw echo would put
     // "50000" beside a computed "48500.00" in one breakdown — and a column
     // of numbers that disagree about their own format is the first thing
     // that makes a reader doubt the arithmetic.
-    grossRate: toDecimalString(money(rows.grossRate)),
-    thirdPartyCommission: toDecimalString(money(rows.tpcAmount)),
     ...revenueAsStrings(income),
 
     liquidatedExpenses: toDecimalString(liquidatedExpenses),
     companyPaidExpenses: toDecimalString(companyPaidExpenses),
     companyPaidBillableExpenses: toDecimalString(income.companyPaidBillableExpenses),
     crewCommissions: toDecimalString(crewCommissions),
+    thirdPartyCommission: toDecimalString(thirdPartyCommission),
     cost: toDecimalString(cost),
 
     grossProfit: toDecimalString(grossProfit),

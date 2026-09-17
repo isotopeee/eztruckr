@@ -18,7 +18,7 @@ import { receivablesOf } from './receivables';
  * card's.
  */
 
-const trip = (id: string, netRate: string) => ({ id, netRate });
+const trip = (id: string, grossRate: string) => ({ id, grossRate });
 
 const rebill = (shipmentId: string, amount: string, billedAmount: string) => ({
   shipmentId,

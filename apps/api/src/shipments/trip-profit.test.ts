@@ -177,7 +177,7 @@ beforeEach(async () => {
         driverId: staffId,
         origin: 'Manila',
         destination: 'Batangas',
-        // 50,000 gross with a 5,000 broker cut leaves 45,000 net.
+        // 50,000 gross, billed in full, with a 5,000 broker cut as cost.
         grossRate: '50000.0000',
         tpcAmount: '5000.0000',
         netRate: '45000.0000',
@@ -683,7 +683,7 @@ describe('gross profit', () => {
     );
   }
 
-  it('adds revenue up from the net rate, the rebills and the fees', async () => {
+  it('adds revenue up from the gross rate, the rebills and the fees', async () => {
     if (!available) return;
 
     await act(() =>
@@ -713,11 +713,10 @@ describe('gross profit', () => {
 
     expect(profit.grossRate).toBe('50000.00');
     expect(profit.thirdPartyCommission).toBe('5000.00');
-    expect(profit.netRate).toBe('45000.00');
     expect(profit.billableExpenses).toBe('2000.00');
     expect(profit.additionalCharges).toBe('1500.00');
-    // 45,000 + 2,000 + 1,500
-    expect(profit.revenue).toBe('48500.00');
+    // 50,000 + 2,000 + 1,500 — the client is billed the gross rate.
+    expect(profit.revenue).toBe('53500.00');
   });
 
   it('counts a company-paid expense as cost the moment it is recorded', async () => {
@@ -728,7 +727,7 @@ describe('gross profit', () => {
     const profit = await grossProfits.forShipment(SHIPMENT_ID);
 
     expect(profit.companyPaidExpenses).toBe('6200.00');
-    expect(profit.cost).toBe('6200.00');
+    expect(profit.cost).toBe('11200.00');
     expect(profit.grossProfit).toBe('38800.00');
   });
 
@@ -755,8 +754,8 @@ describe('gross profit', () => {
 
     // Both sides moved, by the same figure, because it is the same figure.
     expect(after.billableExpenses).toBe('2000.00');
-    expect(after.revenue).toBe('47000.00');
-    expect(after.cost).toBe('2000.00');
+    expect(after.revenue).toBe('52000.00');
+    expect(after.cost).toBe('7000.00');
 
     // And so the profit did not move at all.
     expect(before.grossProfit).toBe('45000.00');
@@ -765,7 +764,7 @@ describe('gross profit', () => {
     // The margin does move — the same profit spread over a larger revenue,
     // which is the honest read of a pass-through and the reason a rebill is
     // not a way to make a trip look better.
-    expect(after.margin).toBe('0.9574');
+    expect(after.margin).toBe('0.8654');
   });
 
   /**
@@ -785,7 +784,7 @@ describe('gross profit', () => {
 
     // 9,000 claimed + 6,200 office + 2,000 rebilled, and nothing yet for the
     // commissions — the four terms `cost` is documented to decompose into.
-    expect(profit.cost).toBe('17200.00');
+    expect(profit.cost).toBe('22200.00');
     // 47,000 of revenue less 17,200 of cost.
     expect(profit.grossProfit).toBe('29800.00');
   });
@@ -813,12 +812,12 @@ describe('gross profit', () => {
 
     // Revenue counts it like any other rebill — the client is billed either way.
     expect(crewPaid.billableExpenses).toBe('2000.00');
-    expect(crewPaid.revenue).toBe('47000.00');
+    expect(crewPaid.revenue).toBe('52000.00');
 
     // The cost is the liquidation line, ONCE. Not the line and the rebill.
     expect(crewPaid.liquidatedExpenses).toBe('2000.00');
     expect(crewPaid.companyPaidBillableExpenses).toBe('0.00');
-    expect(crewPaid.cost).toBe('2000.00');
+    expect(crewPaid.cost).toBe('7000.00');
     expect(crewPaid.grossProfit).toBe('45000.00');
 
     // The same expense, same everything, paid by the office instead: now the
@@ -831,7 +830,7 @@ describe('gross profit', () => {
     expect(both.companyPaidBillableExpenses).toBe('2000.00');
     // 2,000 liquidated + 2,000 office-paid rebill. The crew's is still counted
     // once, through the liquidation.
-    expect(both.cost).toBe('4000.00');
+    expect(both.cost).toBe('9000.00');
     expect(both.grossProfit).toBe('45000.00');
   });
 
@@ -849,7 +848,7 @@ describe('gross profit', () => {
     const miscounted = await grossProfits.forShipment(SHIPMENT_ID);
 
     // The permit counted twice: once on the crew's line, once on the rebill.
-    expect(miscounted.cost).toBe('4000.00');
+    expect(miscounted.cost).toBe('9000.00');
 
     await act(() =>
       charges.updateBillableExpense(SHIPMENT_ID, rebill.id, { liquidationLineId: account.lineId }),
@@ -858,9 +857,9 @@ describe('gross profit', () => {
     const corrected = await grossProfits.forShipment(SHIPMENT_ID);
 
     expect(corrected.companyPaidBillableExpenses).toBe('0.00');
-    expect(corrected.cost).toBe('2000.00');
+    expect(corrected.cost).toBe('7000.00');
     // Revenue never moved — the client is billed the permit either way.
-    expect(corrected.revenue).toBe('47000.00');
+    expect(corrected.revenue).toBe('52000.00');
   });
 
   /**
@@ -879,11 +878,11 @@ describe('gross profit', () => {
 
     // The client owes what was AGREED, not what it cost.
     expect(profit.billableExpenses).toBe('1500.00');
-    expect(profit.revenue).toBe('46500.00');
+    expect(profit.revenue).toBe('51500.00');
 
     // The trip spent the whole ₱2,000 — the discount does not un-spend it.
     expect(profit.companyPaidBillableExpenses).toBe('2000.00');
-    expect(profit.cost).toBe('2000.00');
+    expect(profit.cost).toBe('7000.00');
 
     // 45,000 of freight less the ₱500 nobody recovered.
     expect(profit.grossProfit).toBe('44500.00');
@@ -926,7 +925,7 @@ describe('gross profit', () => {
     // Nothing on the rebill row, because the crew's line already has it.
     expect(profit.companyPaidBillableExpenses).toBe('0.00');
     expect(profit.liquidatedExpenses).toBe('2000.00');
-    expect(profit.cost).toBe('2000.00');
+    expect(profit.cost).toBe('7000.00');
     // The same ₱44,500 as the office-paid case — whose cash paid for it does
     // not change what the trip made.
     expect(profit.grossProfit).toBe('44500.00');
@@ -991,7 +990,7 @@ describe('gross profit', () => {
     const profit = await grossProfits.forShipment(SHIPMENT_ID);
 
     expect(profit.liquidatedExpenses).toBe('2000.00');
-    expect(profit.cost).toBe('2000.00');
+    expect(profit.cost).toBe('7000.00');
   });
 
   it('has no variance to report when the office paid', async () => {
@@ -1026,7 +1025,7 @@ describe('gross profit', () => {
     const profit = await grossProfits.forShipment(SHIPMENT_ID);
 
     expect(profit.billableExpenses).toBe('2000.00');
-    expect(profit.cost).toBe('2000.00');
+    expect(profit.cost).toBe('7000.00');
   });
 
   /**
@@ -1324,8 +1323,8 @@ describe('gross profit', () => {
 
     const profit = await grossProfits.forShipment(SHIPMENT_ID);
 
-    // Cost is the fuel invoice alone. 45,000 - 6,200.
-    expect(profit.cost).toBe('6200.00');
+    // Cost is the fuel invoice and the broker's cut. 50,000 - 11,200.
+    expect(profit.cost).toBe('11200.00');
     expect(profit.grossProfit).toBe('38800.00');
   });
 
@@ -1365,8 +1364,8 @@ describe('gross profit', () => {
     if (!available) return;
 
     const earning = await grossProfits.forShipment(SHIPMENT_ID);
-    // 45,000 profit on 45,000 revenue, nothing spent yet.
-    expect(earning.margin).toBe('1.0000');
+    // 45,000 profit on 50,000 revenue — the broker's cut is the only cost yet.
+    expect(earning.margin).toBe('0.9000');
 
     await prisma.shipment.update({
       where: { id: SHIPMENT_ID },

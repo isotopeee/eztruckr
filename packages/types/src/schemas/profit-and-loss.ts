@@ -171,10 +171,8 @@ export const profitAndLossSchema = z.object({
   to: z.string().nullable(),
 
   // --- revenue, from the trips that ran in the window ----------------------
-  /** The freight before the broker's cut, shown so the cut is a visible line. */
+  /** The freight as billed. The broker's cut is inside it, and charged below. */
   grossRate: z.string(),
-  thirdPartyCommission: z.string(),
-  netRate: z.string(),
   billableExpenses: z.string(),
   additionalCharges: z.string(),
   revenue: z.string(),
@@ -184,8 +182,10 @@ export const profitAndLossSchema = z.object({
   companyPaidExpenses: z.string(),
   companyPaidBillableExpenses: z.string(),
   crewCommissions: z.string(),
+  /** The brokers' cuts — paid out of the gross rate, so a cost of the trips. */
+  thirdPartyCommission: z.string(),
   /**
-   * The four above. Named `directCost` rather than `cost` precisely because
+   * The five above. Named `directCost` rather than `cost` precisely because
    * there is a second cost below it — a field called `cost` sitting above an
    * overhead line is one somebody eventually reads as the total.
    */

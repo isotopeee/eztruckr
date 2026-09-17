@@ -405,10 +405,6 @@ describe('the period’s trip figures', () => {
     // agreed on the bottom line while misfiling a rebill between revenue and
     // cost would pass on the assertions above alone.
     expect(period.grossRate).toBe(add(first.grossRate, second.grossRate));
-    expect(period.thirdPartyCommission).toBe(
-      add(first.thirdPartyCommission, second.thirdPartyCommission),
-    );
-    expect(period.netRate).toBe(add(first.netRate, second.netRate));
     expect(period.billableExpenses).toBe(add(first.billableExpenses, second.billableExpenses));
     expect(period.additionalCharges).toBe(add(first.additionalCharges, second.additionalCharges));
     expect(period.liquidatedExpenses).toBe(
@@ -421,6 +417,9 @@ describe('the period’s trip figures', () => {
       add(first.companyPaidBillableExpenses, second.companyPaidBillableExpenses),
     );
     expect(period.crewCommissions).toBe(add(first.crewCommissions, second.crewCommissions));
+    expect(period.thirdPartyCommission).toBe(
+      add(first.thirdPartyCommission, second.thirdPartyCommission),
+    );
 
     expect(period.shipmentCount).toBe(2);
   });
@@ -436,7 +435,7 @@ describe('the period’s trip figures', () => {
     // The property a reader checks on paper, and the one that makes the total
     // auditable rather than merely plausible.
     expect(period.revenue).toBe(
-      add(period.netRate, period.billableExpenses, period.additionalCharges),
+      add(period.grossRate, period.billableExpenses, period.additionalCharges),
     );
     expect(period.directCost).toBe(
       add(
@@ -444,6 +443,7 @@ describe('the period’s trip figures', () => {
         period.companyPaidExpenses,
         period.companyPaidBillableExpenses,
         period.crewCommissions,
+        period.thirdPartyCommission,
       ),
     );
     expect(period.grossProfit).toBe(subtract(period.revenue, period.directCost));

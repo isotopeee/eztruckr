@@ -13,8 +13,11 @@ import type { PrismaService } from '../prisma/prisma.service';
  *
  * WHAT COUNTS, unchanged from the definition on `grossProfitSchema`:
  *
- *   netRate           the freight, after the broker's cut. The gross rate is
- *                     not what the company collects when a broker is involved.
+ *   grossRate         the freight, as agreed with the client. The broker's cut
+ *                     is NOT netted off here: the client is billed the whole
+ *                     rate, and the cut is paid out of it — so it is a COST of
+ *                     the trip, charged by `grossProfitOf`, not a discount on
+ *                     the invoice.
  *   billableExpenses  what is REBILLED — the sum of `billedAmount`, not of
  *                     `amount`. Every rebill is revenue, whoever paid for it,
  *                     and only the part actually charged to the client is.
@@ -45,12 +48,12 @@ import type { PrismaService } from '../prisma/prisma.service';
  * would both double the freight and make what a client owes depend on what they
  * have already paid.
  *
- * THE NET RATE IS PASSED IN rather than loaded, because both callers have
+ * THE GROSS RATE IS PASSED IN rather than loaded, because both callers have
  * already loaded the shipment for their own reasons and a second read would buy
  * nothing but a chance for the two to disagree about which row they meant.
  */
 export interface ShipmentRevenue {
-  netRate: Money;
+  grossRate: Money;
   /** What is charged to the client for the rebills — their `billedAmount`. */
   billableExpenses: Money;
   additionalCharges: Money;
@@ -88,7 +91,7 @@ export interface AdditionalChargeRow {
 export async function shipmentRevenue(
   prisma: PrismaService,
   shipmentId: string,
-  netRate: { toString(): string },
+  grossRate: { toString(): string },
 ): Promise<ShipmentRevenue> {
   const [billable, additional] = await Promise.all([
     prisma.client.billableExpense.findMany({
@@ -98,7 +101,7 @@ export async function shipmentRevenue(
     prisma.client.additionalCharge.findMany({ where: { shipmentId }, select: { amount: true } }),
   ]);
 
-  return revenueOf(netRate, billable, additional);
+  return revenueOf(grossRate, billable, additional);
 }
 
 /**
@@ -116,20 +119,20 @@ export async function shipmentRevenue(
  * thing that must not be duplicated is what the columns MEAN.
  */
 export function revenueOf(
-  netRate: { toString(): string },
+  grossRate: { toString(): string },
   billable: readonly BillableExpenseRow[],
   additional: readonly AdditionalChargeRow[],
 ): ShipmentRevenue {
   // BILLED, not spent. The client owes what was agreed, not what it cost.
   const billableExpenses = sum(billable.map((row) => row.billedAmount));
   const additionalCharges = sum(additional.map((row) => row.amount));
-  const net = money(netRate);
+  const gross = money(grossRate);
 
   return {
-    netRate: net,
+    grossRate: gross,
     billableExpenses,
     additionalCharges,
-    revenue: net.add(billableExpenses).add(additionalCharges),
+    revenue: gross.add(billableExpenses).add(additionalCharges),
 
     // No link means nobody else recorded this money leaving, so this row is
     // the disbursement. The filter is on the link ALONE and not on, say,
@@ -157,7 +160,7 @@ export function revenueOf(
  */
 export function revenueAsStrings(revenue: ShipmentRevenue) {
   return {
-    netRate: toDecimalString(revenue.netRate),
+    grossRate: toDecimalString(revenue.grossRate),
     billableExpenses: toDecimalString(revenue.billableExpenses),
     additionalCharges: toDecimalString(revenue.additionalCharges),
     revenue: toDecimalString(revenue.revenue),
