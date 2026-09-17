@@ -17,6 +17,7 @@ import type {
   CreateShipmentInput,
   GasRateContext,
   GrossProfit,
+  MarkThirdPartyCommissionPaidInput,
   Page,
   RecordClientPaymentInput,
   RuleCoverageReport,
@@ -129,6 +130,33 @@ export function updateRateChain(id: string, input: UpdateRateChainInput): Promis
   return apiFetch<Shipment>(`/shipments/${id}/rate-chain`, {
     method: 'PATCH',
     body: JSON.stringify(input),
+  });
+}
+
+/** Marking the broker's cut as paid, or correcting how it was paid. */
+export function markThirdPartyCommissionPaid(
+  id: string,
+  input: MarkThirdPartyCommissionPaidInput,
+): Promise<Shipment> {
+  return apiFetch<Shipment>(`/shipments/${id}/third-party-payment`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+export function unmarkThirdPartyCommissionPaid(id: string): Promise<Shipment> {
+  return apiFetch<Shipment>(`/shipments/${id}/third-party-payment`, { method: 'DELETE' });
+}
+
+/** Accounting confirming the broker was paid. No payload, like a client payment. */
+export function verifyThirdPartyCommissionPayment(id: string): Promise<Shipment> {
+  return apiFetch<Shipment>(`/shipments/${id}/third-party-payment/verify`, { method: 'POST' });
+}
+
+export function returnThirdPartyCommissionPayment(id: string, reason: string): Promise<Shipment> {
+  return apiFetch<Shipment>(`/shipments/${id}/third-party-payment/return`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
   });
 }
 

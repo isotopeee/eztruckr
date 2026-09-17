@@ -266,6 +266,17 @@ export const CAN_RECORD_CLIENT_PAYMENT = [
 export const CAN_VERIFY_CLIENT_PAYMENT = CAN_WRITE_SHIPMENT_MONEY;
 
 /**
+ * Recording that the broker was paid their cut, and checking it.
+ *
+ * The same two lists as a client payment, and for the same reason: the
+ * dispatch manager is who hears the broker was paid, and accounting confirms
+ * it. A dispatch manager's entry waits UNVERIFIED; an accountant's is verified
+ * on the spot. Derived so the two controls cannot drift apart.
+ */
+export const CAN_RECORD_THIRD_PARTY_PAYMENT = CAN_RECORD_CLIENT_PAYMENT;
+export const CAN_VERIFY_THIRD_PARTY_PAYMENT = CAN_VERIFY_CLIENT_PAYMENT;
+
+/**
  * The overhead ledger: what it costs to keep the company open.
  *
  * NOT `CAN_WRITE_SHIPMENT_MONEY`, and the difference is not cosmetic. That

@@ -301,8 +301,15 @@ export const clientPaymentSummarySchema = z.object({
 
   paymentCount: z.number().int().nonnegative(),
 
-  /** Due minus paid. NEGATIVE when the client has overpaid, which is a real
-   * state and is reported rather than clamped to zero. */
+  /**
+   * The broker's cut, once it is marked paid on the shipment. Zero while it is
+   * unpaid, and on a trip with no broker. Deducted from the balance.
+   */
+  thirdPartyCommissionPaid: z.string(),
+
+  /** Due minus paid, minus `thirdPartyCommissionPaid`. NEGATIVE when the client
+   * has overpaid, which is a real state and is reported rather than clamped to
+   * zero. */
   balance: z.string(),
 
   status: paymentStatusSchema,

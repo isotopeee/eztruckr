@@ -6,6 +6,7 @@ import {
   clientPaymentListQuerySchema,
   createCompanyPaidExpenseSchema,
   createShipmentSchema,
+  markThirdPartyCommissionPaidSchema,
   returnClientPaymentSchema,
   recordClientPaymentSchema,
   setGasRateOverrideSchema,
@@ -37,6 +38,9 @@ export class AssignCrewDto extends createZodDto(assignCrewSchema) {}
 export class AssignTruckDto extends createZodDto(assignTruckSchema) {}
 export class TransitionShipmentDto extends createZodDto(transitionShipmentSchema) {}
 export class SetGasRateOverrideDto extends createZodDto(setGasRateOverrideSchema) {}
+export class MarkThirdPartyCommissionPaidDto extends createZodDto(
+  markThirdPartyCommissionPaidSchema,
+) {}
 
 export class CreateBillableExpenseDto extends createZodDto(createBillableExpenseSchema) {}
 export class UpdateBillableExpenseDto extends createZodDto(updateBillableExpenseSchema) {}

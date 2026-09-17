@@ -183,6 +183,14 @@ export function PaymentsCard({ shipment }: { shipment: Shipment }) {
               </span>
             </div>
           ) : null}
+          {/* Billed in full, but once the broker has been paid their cut it is
+              no longer the client's to settle. */}
+          {data && data.thirdPartyCommissionPaid !== '0.00' ? (
+            <div className="flex items-baseline justify-between">
+              <span className="text-muted-foreground text-sm">Third-party cut, paid to broker</span>
+              <span className="tabular-nums">−{formatMoney(data.thirdPartyCommissionPaid)}</span>
+            </div>
+          ) : null}
           <div className="flex items-baseline justify-between">
             <span className="text-sm font-medium">Balance</span>
             <span className="flex items-center gap-2">

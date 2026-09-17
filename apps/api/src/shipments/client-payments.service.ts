@@ -31,7 +31,7 @@ import {
 } from '../common/repeated-references';
 import { auditFields, dateToIso } from '../master-data/serialize';
 import { PrismaService } from '../prisma/prisma.service';
-import { collectedAmount } from './receivables';
+import { collectedAmount, paidThirdPartyCommission } from './receivables';
 import { revenueAsStrings, shipmentRevenue } from './shipment-revenue';
 import { ShipmentsService } from './shipments.service';
 
@@ -135,6 +135,10 @@ export class ClientPaymentsService {
     // this card would start disagreeing about one trip.
     const amountPaid = collectedAmount(rows);
     const amountDue = income.revenue;
+    const cutPaid = paidThirdPartyCommission(shipment);
+    // What the client still has to settle: the invoice less the cut once it is
+    // paid. The status is measured against the same figure as the balance.
+    const outstanding = amountDue.subtract(cutPaid);
 
     // The P&L calls this sum `revenue`; an invoice calls it what is owed. Same
     // number, renamed here rather than sent under both keys — a response
@@ -163,8 +167,9 @@ export class ClientPaymentsService {
       // Negative when the client has overpaid, and deliberately not clamped:
       // "we owe them ₱2,000" is a fact somebody has to act on, and a zero
       // would hide it.
-      balance: toDecimalString(amountDue.subtract(amountPaid)),
-      status: paymentStatusOf(toDecimalString(amountDue), toDecimalString(amountPaid)),
+      thirdPartyCommissionPaid: toDecimalString(cutPaid),
+      balance: toDecimalString(outstanding.subtract(amountPaid)),
+      status: paymentStatusOf(toDecimalString(outstanding), toDecimalString(amountPaid)),
 
       payments: rows.map((row) => {
         const reference = normaliseReference(row.referenceNumber);

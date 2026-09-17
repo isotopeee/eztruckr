@@ -179,6 +179,8 @@ model User {
   shipmentsUpdated Shipment[] @relation("ShipmentUpdatedBy")
   shipmentsDeleted Shipment[] @relation("ShipmentDeletedBy")
 
+  shipmentTpcPaymentsVerified Shipment[] @relation("ShipmentTpcVerifiedBy")
+
   allowancesCreated Allowance[] @relation("AllowanceCreatedBy")
   allowancesUpdated Allowance[] @relation("AllowanceUpdatedBy")
   allowancesDeleted Allowance[] @relation("AllowanceDeletedBy")
@@ -1003,6 +1005,27 @@ model Shipment {
   /// Set when the TPC was derived as a percentage of gross; null when it was
   /// agreed as a flat amount. Frozen at computation.
   appliedTpcRate Decimal? @db.Decimal(5, 4)
+
+  // --- paying the broker their cut ---------------------------------------
+  /// When the cut was paid. Null means unpaid. When set, `tpcAmount` is
+  /// deducted from what the client still owes. A CHECK requires a method
+  /// alongside it, and the details to be cleared with it.
+  tpcPaidAt             DateTime? @db.Timestamptz(6)
+  /// Code set: PaymentMethod (1 CASH, 2 BANK_TRANSFER, 3 EWALLET, 4 CHECK).
+  tpcPaymentMethod      Int?      @db.SmallInt
+  tpcReferenceNumber    String?
+  tpcPaymentRemarks     String?
+  /// Code set: PaymentVerificationStatus (1 UNVERIFIED, 2 VERIFIED, 3 RETURNED).
+  /// Null while unpaid. A dispatch manager's entry is UNVERIFIED until
+  /// accounting verifies or returns it; accounting's own is VERIFIED at once.
+  /// RETURNED is not deducted from the client's balance.
+  tpcVerificationStatus Int?      @db.SmallInt
+  /// Who verified or returned it, and when. Null while UNVERIFIED.
+  tpcVerifiedBy         String?   @db.Uuid
+  tpcVerifiedByUser     User?     @relation("ShipmentTpcVerifiedBy", fields: [tpcVerifiedBy], references: [id], onDelete: Restrict)
+  tpcVerifiedAt         DateTime? @db.Timestamptz(6)
+  /// Why accounting returned it. Required on RETURNED, forbidden otherwise.
+  tpcVerificationNote   String?
 
   // --- the gas deduction rate: one input, one output --------------------
   //

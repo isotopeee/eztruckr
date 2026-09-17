@@ -80,7 +80,15 @@ const EXPECTED: ReadonlyArray<{ constraint: string; codes: readonly number[] }> 
     codes: Object.values(PaymentMethod),
   },
   {
+    constraint: 'shipment_tpc_payment_method_code_valid',
+    codes: Object.values(PaymentMethod),
+  },
+  {
     constraint: 'client_payment_verification_status_code_valid',
+    codes: Object.values(PaymentVerificationStatus),
+  },
+  {
+    constraint: 'shipment_tpc_verification_status_code_valid',
     codes: Object.values(PaymentVerificationStatus),
   },
   { constraint: 'adjustment_direction_code_valid', codes: Object.values(AdjustmentDirection) },

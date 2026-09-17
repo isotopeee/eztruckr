@@ -1,8 +1,11 @@
 import {
+  PaymentVerificationStatus,
   countsAsCollected,
   isPaymentVerificationStatus,
+  money,
   sum,
   toDecimalString,
+  zero,
   type Money,
 } from '@eztruckr/types';
 import { revenueOf, type AdditionalChargeRow, type BillableExpenseRow } from './shipment-revenue';
@@ -30,7 +33,8 @@ export interface Receivable {
    */
   amountDue: string;
   /**
-   * What is still outstanding. Negative when the client has overpaid, and
+   * What is still outstanding: due, less what was collected, less the broker's
+   * cut once it is marked paid. Negative when the client has overpaid, and
    * deliberately not clamped, for the reason given on the summary: "we owe them
    * ₱2,000" is a fact somebody has to act on and a zero would hide it.
    */
@@ -63,6 +67,26 @@ export function collectedAmount(
 }
 
 /**
+ * The broker's cut, if it has been marked paid — otherwise zero.
+ *
+ * A RETURNED payment is not deducted: accounting looked and could not match
+ * it. An UNVERIFIED one is, the same way an unverified client payment counts
+ * as collected. Deducted from what the client still owes. Shared by the list and the
+ * payments card so the two balances cannot disagree about it.
+ */
+export function paidThirdPartyCommission(shipment: {
+  tpcAmount: { toString(): string };
+  tpcPaidAt: Date | null;
+  tpcVerificationStatus: number | null;
+}): Money {
+  const counts =
+    shipment.tpcPaidAt !== null &&
+    shipment.tpcVerificationStatus !== PaymentVerificationStatus.RETURNED;
+
+  return counts ? money(shipment.tpcAmount) : zero();
+}
+
+/**
  * The same two figures, from rows somebody else loaded.
  *
  * Pure, and grouped by shipment id, so the query above and the period report
@@ -72,7 +96,13 @@ export function collectedAmount(
  * yet" look like "not computed".
  */
 export function receivablesOf(
-  shipments: readonly { id: string; grossRate: { toString(): string } }[],
+  shipments: readonly {
+    id: string;
+    grossRate: { toString(): string };
+    tpcAmount: { toString(): string };
+    tpcPaidAt: Date | null;
+    tpcVerificationStatus: number | null;
+  }[],
   billable: readonly ({ shipmentId: string } & BillableExpenseRow)[],
   additional: readonly ({ shipmentId: string } & AdditionalChargeRow)[],
   payments: readonly {
@@ -110,7 +140,9 @@ export function receivablesOf(
         shipment.id,
         {
           amountDue: toDecimalString(income.revenue),
-          balance: toDecimalString(income.revenue.subtract(collected)),
+          balance: toDecimalString(
+            income.revenue.subtract(collected).subtract(paidThirdPartyCommission(shipment)),
+          ),
         },
       ];
     }),

@@ -72,6 +72,7 @@ async function cleanup(): Promise<void> {
     }
 
     await tx.$executeRawUnsafe(`DELETE FROM "client" WHERE id::text LIKE '${PREFIX}%'`);
+    await tx.$executeRawUnsafe(`DELETE FROM "third_party" WHERE id::text LIKE '${PREFIX}%'`);
   });
 }
 
@@ -110,6 +111,7 @@ beforeEach(async () => {
   await withActor({ userId: adminId }, async () => {
     await prisma.client.create({ data: { id: id('client'), name: 'Payment Test Client' } });
     clientId = id('client');
+    await prisma.thirdParty.create({ data: { id: id('broker'), name: 'Payment Test Broker' } });
 
     for (const [suffix, shipmentId] of [
       ['A', SHIPMENT_ID],
@@ -125,6 +127,7 @@ beforeEach(async () => {
           destination: 'Batangas',
           // 50,000 gross with a 5,000 broker cut. The client is billed the
           // whole 50,000; the cut is paid out of it.
+          thirdPartyId: id('broker'),
           grossRate: '50000.0000',
           tpcAmount: '5000.0000',
           netRate: '45000.0000',
@@ -436,6 +439,183 @@ describe('where the trip stands', () => {
 
     expect(summary.status).toBe('OVERPAID');
     expect(summary.balance).toBe('-5000.00');
+  });
+});
+
+/**
+ * Paying the broker their cut. The cut stays in what the client is billed;
+ * marking it paid takes it off what the client still owes.
+ */
+describe('the third-party cut', () => {
+  const markPaid = (user: RequestUser = asAccounting()) =>
+    act(() =>
+      shipments.markThirdPartyCommissionPaid(
+        SHIPMENT_ID,
+        {
+          paidAt: '2026-09-10T00:00:00.000Z',
+          paymentMethod: PaymentMethod.BANK_TRANSFER,
+          referenceNumber: 'BPI-9001',
+          remarks: 'Paid to broker',
+        },
+        user,
+      ),
+    );
+
+  it('is deducted from the balance once marked paid, and not before', async () => {
+    if (!available) return;
+
+    await pay('20000.00');
+
+    const before = await payments.summary(SHIPMENT_ID);
+    expect(before.thirdPartyCommissionPaid).toBe('0.00');
+    expect(before.balance).toBe('30000.00');
+
+    const marked = await markPaid();
+    expect(marked.tpcPaidAt).toBe('2026-09-10T00:00:00.000Z');
+    expect(marked.tpcPaymentMethod).toBe(PaymentMethod.BANK_TRANSFER);
+    expect(marked.tpcReferenceNumber).toBe('BPI-9001');
+    expect(marked.tpcPaymentRemarks).toBe('Paid to broker');
+
+    const after = await payments.summary(SHIPMENT_ID);
+    expect(after.amountDue).toBe('50000.00');
+    expect(after.thirdPartyCommissionPaid).toBe('5000.00');
+    expect(after.balance).toBe('25000.00');
+
+    // The list reads the same balance.
+    const page = await shipments.list(
+      shipmentListQuerySchema.parse({ clientId, pageSize: 100 }) as ShipmentListQuery,
+    );
+    expect(page.items.find((item) => item.id === SHIPMENT_ID)?.balance).toBe('25000.00');
+  });
+
+  it('settles the trip when the client pays the rest', async () => {
+    if (!available) return;
+
+    await markPaid();
+    await pay('45000.00');
+
+    const summary = await payments.summary(SHIPMENT_ID);
+    expect(summary.balance).toBe('0.00');
+    expect(summary.status).toBe('PAID');
+  });
+
+  it('is unmarked with every detail cleared, and the balance restored', async () => {
+    if (!available) return;
+
+    await markPaid();
+    const unmarked = await act(() =>
+      shipments.unmarkThirdPartyCommissionPaid(SHIPMENT_ID, asAccounting()),
+    );
+
+    expect(unmarked.tpcPaidAt).toBeNull();
+    expect(unmarked.tpcPaymentMethod).toBeNull();
+    expect(unmarked.tpcReferenceNumber).toBeNull();
+    expect(unmarked.tpcPaymentRemarks).toBeNull();
+    expect((await payments.summary(SHIPMENT_ID)).balance).toBe('50000.00');
+  });
+
+  it('is verified on the spot when accounting records it', async () => {
+    if (!available) return;
+
+    const marked = await markPaid();
+
+    expect(marked.tpcVerificationStatus).toBe(PaymentVerificationStatus.VERIFIED);
+    expect(marked.tpcVerifiedAt).not.toBeNull();
+    expect(marked.tpcVerificationNote).toBeNull();
+  });
+
+  it('waits for accounting when the dispatch manager records it, and still deducts', async () => {
+    if (!available) return;
+
+    const marked = await markPaid(asDispatchManager());
+
+    expect(marked.tpcVerificationStatus).toBe(PaymentVerificationStatus.UNVERIFIED);
+    expect(marked.tpcVerifiedAt).toBeNull();
+    expect((await payments.summary(SHIPMENT_ID)).thirdPartyCommissionPaid).toBe('5000.00');
+
+    const verified = await act(() =>
+      shipments.verifyThirdPartyCommissionPayment(SHIPMENT_ID, asAccounting()),
+    );
+    expect(verified.tpcVerificationStatus).toBe(PaymentVerificationStatus.VERIFIED);
+    expect(verified.tpcVerifiedByName).not.toBeNull();
+
+    // A second stamp would erase the first.
+    await expect(
+      act(() => shipments.verifyThirdPartyCommissionPayment(SHIPMENT_ID, asAccounting())),
+    ).rejects.toThrow('already verified');
+  });
+
+  it('is locked to the dispatch manager once verified', async () => {
+    if (!available) return;
+
+    await markPaid(asDispatchManager());
+    await act(() => shipments.verifyThirdPartyCommissionPayment(SHIPMENT_ID, asAccounting()));
+
+    await expect(markPaid(asDispatchManager())).rejects.toThrow('verified by accounting');
+    await expect(
+      act(() => shipments.unmarkThirdPartyCommissionPaid(SHIPMENT_ID, asDispatchManager())),
+    ).rejects.toThrow('verified by accounting');
+  });
+
+  it('is not deducted once returned, and rejoins the queue when corrected', async () => {
+    if (!available) return;
+
+    await markPaid(asDispatchManager());
+
+    const returned = await act(() =>
+      shipments.returnThirdPartyCommissionPayment(
+        SHIPMENT_ID,
+        { reason: 'No such transfer on the statement.' },
+        asAccounting(),
+      ),
+    );
+    expect(returned.tpcVerificationStatus).toBe(PaymentVerificationStatus.RETURNED);
+    expect(returned.tpcVerificationNote).toBe('No such transfer on the statement.');
+
+    const summary = await payments.summary(SHIPMENT_ID);
+    expect(summary.thirdPartyCommissionPaid).toBe('0.00');
+    expect(summary.balance).toBe('50000.00');
+
+    const corrected = await markPaid(asDispatchManager());
+    expect(corrected.tpcVerificationStatus).toBe(PaymentVerificationStatus.UNVERIFIED);
+    expect(corrected.tpcVerificationNote).toBeNull();
+  });
+
+  it('cannot be verified before it is marked paid', async () => {
+    if (!available) return;
+
+    await expect(
+      act(() => shipments.verifyThirdPartyCommissionPayment(SHIPMENT_ID, asAccounting())),
+    ).rejects.toThrow('has not been marked paid');
+  });
+
+  it('cannot be marked on a trip with no cut', async () => {
+    if (!available) return;
+
+    await act(() =>
+      prisma.shipment.update({
+        where: { id: SHIPMENT_ID },
+        data: { thirdPartyId: null, tpcAmount: '0.0000', netRate: '50000.0000' },
+      }),
+    );
+
+    await expect(markPaid()).rejects.toThrow('no third-party commission');
+  });
+
+  it('refuses a change to the cut while it is marked paid', async () => {
+    if (!available) return;
+
+    await markPaid();
+
+    await expect(
+      act(() => shipments.updateRateChain(SHIPMENT_ID, { tpcAmount: '6000.00', tpcRate: null })),
+    ).rejects.toThrow('marked paid');
+
+    // The gross alone is still correctable: the cut underneath did not move.
+    const corrected = await act(() =>
+      shipments.updateRateChain(SHIPMENT_ID, { grossRate: '52000.00' }),
+    );
+    expect(corrected.grossRate).toBe('52000');
   });
 });
 

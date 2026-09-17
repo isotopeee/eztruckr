@@ -2,7 +2,7 @@ import { defineCodeSet } from './code-set';
 
 /**
  * How a client's payment physically reached the company. Stored as
- * `client_payment.paymentMethod` SMALLINT.
+ * `client_payment.paymentMethod` and `shipment.tpcPaymentMethod` SMALLINT.
  *
  * A SEPARATE SET FROM `DisbursementMode`, DELIBERATELY, and the first three
  * codes agreeing is a convenience for whoever reads both tables side by side —

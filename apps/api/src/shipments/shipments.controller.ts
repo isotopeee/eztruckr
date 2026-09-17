@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import {
@@ -25,9 +26,11 @@ import type { RequestUser } from '../auth/request-user';
 import {
   CAN_EDIT_RATE_CHAIN,
   CAN_READ_SHIPMENTS,
+  CAN_RECORD_THIRD_PARTY_PAYMENT,
   CAN_REMOVE_ANY_SHIPMENT,
   CAN_REMOVE_DRAFT_SHIPMENTS,
   CAN_TRANSITION_SHIPMENTS,
+  CAN_VERIFY_THIRD_PARTY_PAYMENT,
   CAN_WRITE_SHIPMENT_MONEY,
   CAN_WRITE_SHIPMENTS,
   ROLES_BY_TRANSITION,
@@ -39,6 +42,8 @@ import {
   AssignCrewDto,
   AssignTruckDto,
   CreateShipmentDto,
+  MarkThirdPartyCommissionPaidDto,
+  ReturnClientPaymentDto,
   SetGasRateOverrideDto,
   ShipmentListQueryDto,
   TransitionShipmentDto,
@@ -221,6 +226,49 @@ export class ShipmentsController {
    * here and was removed with the role, rather than left as unreachable code
    * that nothing exercises.
    */
+  /**
+   * The broker's cut, marked paid (PUT, which also corrects the details) or
+   * unmarked (DELETE). Recorded like a client payment: the dispatch manager may
+   * record it, and accounting verifies it or returns it for correction.
+   */
+  @Put(':id/third-party-payment')
+  @Roles(...CAN_RECORD_THIRD_PARTY_PAYMENT)
+  markThirdPartyCommissionPaid(
+    @Param('id') id: string,
+    @Body() dto: MarkThirdPartyCommissionPaidDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Shipment> {
+    return this.shipments.markThirdPartyCommissionPaid(id, dto, user);
+  }
+
+  @Delete(':id/third-party-payment')
+  @Roles(...CAN_RECORD_THIRD_PARTY_PAYMENT)
+  unmarkThirdPartyCommissionPaid(
+    @Param('id') id: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Shipment> {
+    return this.shipments.unmarkThirdPartyCommissionPaid(id, user);
+  }
+
+  @Post(':id/third-party-payment/verify')
+  @Roles(...CAN_VERIFY_THIRD_PARTY_PAYMENT)
+  verifyThirdPartyCommissionPayment(
+    @Param('id') id: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Shipment> {
+    return this.shipments.verifyThirdPartyCommissionPayment(id, user);
+  }
+
+  @Post(':id/third-party-payment/return')
+  @Roles(...CAN_VERIFY_THIRD_PARTY_PAYMENT)
+  returnThirdPartyCommissionPayment(
+    @Param('id') id: string,
+    @Body() dto: ReturnClientPaymentDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Shipment> {
+    return this.shipments.returnThirdPartyCommissionPayment(id, dto, user);
+  }
+
   @Get(':id/commissions')
   @Roles(...CAN_READ_SHIPMENTS)
   listCommissions(@Param('id') id: string): Promise<Commission[]> {
@@ -314,6 +362,14 @@ export class ShipmentsController {
       tpcAmount: null,
       netRate: null,
       appliedTpcRate: null,
+      tpcPaidAt: null,
+      tpcPaymentMethod: null,
+      tpcReferenceNumber: null,
+      tpcPaymentRemarks: null,
+      tpcVerificationStatus: null,
+      tpcVerifiedByName: null,
+      tpcVerifiedAt: null,
+      tpcVerificationNote: null,
       commissionableCharges: null,
       grossForCommission: null,
       gasDeductionAmount: null,

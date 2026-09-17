@@ -16,13 +16,17 @@ import {
   hasBrokerForTpc,
   hasUnambiguousTpc,
   isAllowedManualTransition,
+  isPaymentMethod,
+  isPaymentVerificationStatus,
   isRateChainCorrectable,
   isRateChainEditable,
   isShipmentRemovableByDispatch,
   isShipmentStatus,
   liquidationAccountLabel,
   LiquidationStatus,
+  money,
   nextShipmentNumber,
+  PaymentVerificationStatus,
   SAME_PERSON_BOTH_SLOTS_MESSAGE,
   SHIPMENT_STATUS_LABELS,
   ShipmentStatus,
@@ -37,7 +41,9 @@ import {
   type AssignTruckInput,
   type CreateShipmentInput,
   type GasRateContext,
+  type MarkThirdPartyCommissionPaidInput,
   type Page,
+  type ReturnClientPaymentInput,
   type SetGasRateOverrideInput,
   type Shipment,
   type ShipmentListQuery,
@@ -48,7 +54,7 @@ import {
   type UpdateShipmentInput,
   type UserRole,
 } from '@eztruckr/types';
-import { CAN_REMOVE_ANY_SHIPMENT } from '../auth/role-policy';
+import { CAN_REMOVE_ANY_SHIPMENT, CAN_VERIFY_THIRD_PARTY_PAYMENT } from '../auth/role-policy';
 import type { RequestUser } from '../auth/request-user';
 import { computeRateChain } from '../commission/commission-chain';
 import {
@@ -71,6 +77,7 @@ import { receivablesOf, type Receivable } from './receivables';
 
 const SHIPMENT_INCLUDE = {
   client: { select: { name: true } },
+  tpcVerifiedByUser: { select: { name: true } },
   thirdParty: { select: { name: true } },
   route: { select: { name: true } },
   truck: { select: { plateNumber: true } },
@@ -458,6 +465,10 @@ export class ShipmentsService {
       });
 
       this.assertNetRateIsSane(rates.netRate, rates.grossRate);
+      this.assertCutNotSettled(current, {
+        thirdPartyId: merged.thirdPartyId,
+        tpcAmount: rates.tpcAmount,
+      });
 
       data.grossRate = rates.grossRate;
       data.tpcAmount = rates.tpcAmount;
@@ -575,6 +586,7 @@ export class ShipmentsService {
     });
 
     this.assertNetRateIsSane(rates.netRate, rates.grossRate);
+    this.assertCutNotSettled(current, { thirdPartyId, tpcAmount: rates.tpcAmount });
 
     return toShipment(
       await this.shipments.update({
@@ -791,6 +803,166 @@ export class ShipmentsService {
         include: SHIPMENT_INCLUDE,
       }),
     );
+  }
+
+  /**
+   * Marks the broker's cut as paid, or corrects how it was paid.
+   *
+   * Refused on a trip with no cut: there is nobody to have paid. No status
+   * gate otherwise — like a client's check, the broker is routinely paid after
+   * the trip has closed.
+   *
+   * WHO WROTE IT DECIDES WHETHER IT NEEDS CHECKING, exactly as on a client
+   * payment: accounting's entry is verified on the spot and stamped to them;
+   * anybody else's waits UNVERIFIED, which also answers a return. A verified
+   * payment is closed to whoever cannot verify one.
+   */
+  async markThirdPartyCommissionPaid(
+    id: string,
+    input: MarkThirdPartyCommissionPaidInput,
+    user: RequestUser,
+  ): Promise<Shipment> {
+    const current = await this.load(id);
+
+    if (current.thirdPartyId === null || money(current.tpcAmount).intValue === 0) {
+      throw new ConflictException(
+        `Shipment ${current.shipmentNumber} has no third-party commission to mark as paid.`,
+      );
+    }
+
+    this.assertMayAlterCutPayment(current, user, 'changed');
+
+    return toShipment(
+      await this.shipments.update({
+        where: { id },
+        data: {
+          tpcPaidAt: new Date(input.paidAt),
+          tpcPaymentMethod: input.paymentMethod,
+          tpcReferenceNumber: input.referenceNumber,
+          tpcPaymentRemarks: input.remarks,
+          ...cutVerificationOnWriteBy(user),
+        },
+        include: SHIPMENT_INCLUDE,
+      }),
+    );
+  }
+
+  /** Marks the broker's cut as unpaid again, clearing how it was paid. */
+  async unmarkThirdPartyCommissionPaid(id: string, user: RequestUser): Promise<Shipment> {
+    const current = await this.load(id);
+
+    this.assertMayAlterCutPayment(current, user, 'unmarked');
+
+    return toShipment(
+      await this.shipments.update({
+        where: { id },
+        data: {
+          tpcPaidAt: null,
+          tpcPaymentMethod: null,
+          tpcReferenceNumber: null,
+          tpcPaymentRemarks: null,
+          tpcVerificationStatus: null,
+          tpcVerifiedBy: null,
+          tpcVerifiedAt: null,
+          tpcVerificationNote: null,
+        },
+        include: SHIPMENT_INCLUDE,
+      }),
+    );
+  }
+
+  /**
+   * Accounting confirming the broker was paid.
+   *
+   * Re-verifying is refused, as on a client payment: a second stamp would
+   * overwrite the first checker's name and date with nothing recording it.
+   */
+  async verifyThirdPartyCommissionPayment(id: string, user: RequestUser): Promise<Shipment> {
+    const current = await this.loadMarkedPaid(id);
+
+    if (current.tpcVerificationStatus === PaymentVerificationStatus.VERIFIED) {
+      throw new ConflictException(
+        'That payment is already verified. If it is wrong, return it for correction.',
+      );
+    }
+
+    return toShipment(
+      await this.shipments.update({
+        where: { id },
+        data: {
+          tpcVerificationStatus: PaymentVerificationStatus.VERIFIED,
+          tpcVerifiedBy: user.id,
+          tpcVerifiedAt: new Date(),
+          tpcVerificationNote: null,
+        },
+        include: SHIPMENT_INCLUDE,
+      }),
+    );
+  }
+
+  /** Handing it back for correction, with the reason that makes it actionable. */
+  async returnThirdPartyCommissionPayment(
+    id: string,
+    input: ReturnClientPaymentInput,
+    user: RequestUser,
+  ): Promise<Shipment> {
+    await this.loadMarkedPaid(id);
+
+    return toShipment(
+      await this.shipments.update({
+        where: { id },
+        data: {
+          tpcVerificationStatus: PaymentVerificationStatus.RETURNED,
+          tpcVerifiedBy: user.id,
+          tpcVerifiedAt: new Date(),
+          tpcVerificationNote: input.reason,
+        },
+        include: SHIPMENT_INCLUDE,
+      }),
+    );
+  }
+
+  private async loadMarkedPaid(id: string): Promise<ShipmentRow> {
+    const current = await this.load(id);
+
+    if (current.tpcPaidAt === null) {
+      throw new ConflictException(
+        `The third-party commission on shipment ${current.shipmentNumber} has not been marked paid.`,
+      );
+    }
+
+    return current;
+  }
+
+  private assertMayAlterCutPayment(current: ShipmentRow, user: RequestUser, verb: string): void {
+    if (mayVerifyCutPayment(user.role)) return;
+    if (current.tpcVerificationStatus !== PaymentVerificationStatus.VERIFIED) return;
+
+    throw new ConflictException(
+      `The third-party payment on shipment ${current.shipmentNumber} has been verified by accounting, so it can no longer be ${verb} from this desk. Ask accounting to correct it, or to return it for correction.`,
+    );
+  }
+
+  /**
+   * A cut marked paid is a record of money that left. Changing the broker or
+   * the amount underneath it would leave the record describing a payment that
+   * no longer matches the deal, and the client's balance moving with it.
+   */
+  private assertCutNotSettled(
+    current: ShipmentRow,
+    next: { thirdPartyId: string | null; tpcAmount: string },
+  ): void {
+    if (current.tpcPaidAt === null) return;
+
+    const moved =
+      next.thirdPartyId !== current.thirdPartyId ||
+      money(next.tpcAmount).intValue !== money(current.tpcAmount).intValue;
+
+    if (moved) {
+      throw new ConflictException(
+        `The third-party commission on shipment ${current.shipmentNumber} is marked paid. Unmark it before changing the broker or the cut.`,
+      );
+    }
   }
 
   /**
@@ -1412,6 +1584,51 @@ function badRequest(path: string, message: string): BadRequestException {
   return new BadRequestException({ message: 'Validation failed', errors: [{ path, message }] });
 }
 
+function mayVerifyCutPayment(role: UserRole): boolean {
+  return (CAN_VERIFY_THIRD_PARTY_PAYMENT as readonly UserRole[]).includes(role);
+}
+
+/**
+ * The verification columns a write to the cut payment should leave behind —
+ * all four, always, because the CHECK enforces them together.
+ */
+function cutVerificationOnWriteBy(user: RequestUser) {
+  return mayVerifyCutPayment(user.role)
+    ? {
+        tpcVerificationStatus: PaymentVerificationStatus.VERIFIED,
+        tpcVerifiedBy: user.id,
+        tpcVerifiedAt: new Date(),
+        tpcVerificationNote: null,
+      }
+    : {
+        tpcVerificationStatus: PaymentVerificationStatus.UNVERIFIED,
+        tpcVerifiedBy: null,
+        tpcVerifiedAt: null,
+        tpcVerificationNote: null,
+      };
+}
+
+function tpcVerificationStatusOf(row: ShipmentRow) {
+  if (row.tpcVerificationStatus === null) return null;
+
+  if (!isPaymentVerificationStatus(row.tpcVerificationStatus)) {
+    throw new Error(`Shipment ${row.id} has an unrecognised third-party payment status`);
+  }
+
+  return row.tpcVerificationStatus;
+}
+
+function tpcPaymentMethodOf(row: ShipmentRow) {
+  if (row.tpcPaymentMethod === null) return null;
+
+  // The column carries a CHECK, so this needs raw SQL to reach.
+  if (!isPaymentMethod(row.tpcPaymentMethod)) {
+    throw new Error(`Shipment ${row.id} has an unrecognised third-party payment method`);
+  }
+
+  return row.tpcPaymentMethod;
+}
+
 export function toShipment(row: ShipmentRow): Shipment {
   if (!isShipmentStatus(row.status)) {
     throw new Error(`Shipment ${row.id} has an unrecognised status code ${row.status}`);
@@ -1451,6 +1668,14 @@ export function toShipment(row: ShipmentRow): Shipment {
     tpcAmount: row.tpcAmount.toString(),
     netRate: row.netRate.toString(),
     appliedTpcRate: decimalToString(row.appliedTpcRate),
+    tpcPaidAt: dateToIso(row.tpcPaidAt),
+    tpcPaymentMethod: tpcPaymentMethodOf(row),
+    tpcReferenceNumber: row.tpcReferenceNumber,
+    tpcPaymentRemarks: row.tpcPaymentRemarks,
+    tpcVerificationStatus: tpcVerificationStatusOf(row),
+    tpcVerifiedByName: row.tpcVerifiedByUser?.name ?? null,
+    tpcVerifiedAt: dateToIso(row.tpcVerifiedAt),
+    tpcVerificationNote: row.tpcVerificationNote,
 
     gasRateOverride: decimalToString(row.gasRateOverride),
     gasRateOverrideReason: row.gasRateOverrideReason,

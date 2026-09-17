@@ -3,16 +3,22 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  PAYMENT_METHOD_LABELS,
+  PaymentMethod,
+  PaymentVerificationStatus,
   SHIPMENT_STATUS_LABELS,
   UserRole,
+  expectsPaymentReference,
   formatRate,
   isRateChainCorrectable,
   type Page,
   type Shipment,
   type ThirdParty,
 } from '@eztruckr/types';
-import { Loader2, Pencil } from 'lucide-react';
+import { BadgeCheck, CircleCheck, Loader2, MessageCircleQuestion, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
+import { ConfirmDeleteButton } from '@/components/confirm-delete-button';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -25,8 +31,15 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ApiError, apiFetch } from '@/lib/api-client';
-import { formatMoney } from '@/lib/format';
-import { shipmentKeys, updateRateChain } from '@/lib/shipment-api';
+import { formatDate, formatMoney, toDateInputValue } from '@/lib/format';
+import {
+  markThirdPartyCommissionPaid,
+  returnThirdPartyCommissionPayment,
+  shipmentKeys,
+  unmarkThirdPartyCommissionPaid,
+  updateRateChain,
+  verifyThirdPartyCommissionPayment,
+} from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 
 /**
@@ -85,6 +98,12 @@ export function RateChainCard({ shipment }: { shipment: Shipment }) {
    * a message naming how many commissions were paid, which is more use than a
    * silently missing button would be.
    */
+  // Mirror `CAN_VERIFY_THIRD_PARTY_PAYMENT` and `CAN_RECORD_THIRD_PARTY_PAYMENT`:
+  // the dispatch manager records, accounting approves.
+  const mayVerifyCutPayment =
+    user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
+  const mayRecordCutPayment = mayVerifyCutPayment || user?.role === UserRole.DISPATCH_MANAGER;
+
   const mayCorrect =
     (user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING) &&
     isRateChainCorrectable(shipment.status);
@@ -142,6 +161,12 @@ export function RateChainCard({ shipment }: { shipment: Shipment }) {
         />
         <Row label="Net rate" value={shipment.netRate} operator="=" emphasis />
 
+        <ThirdPartyPayment
+          shipment={shipment}
+          mayRecord={mayRecordCutPayment}
+          mayVerify={mayVerifyCutPayment}
+        />
+
         {correcting ? (
           <CorrectionForm shipment={shipment} onClose={() => setCorrecting(false)} />
         ) : null}
@@ -198,6 +223,366 @@ export function RateChainCard({ shipment }: { shipment: Shipment }) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Whether the broker has been paid their cut, and how.
+ *
+ * The cut stays in what the client is billed either way. Marking it paid takes
+ * it off the client's balance on the payments card — the API does that
+ * subtraction, not this screen.
+ */
+function ThirdPartyPayment({
+  shipment,
+  mayRecord,
+  mayVerify,
+}: {
+  shipment: Shipment;
+  mayRecord: boolean;
+  mayVerify: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+
+  const invalidate = () => void queryClient.invalidateQueries({ queryKey: shipmentKeys.all });
+  const onError = (title: string) => (error: unknown) =>
+    toast.error(title, {
+      description: error instanceof ApiError ? error.displayMessage : String(error),
+    });
+
+  const unmark = useMutation({
+    mutationFn: () => unmarkThirdPartyCommissionPaid(shipment.id),
+    onSuccess: invalidate,
+    onError: onError('Could not unmark the payment'),
+  });
+
+  const verify = useMutation({
+    mutationFn: () => verifyThirdPartyCommissionPayment(shipment.id),
+    onSuccess: invalidate,
+    onError: onError('Could not approve the payment'),
+  });
+
+  const sendBack = useMutation({
+    mutationFn: (reason: string) => returnThirdPartyCommissionPayment(shipment.id, reason),
+    onSuccess: invalidate,
+    onError: onError('Could not return the payment'),
+  });
+
+  // Nothing to pay on a direct booking or a zero cut. A presence check on the
+  // server's own figure, not arithmetic.
+  if (shipment.thirdPartyId === null || shipment.tpcAmount === null) return null;
+  if (Number(shipment.tpcAmount) === 0) return null;
+
+  const paid = shipment.tpcPaidAt !== null;
+  const status = shipment.tpcVerificationStatus;
+  // A verified payment is accounting's to change, as on a client payment.
+  const mayAlter = mayRecord && (mayVerify || status !== PaymentVerificationStatus.VERIFIED);
+
+  return (
+    <div className="mt-3 space-y-2 rounded-md border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="font-medium">Payment to {shipment.thirdPartyName ?? 'third party'}</span>
+          {!paid ? (
+            <Badge variant="outline">Unpaid</Badge>
+          ) : status === PaymentVerificationStatus.VERIFIED ? (
+            <Badge variant="secondary" className="gap-1">
+              <CircleCheck className="size-3" />
+              Paid · verified
+            </Badge>
+          ) : status === PaymentVerificationStatus.RETURNED ? (
+            <Badge variant="destructive">Returned</Badge>
+          ) : (
+            <Badge variant="outline">Paid · awaiting accounting</Badge>
+          )}
+        </div>
+        {mayAlter && !editing ? (
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+              {paid ? <Pencil className="size-4" /> : null}
+              {paid ? 'Edit' : 'Mark as paid'}
+            </Button>
+            {paid ? (
+              <ConfirmDeleteButton
+                label="Unmark third-party payment"
+                title="Mark the cut as unpaid?"
+                description="The payment details are cleared and the cut is added back to the client's balance."
+                confirmLabel="Unmark"
+                pending={unmark.isPending}
+                onConfirm={() => unmark.mutate()}
+              />
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {paid && !editing ? (
+        <dl className="text-muted-foreground grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
+          <dt>Paid on</dt>
+          <dd>{formatDate(shipment.tpcPaidAt!)}</dd>
+          <dt>Paid by</dt>
+          <dd>
+            {shipment.tpcPaymentMethod === null
+              ? '—'
+              : PAYMENT_METHOD_LABELS[shipment.tpcPaymentMethod]}
+          </dd>
+          <dt>Reference</dt>
+          <dd>{shipment.tpcReferenceNumber ?? '—'}</dd>
+          <dt>Remarks</dt>
+          <dd className="whitespace-pre-wrap">{shipment.tpcPaymentRemarks ?? '—'}</dd>
+        </dl>
+      ) : null}
+
+      {paid && !editing ? <CutVerificationLine shipment={shipment} /> : null}
+
+      {paid && !editing && mayVerify ? (
+        <CutVerifyControls
+          verified={status === PaymentVerificationStatus.VERIFIED}
+          pending={verify.isPending || sendBack.isPending}
+          onVerify={() => verify.mutate()}
+          onReturn={(reason) => sendBack.mutate(reason)}
+        />
+      ) : null}
+
+      {!paid && !editing ? (
+        <p className="text-muted-foreground text-xs">
+          Once marked paid, the cut of {formatMoney(shipment.tpcAmount)} is deducted from the
+          client&rsquo;s balance.
+        </p>
+      ) : null}
+
+      {editing ? (
+        <ThirdPartyPaymentForm
+          shipment={shipment}
+          onClose={() => setEditing(false)}
+          onSaved={() => {
+            setEditing(false);
+            invalidate();
+          }}
+          onError={onError('Could not save the payment')}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Who checked the payment, or why it came back. A returned one carries the
+ * reason, because that is the whole of what the recorder has to act on.
+ */
+function CutVerificationLine({ shipment }: { shipment: Shipment }) {
+  const by = shipment.tpcVerifiedByName;
+
+  if (shipment.tpcVerificationStatus === PaymentVerificationStatus.RETURNED) {
+    return (
+      <p className="text-destructive flex items-start gap-1 text-xs">
+        <MessageCircleQuestion className="mt-0.5 size-3 shrink-0" />
+        <span>
+          Returned for correction{by ? ` by ${by}` : ''}: {shipment.tpcVerificationNote}
+        </span>
+      </p>
+    );
+  }
+
+  if (shipment.tpcVerificationStatus === PaymentVerificationStatus.VERIFIED) {
+    return (
+      <p className="text-muted-foreground flex items-center gap-1 text-xs">
+        <BadgeCheck className="size-3" />
+        Verified{by ? ` by ${by}` : ''}
+        {shipment.tpcVerifiedAt ? ` on ${formatDate(shipment.tpcVerifiedAt)}` : ''}
+      </p>
+    );
+  }
+
+  return <p className="text-muted-foreground text-xs">Waiting for accounting to verify it.</p>;
+}
+
+/**
+ * Accounting's two answers. Returning asks for its reason before it will send;
+ * there is no second approval of an approved payment, which would overwrite the
+ * first checker's name.
+ */
+function CutVerifyControls({
+  verified,
+  pending,
+  onVerify,
+  onReturn,
+}: {
+  verified: boolean;
+  pending: boolean;
+  onVerify: () => void;
+  onReturn: (reason: string) => void;
+}) {
+  const [asking, setAsking] = useState(false);
+  const [reason, setReason] = useState('');
+
+  if (asking) {
+    return (
+      <div className="flex flex-wrap items-center gap-1">
+        <Input
+          autoFocus
+          className="h-8 w-60"
+          placeholder="What does not match?"
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="destructive"
+          disabled={pending || reason.trim().length === 0}
+          onClick={() => {
+            onReturn(reason.trim());
+            setReason('');
+            setAsking(false);
+          }}
+        >
+          Return
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setAsking(false)}>
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {verified ? null : (
+        <Button type="button" size="sm" variant="outline" disabled={pending} onClick={onVerify}>
+          {pending ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
+          Approve
+        </Button>
+      )}
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={pending}
+        onClick={() => setAsking(true)}
+      >
+        Return for correction
+      </Button>
+    </div>
+  );
+}
+
+function ThirdPartyPaymentForm({
+  shipment,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  shipment: Shipment;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (error: unknown) => void;
+}) {
+  const [draft, setDraft] = useState({
+    // Today on a first marking; the stored date, read in Manila, on an edit.
+    paidAt: shipment.tpcPaidAt
+      ? toDateInputValue(shipment.tpcPaidAt)
+      : new Date().toISOString().slice(0, 10),
+    paymentMethod: String(shipment.tpcPaymentMethod ?? PaymentMethod.BANK_TRANSFER),
+    referenceNumber: shipment.tpcReferenceNumber ?? '',
+    remarks: shipment.tpcPaymentRemarks ?? '',
+  });
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const method = Number(draft.paymentMethod) as PaymentMethod;
+
+  const save = useMutation({
+    mutationFn: () =>
+      markThirdPartyCommissionPaid(shipment.id, {
+        // A date-only input means midnight local; sent as an instant.
+        paidAt: new Date(draft.paidAt).toISOString(),
+        paymentMethod: method,
+        referenceNumber: draft.referenceNumber || null,
+        remarks: draft.remarks || null,
+      }),
+    onSuccess: onSaved,
+    onError: (error) => {
+      if (error instanceof ApiError) setFieldErrors(error.fieldErrors);
+      onError(error);
+    },
+  });
+
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        setFieldErrors({});
+        save.mutate();
+      }}
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Paid on" htmlFor="tpc-paid-at" error={fieldErrors.paidAt}>
+          <Input
+            id="tpc-paid-at"
+            type="date"
+            required
+            value={draft.paidAt}
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, paidAt: event.target.value }))
+            }
+          />
+        </Field>
+        <Field label="Mode of payment" htmlFor="tpc-method" error={fieldErrors.paymentMethod}>
+          <Select
+            value={draft.paymentMethod}
+            onValueChange={(value) => setDraft((current) => ({ ...current, paymentMethod: value }))}
+          >
+            <SelectTrigger id="tpc-method">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.values(PaymentMethod).map((value) => (
+                <SelectItem key={value} value={String(value)}>
+                  {PAYMENT_METHOD_LABELS[value]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      </div>
+
+      <Field label="Reference" htmlFor="tpc-reference" error={fieldErrors.referenceNumber}>
+        <Input
+          id="tpc-reference"
+          placeholder={
+            method === PaymentMethod.CHECK
+              ? 'Check number'
+              : expectsPaymentReference(method)
+                ? 'Transaction reference'
+                : 'Optional'
+          }
+          value={draft.referenceNumber}
+          onChange={(event) =>
+            setDraft((current) => ({ ...current, referenceNumber: event.target.value }))
+          }
+        />
+      </Field>
+
+      <Field label="Remarks" htmlFor="tpc-remarks" error={fieldErrors.remarks}>
+        <Input
+          id="tpc-remarks"
+          placeholder="Optional"
+          value={draft.remarks}
+          onChange={(event) => setDraft((current) => ({ ...current, remarks: event.target.value }))}
+        />
+      </Field>
+
+      <div className="flex gap-2">
+        <Button size="sm" type="submit" disabled={save.isPending}>
+          {save.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+          {shipment.tpcPaidAt ? 'Save changes' : 'Mark as paid'}
+        </Button>
+        <Button size="sm" type="button" variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 

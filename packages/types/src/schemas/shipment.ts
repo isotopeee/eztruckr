@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { crewRoleSchema } from '../codes/crew-role';
+import { paymentMethodSchema } from '../codes/payment-method';
+import { paymentVerificationStatusSchema } from '../codes/payment-verification-status';
 import { isShipmentStatus, shipmentStatusSchema, ShipmentStatus } from '../codes/shipment-status';
 import {
   auditFieldsSchema,
@@ -252,6 +254,28 @@ export const shipmentSchema = auditFieldsSchema.extend({
   netRate: z.string().nullable(),
   appliedTpcRate: z.string().nullable(),
 
+  /**
+   * Whether the broker's cut has been paid, and how.
+   *
+   * `tpcPaidAt` IS THE FLAG: null means unpaid. Once set, `tpcAmount` is
+   * deducted from the client's balance. Redacted for crew with the rest of
+   * the rate chain.
+   */
+  tpcPaidAt: z.string().nullable().default(null),
+  tpcPaymentMethod: paymentMethodSchema.nullable().default(null),
+  tpcReferenceNumber: z.string().nullable().default(null),
+  tpcPaymentRemarks: z.string().nullable().default(null),
+  /**
+   * Accounting's check on the payment, the same control a client payment has.
+   * Null while unpaid. A dispatch manager's entry is UNVERIFIED until
+   * accounting verifies it or returns it with `tpcVerificationNote`; a
+   * RETURNED payment is not deducted from the balance.
+   */
+  tpcVerificationStatus: paymentVerificationStatusSchema.nullable().default(null),
+  tpcVerifiedByName: z.string().nullable().default(null),
+  tpcVerifiedAt: z.string().nullable().default(null),
+  tpcVerificationNote: z.string().nullable().default(null),
+
   /** Input: the rate somebody asked this trip to use. Null means the default. */
   gasRateOverride: z.string().nullable(),
   gasRateOverrideReason: z.string().nullable(),
@@ -297,7 +321,8 @@ export const shipmentSchema = auditFieldsSchema.extend({
    * `ClientPaymentsService.summary`, so the pair on a row and the pair on that
    * trip's payments card are one computation rather than two that agree today.
    *
-   * `balance` is `amountDue` less what has been collected, and is NEGATIVE on
+   * `balance` is `amountDue` less what has been collected, and less the
+   * broker's cut once it is marked paid (`tpcPaidAt`). It is NEGATIVE on
    * an overpayment rather than clamped: money owed back is a fact somebody has
    * to act on.
    *
@@ -549,6 +574,22 @@ export const setGasRateOverrideSchema = z
   });
 
 export type SetGasRateOverrideInput = z.infer<typeof setGasRateOverrideSchema>;
+
+/**
+ * Marking the broker's cut as paid, or correcting how it was paid.
+ *
+ * The same details a client payment carries, minus the amount: the amount is
+ * the cut itself, already stated by the rate chain, and a second figure here
+ * would be free to disagree with it. Unmarking is a DELETE, not a null date.
+ */
+export const markThirdPartyCommissionPaidSchema = z.object({
+  paidAt: isoDateTimeSchema,
+  paymentMethod: paymentMethodSchema,
+  referenceNumber: optionalText(80),
+  remarks: optionalText(400),
+});
+
+export type MarkThirdPartyCommissionPaidInput = z.infer<typeof markThirdPartyCommissionPaidSchema>;
 
 // ---------------------------------------------------------------------------
 // Listing
