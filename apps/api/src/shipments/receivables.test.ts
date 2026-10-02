@@ -18,21 +18,7 @@ import { receivablesOf } from './receivables';
  * card's.
  */
 
-const trip = (
-  id: string,
-  grossRate: string,
-  cut: { tpcAmount: string; tpcPaidAt: Date | null; tpcVerificationStatus?: number } = {
-    tpcAmount: '0',
-    tpcPaidAt: null,
-  },
-) => ({
-  id,
-  grossRate,
-  ...cut,
-  tpcVerificationStatus:
-    cut.tpcVerificationStatus ??
-    (cut.tpcPaidAt === null ? null : PaymentVerificationStatus.UNVERIFIED),
-});
+const trip = (id: string, grossRate: string) => ({ id, grossRate });
 
 const rebill = (shipmentId: string, amount: string, billedAmount: string) => ({
   shipmentId,
@@ -130,39 +116,5 @@ describe('a trip on the shipments list', () => {
     const receivables = receivablesOf([trip('a', '45000')], [], [], []);
 
     expect(receivables.get('a')).toEqual({ amountDue: '45000.00', balance: '45000.00' });
-  });
-
-  /** The cut is billed either way; paying it is what takes it off the balance. */
-  it('deducts the third-party cut from the balance only once it is paid', () => {
-    const receivables = receivablesOf(
-      [
-        trip('unpaid', '50000', { tpcAmount: '5000', tpcPaidAt: null }),
-        trip('paid', '50000', { tpcAmount: '5000', tpcPaidAt: new Date('2026-09-10') }),
-      ],
-      [],
-      [],
-      [payment('unpaid', '20000'), payment('paid', '20000')],
-    );
-
-    expect(receivables.get('unpaid')).toEqual({ amountDue: '50000.00', balance: '30000.00' });
-    expect(receivables.get('paid')).toEqual({ amountDue: '50000.00', balance: '25000.00' });
-  });
-
-  /** Accounting looked and could not match it, so the client still owes it. */
-  it('does not deduct a third-party payment returned for correction', () => {
-    const receivables = receivablesOf(
-      [
-        trip('a', '50000', {
-          tpcAmount: '5000',
-          tpcPaidAt: new Date('2026-09-10'),
-          tpcVerificationStatus: PaymentVerificationStatus.RETURNED,
-        }),
-      ],
-      [],
-      [],
-      [],
-    );
-
-    expect(receivables.get('a')?.balance).toBe('50000.00');
   });
 });

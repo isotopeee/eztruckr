@@ -443,8 +443,8 @@ describe('where the trip stands', () => {
 });
 
 /**
- * Paying the broker their cut. The cut stays in what the client is billed;
- * marking it paid takes it off what the client still owes.
+ * Paying the broker their cut. The cut stays in what the client is billed, and
+ * paying it does not change what the client still owes.
  */
 describe('the third-party cut', () => {
   const markPaid = (user: RequestUser = asAccounting()) =>
@@ -461,13 +461,12 @@ describe('the third-party cut', () => {
       ),
     );
 
-  it('is deducted from the balance once marked paid, and not before', async () => {
+  it('leaves the balance alone when marked paid', async () => {
     if (!available) return;
 
     await pay('20000.00');
 
     const before = await payments.summary(SHIPMENT_ID);
-    expect(before.thirdPartyCommissionPaid).toBe('0.00');
     expect(before.balance).toBe('30000.00');
 
     const marked = await markPaid();
@@ -478,28 +477,27 @@ describe('the third-party cut', () => {
 
     const after = await payments.summary(SHIPMENT_ID);
     expect(after.amountDue).toBe('50000.00');
-    expect(after.thirdPartyCommissionPaid).toBe('5000.00');
-    expect(after.balance).toBe('25000.00');
+    expect(after.balance).toBe('30000.00');
 
     // The list reads the same balance.
     const page = await shipments.list(
       shipmentListQuerySchema.parse({ clientId, pageSize: 100 }) as ShipmentListQuery,
     );
-    expect(page.items.find((item) => item.id === SHIPMENT_ID)?.balance).toBe('25000.00');
+    expect(page.items.find((item) => item.id === SHIPMENT_ID)?.balance).toBe('30000.00');
   });
 
-  it('settles the trip when the client pays the rest', async () => {
+  it('settles the trip once the client pays the whole invoice', async () => {
     if (!available) return;
 
     await markPaid();
-    await pay('45000.00');
+    await pay('50000.00');
 
     const summary = await payments.summary(SHIPMENT_ID);
     expect(summary.balance).toBe('0.00');
     expect(summary.status).toBe('PAID');
   });
 
-  it('is unmarked with every detail cleared, and the balance restored', async () => {
+  it('is unmarked with every detail cleared', async () => {
     if (!available) return;
 
     await markPaid();
@@ -524,14 +522,13 @@ describe('the third-party cut', () => {
     expect(marked.tpcVerificationNote).toBeNull();
   });
 
-  it('waits for accounting when the dispatch manager records it, and still deducts', async () => {
+  it('waits for accounting when the dispatch manager records it', async () => {
     if (!available) return;
 
     const marked = await markPaid(asDispatchManager());
 
     expect(marked.tpcVerificationStatus).toBe(PaymentVerificationStatus.UNVERIFIED);
     expect(marked.tpcVerifiedAt).toBeNull();
-    expect((await payments.summary(SHIPMENT_ID)).thirdPartyCommissionPaid).toBe('5000.00');
 
     const verified = await act(() =>
       shipments.verifyThirdPartyCommissionPayment(SHIPMENT_ID, asAccounting()),
@@ -557,7 +554,7 @@ describe('the third-party cut', () => {
     ).rejects.toThrow('verified by accounting');
   });
 
-  it('is not deducted once returned, and rejoins the queue when corrected', async () => {
+  it('rejoins the queue when corrected after being returned', async () => {
     if (!available) return;
 
     await markPaid(asDispatchManager());
@@ -571,10 +568,6 @@ describe('the third-party cut', () => {
     );
     expect(returned.tpcVerificationStatus).toBe(PaymentVerificationStatus.RETURNED);
     expect(returned.tpcVerificationNote).toBe('No such transfer on the statement.');
-
-    const summary = await payments.summary(SHIPMENT_ID);
-    expect(summary.thirdPartyCommissionPaid).toBe('0.00');
-    expect(summary.balance).toBe('50000.00');
 
     const corrected = await markPaid(asDispatchManager());
     expect(corrected.tpcVerificationStatus).toBe(PaymentVerificationStatus.UNVERIFIED);
