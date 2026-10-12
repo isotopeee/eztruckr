@@ -134,6 +134,8 @@ describe('code sets are permanent', () => {
       // Appended, never renumbered: a dispatch manager dispatches trips and
       // holds their cash floats, which no earlier role combined.
       DISPATCH_MANAGER: 6,
+      // Appended: dispatches like the manager, with no access to trip cash.
+      DISPATCHER: 7,
     });
   });
 

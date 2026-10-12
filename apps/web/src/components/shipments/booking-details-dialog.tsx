@@ -65,7 +65,8 @@ export function BookingDetailsDialog({ shipment }: { shipment: Shipment }) {
   const mayEdit =
     (user?.role === UserRole.ADMINISTRATOR ||
       user?.role === UserRole.OPERATIONS ||
-      user?.role === UserRole.DISPATCH_MANAGER) &&
+      user?.role === UserRole.DISPATCH_MANAGER ||
+      user?.role === UserRole.DISPATCHER) &&
     areBookingDetailsCorrectable(shipment.status);
 
   if (!mayEdit) {

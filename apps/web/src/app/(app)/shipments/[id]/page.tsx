@@ -53,6 +53,10 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
 
   const data = shipment.data;
   const isCrew = user?.role === UserRole.CREW;
+  // Works the trip without its cash or margin: no liquidation, allowances,
+  // allowance requests, settlement, gas deduction or gross profit. The API
+  // refuses every route behind these cards for this role.
+  const isDispatcher = user?.role === UserRole.DISPATCHER;
 
   return (
     <div className="space-y-6">
@@ -96,7 +100,7 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
           {/* The crew's half of the trip's cash: what they were given, and what
               they spent it on. Both are theirs to see and one is theirs to
               fill in, so neither is hidden from a crew session. */}
-          <LiquidationCard shipment={data} />
+          {isDispatcher ? null : <LiquidationCard shipment={data} />}
           {/* Office-only. A crew member's pay is not shown in the portal at
               all — see the crew-visibility table in HANDOFF.md, including what
               that costs them. The API refuses the routes behind this card too,
@@ -109,13 +113,17 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
           {isCrew ? null : (
             <>
               <CrewAndLifecycleCard shipment={data} />
-              {/* Above the releases because that is the order it happens in:
-                  dispatch asks here, accounting approves, and the approval
-                  appears below as an ordinary release on the same account. */}
-              <AllowanceRequestsCard shipment={data} />
-              <AllowancesCard shipment={data} />
-              <SettlementCard shipment={data} />
-              <GasRateOverrideCard shipment={data} />
+              {isDispatcher ? null : (
+                <>
+                  {/* Above the releases because that is the order it happens in:
+                      dispatch asks here, accounting approves, and the approval
+                      appears below as an ordinary release on the same account. */}
+                  <AllowanceRequestsCard shipment={data} />
+                  <AllowancesCard shipment={data} />
+                  <SettlementCard shipment={data} />
+                  <GasRateOverrideCard shipment={data} />
+                </>
+              )}
             </>
           )}
         </div>
@@ -128,7 +136,7 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
         <>
           <ChargesCard shipment={data} />
           <CompanyExpensesCard shipment={data} />
-          <GrossProfitCard shipment={data} />
+          {isDispatcher ? null : <GrossProfitCard shipment={data} />}
           {/* Last, and after the profit rather than beside the charges: the
               order is what the trip earned, then what has actually come in.
               A payment is the collection of that revenue and never part of

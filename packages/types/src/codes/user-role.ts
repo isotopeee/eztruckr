@@ -37,6 +37,16 @@ export const UserRole = {
    * is treated as confirmed. See `CAN_RECORD_CLIENT_PAYMENT`.
    */
   DISPATCH_MANAGER: 6,
+  /**
+   * A dispatcher who books and moves trips like their manager, and keeps the
+   * same master data, but is kept out of the trip's cash and margin entirely:
+   * no liquidations, allowances or allowance requests, no gas deduction, no
+   * gross profit and no commission base. See `role-policy.ts`.
+   *
+   * NOT LINKED TO A STAFF ROW, unlike OPERATIONS and DISPATCH_MANAGER: every
+   * linked role holds trip cash, and this one never does.
+   */
+  DISPATCHER: 7,
 } as const;
 
 export type UserRole = (typeof UserRole)[keyof typeof UserRole];
@@ -54,6 +64,7 @@ export const USER_ROLE_LABELS: Readonly<Record<UserRole, string>> = {
   [UserRole.MANAGEMENT]: 'Management',
   [UserRole.CREW]: 'Crew member',
   [UserRole.DISPATCH_MANAGER]: 'Dispatch manager',
+  [UserRole.DISPATCHER]: 'Dispatcher',
 };
 
 /**

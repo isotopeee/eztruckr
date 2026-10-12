@@ -1,4 +1,4 @@
-import { isConfinedToTheirOwnFloat, UserRole } from '@eztruckr/types';
+import { isConfinedToTheirOwnFloat, roleRequiresStaffLink, UserRole } from '@eztruckr/types';
 import { describe, expect, it } from 'vitest';
 import {
   ANY_SIGNED_IN_ROLE,
@@ -9,8 +9,11 @@ import {
   CAN_READ_MASTER_DATA,
   CAN_READ_OPERATION_EXPENSES,
   CAN_READ_SHIPMENTS,
+  CAN_READ_TRIP_CASH,
+  CAN_READ_TRIP_MARGIN,
   CAN_RECORD_CLIENT_PAYMENT,
   CAN_REMOVE_ANY_SHIPMENT,
+  CAN_REQUEST_ALLOWANCE,
   CAN_REMOVE_DRAFT_SHIPMENTS,
   CAN_SUBMIT_LIQUIDATION,
   CAN_UPLOAD_RECEIPTS,
@@ -164,6 +167,58 @@ describe('a dispatcher works trips and keeps no directory but the routes', () =>
  * it is NOT `CAN_WRITE_SHIPMENT_MONEY` — deciding what to pay out against a
  * figure is a different question from restating the figure.
  */
+/**
+ * The DISPATCHER: the dispatch manager's job less the trip's cash and margin.
+ * Every list below is either one they share with the manager or one of the six
+ * areas they were kept out of.
+ */
+describe('a dispatcher dispatches like their manager and sees none of the trip cash', () => {
+  it('may do everything the manager does on the dispatch side', () => {
+    for (const bundle of [
+      CAN_READ_SHIPMENTS,
+      CAN_READ_MASTER_DATA,
+      CAN_WRITE_SHIPMENTS,
+      CAN_REMOVE_DRAFT_SHIPMENTS,
+      CAN_TRANSITION_SHIPMENTS,
+      CAN_WRITE_OPERATIONAL_MASTER_DATA,
+      CAN_WRITE_ROUTES,
+      CAN_WRITE_PAYEES,
+      CAN_RECORD_CLIENT_PAYMENT,
+      ANY_SIGNED_IN_ROLE,
+    ]) {
+      expect(may(bundle, UserRole.DISPATCH_MANAGER)).toBe(true);
+      expect(may(bundle, UserRole.DISPATCHER)).toBe(true);
+    }
+  });
+
+  it('may not read liquidations, allowances, requests, gas or gross profit', () => {
+    expect(may(CAN_READ_TRIP_CASH, UserRole.DISPATCHER)).toBe(false);
+    expect(may(CAN_READ_TRIP_MARGIN, UserRole.DISPATCHER)).toBe(false);
+    expect(may(CAN_SUBMIT_LIQUIDATION, UserRole.DISPATCHER)).toBe(false);
+    expect(may(CAN_REQUEST_ALLOWANCE, UserRole.DISPATCHER)).toBe(false);
+  });
+
+  it('takes nothing else away from the roles that could read them before', () => {
+    const withoutDispatcher = CAN_READ_SHIPMENTS.filter((role) => role !== UserRole.DISPATCHER);
+
+    expect([...CAN_READ_TRIP_CASH]).toEqual(withoutDispatcher);
+    expect([...CAN_READ_TRIP_MARGIN]).toEqual(withoutDispatcher);
+  });
+
+  it('decides no money, as the manager decides none', () => {
+    expect(may(CAN_WRITE_SHIPMENT_MONEY, UserRole.DISPATCHER)).toBe(false);
+    expect(may(CAN_VERIFY_CLIENT_PAYMENT, UserRole.DISPATCHER)).toBe(false);
+    expect(may(CAN_EDIT_RATE_CHAIN, UserRole.DISPATCHER)).toBe(false);
+    expect(may(CAN_WRITE_STAFF, UserRole.DISPATCHER)).toBe(false);
+    expect(may(CAN_REMOVE_ANY_SHIPMENT, UserRole.DISPATCHER)).toBe(false);
+  });
+
+  it('holds no float, so resolves to no person', () => {
+    expect(isConfinedToTheirOwnFloat(UserRole.DISPATCHER)).toBe(false);
+    expect(roleRequiresStaffLink(UserRole.DISPATCHER)).toBe(false);
+  });
+});
+
 describe('correcting the rate chain', () => {
   it('is the administrator and accounting, and nobody else', () => {
     expect([...CAN_EDIT_RATE_CHAIN]).toEqual([UserRole.ADMINISTRATOR, UserRole.ACCOUNTING]);
@@ -362,26 +417,26 @@ describe('recording a client payment is wider than deciding a trip’s money', (
   });
 
   /**
-   * The dispatcher is absent, on the same reasoning that puts payees and the
-   * rate chain with the manager: the supervisor answers for what was sold and is
-   * who a client rings about an invoice.
+   * OPERATIONS is absent, on the same reasoning that puts payees and the rate
+   * chain with the manager: the supervisor answers for what was sold and is who
+   * a client rings about an invoice.
    */
-  it('keeps the dispatcher and everybody without a desk out', () => {
+  it('keeps operations and everybody without a desk out', () => {
     for (const role of [UserRole.OPERATIONS, UserRole.MANAGEMENT, UserRole.CREW]) {
       expect(may(CAN_RECORD_CLIENT_PAYMENT, role)).toBe(false);
     }
   });
 
   /**
-   * The deposit slip a dispatch manager attaches goes up the one upload path,
-   * and they were already in that list for their own float — which is the only
-   * reason `CAN_UPLOAD_RECEIPTS` survives as an alias of
-   * `CAN_SUBMIT_LIQUIDATION`. A recorder who was not already there would have to
-   * break the alias rather than be added to it: attaching a document is not
-   * submitting somebody's cash account.
+   * The deposit slip a recorder attaches goes up the one upload path. The
+   * dispatch manager was already in it for their own float; the DISPATCHER is a
+   * recorder who was not, so the alias with `CAN_SUBMIT_LIQUIDATION` is broken
+   * for them alone rather than handing them a cash account.
    */
-  it('needs no widening of the upload list to attach proof', () => {
-    expect([...CAN_UPLOAD_RECEIPTS]).toEqual([...CAN_SUBMIT_LIQUIDATION]);
+  it('lets every recorder attach proof without submitting a liquidation', () => {
+    expect([...CAN_UPLOAD_RECEIPTS]).toEqual([...CAN_SUBMIT_LIQUIDATION, UserRole.DISPATCHER]);
     expect(may(CAN_UPLOAD_RECEIPTS, UserRole.DISPATCH_MANAGER)).toBe(true);
+    expect(may(CAN_UPLOAD_RECEIPTS, UserRole.DISPATCHER)).toBe(true);
+    expect(may(CAN_SUBMIT_LIQUIDATION, UserRole.DISPATCHER)).toBe(false);
   });
 });

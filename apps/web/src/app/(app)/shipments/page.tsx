@@ -127,7 +127,8 @@ export default function Page() {
   const canCreate =
     user?.role === UserRole.ADMINISTRATOR ||
     user?.role === UserRole.OPERATIONS ||
-    user?.role === UserRole.DISPATCH_MANAGER;
+    user?.role === UserRole.DISPATCH_MANAGER ||
+    user?.role === UserRole.DISPATCHER;
   const rows = shipments.data?.items ?? [];
 
   return (

@@ -75,7 +75,8 @@ export function PaymentsCard({ shipment }: { shipment: Shipment }) {
   // second is deliberately narrower: the person who books a receipt is not the
   // person who confirms it against the bank.
   const canVerify = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
-  const canRecord = canVerify || user?.role === UserRole.DISPATCH_MANAGER;
+  const canRecord =
+    canVerify || user?.role === UserRole.DISPATCH_MANAGER || user?.role === UserRole.DISPATCHER;
 
   const summary = useQuery({
     queryKey: shipmentKeys.payments(shipment.id),

@@ -5,7 +5,7 @@ import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
 import {
   CAN_DECIDE_LIQUIDATION,
-  CAN_READ_SHIPMENTS,
+  CAN_READ_TRIP_CASH,
   CAN_SUBMIT_LIQUIDATION,
   CAN_WRITE_SHIPMENT_MONEY,
 } from '../auth/role-policy';
@@ -67,7 +67,7 @@ export class LiquidationController {
    * submit and cannot be short on.
    */
   @Get('shipments/:shipmentId/liquidations')
-  @Roles(...CAN_SUBMIT_LIQUIDATION, ...CAN_READ_SHIPMENTS)
+  @Roles(...CAN_SUBMIT_LIQUIDATION, ...CAN_READ_TRIP_CASH)
   async listForShipment(
     @Param('shipmentId') shipmentId: string,
     @CurrentUser() user: RequestUser,
@@ -117,7 +117,7 @@ export class LiquidationController {
    * screen looks right and the payload is not.
    */
   @Get('liquidations/:liquidationId')
-  @Roles(...CAN_SUBMIT_LIQUIDATION, ...CAN_READ_SHIPMENTS)
+  @Roles(...CAN_SUBMIT_LIQUIDATION, ...CAN_READ_TRIP_CASH)
   async get(
     @Param('liquidationId') liquidationId: string,
     @CurrentUser() user: RequestUser,

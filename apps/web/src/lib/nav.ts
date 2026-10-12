@@ -37,10 +37,17 @@ const OFFICE_BEYOND_DISPATCH = [
   UserRole.MANAGEMENT,
 ] as const;
 
-/** Everyone who works a trip from a desk, either role. */
+/** Everyone who works a trip from a desk and holds cash for it. */
 const DISPATCH_ROLES = [UserRole.OPERATIONS, UserRole.DISPATCH_MANAGER] as const;
 
-const EVERY_DESK = [...OFFICE_BEYOND_DISPATCH, ...DISPATCH_ROLES] as const;
+/**
+ * Works a trip from a desk too, but holds no cash and has no staff row — so
+ * not in `DISPATCH_ROLES`, which is also the list that opens /my-record.
+ */
+const EVERY_DESK = [...OFFICE_BEYOND_DISPATCH, ...DISPATCH_ROLES, UserRole.DISPATCHER] as const;
+
+/** Who keeps the operational directories: the dispatch manager and the dispatcher. */
+const KEEPS_DIRECTORIES = [UserRole.DISPATCH_MANAGER, UserRole.DISPATCHER] as const;
 
 /**
  * Who may open each master data screen. Imported by `resources.tsx` as well, so
@@ -56,11 +63,11 @@ const EVERY_DESK = [...OFFICE_BEYOND_DISPATCH, ...DISPATCH_ROLES] as const;
  * would make themselves a custodian.
  */
 export const PAGE_ROLES = {
-  trucks: [...OFFICE_BEYOND_DISPATCH, UserRole.DISPATCH_MANAGER],
+  trucks: [...OFFICE_BEYOND_DISPATCH, ...KEEPS_DIRECTORIES],
   staff: OFFICE_BEYOND_DISPATCH,
-  clients: [...OFFICE_BEYOND_DISPATCH, UserRole.DISPATCH_MANAGER],
-  thirdParties: [...OFFICE_BEYOND_DISPATCH, UserRole.DISPATCH_MANAGER],
-  payees: [...OFFICE_BEYOND_DISPATCH, UserRole.DISPATCH_MANAGER],
+  clients: [...OFFICE_BEYOND_DISPATCH, ...KEEPS_DIRECTORIES],
+  thirdParties: [...OFFICE_BEYOND_DISPATCH, ...KEEPS_DIRECTORIES],
+  payees: [...OFFICE_BEYOND_DISPATCH, ...KEEPS_DIRECTORIES],
   // The one list that describes this company's own operation rather than
   // somebody outside it, and the one a dispatcher keeps.
   routes: EVERY_DESK,

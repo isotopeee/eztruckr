@@ -4,7 +4,7 @@ import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
 import {
   CAN_DECIDE_LIQUIDATION,
-  CAN_READ_SHIPMENTS,
+  CAN_READ_TRIP_CASH,
   CAN_SUBMIT_LIQUIDATION,
 } from '../auth/role-policy';
 import { CarrySettlementToPayoutDto, RecordSettlementDto } from './liquidation.dto';
@@ -28,7 +28,7 @@ export class SettlementController {
    * they came up short by, and whether it was recovered from their pay.
    */
   @Get('shipments/:shipmentId/settlements')
-  @Roles(...CAN_READ_SHIPMENTS, ...CAN_SUBMIT_LIQUIDATION)
+  @Roles(...CAN_READ_TRIP_CASH, ...CAN_SUBMIT_LIQUIDATION)
   async listForShipment(
     @Param('shipmentId') shipmentId: string,
     @CurrentUser() user: RequestUser,
@@ -39,7 +39,7 @@ export class SettlementController {
   }
 
   @Get('liquidations/:liquidationId/settlement')
-  @Roles(...CAN_READ_SHIPMENTS, ...CAN_SUBMIT_LIQUIDATION)
+  @Roles(...CAN_READ_TRIP_CASH, ...CAN_SUBMIT_LIQUIDATION)
   async get(
     @Param('liquidationId') liquidationId: string,
     @CurrentUser() user: RequestUser,
@@ -77,7 +77,7 @@ export class SettlementController {
    * a trip was clear while the crew still held the change.
    */
   @Get('settlements/outstanding')
-  @Roles(...CAN_READ_SHIPMENTS)
+  @Roles(...CAN_READ_TRIP_CASH)
   outstanding(): Promise<OutstandingAllowanceReport> {
     return this.settlements.outstanding();
   }

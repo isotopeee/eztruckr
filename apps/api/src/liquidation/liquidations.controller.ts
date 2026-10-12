@@ -2,7 +2,7 @@ import { Controller, ForbiddenException, Get, Query } from '@nestjs/common';
 import { roleRequiresStaffLink, type Liquidation } from '@eztruckr/types';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
-import { CAN_READ_SHIPMENTS, CAN_SUBMIT_LIQUIDATION } from '../auth/role-policy';
+import { CAN_READ_TRIP_CASH, CAN_SUBMIT_LIQUIDATION } from '../auth/role-policy';
 import { LiquidationListQueryDto } from './liquidation.dto';
 import { LiquidationService } from './liquidation.service';
 
@@ -19,7 +19,7 @@ export class LiquidationsController {
   constructor(private readonly liquidations: LiquidationService) {}
 
   @Get()
-  @Roles(...CAN_READ_SHIPMENTS, ...CAN_SUBMIT_LIQUIDATION)
+  @Roles(...CAN_READ_TRIP_CASH, ...CAN_SUBMIT_LIQUIDATION)
   list(
     @Query() query: LiquidationListQueryDto,
     @CurrentUser() user: RequestUser,

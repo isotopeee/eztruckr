@@ -4,7 +4,7 @@ import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
 import {
   CAN_DECIDE_ALLOWANCE_REQUEST,
-  CAN_READ_SHIPMENTS,
+  CAN_READ_TRIP_CASH,
   CAN_REQUEST_ALLOWANCE,
 } from '../auth/role-policy';
 import { AllowanceRequestsService } from './allowance-requests.service';
@@ -35,7 +35,7 @@ import { ShipmentAccessService } from './shipment-access.service';
  *
  * CREW SEE NONE OF THIS. They may read their own releases, because a release is
  * cash they were handed; a request is an office conversation about money that
- * has not moved, and the read list is `CAN_READ_SHIPMENTS` accordingly.
+ * has not moved, and the read list is `CAN_READ_TRIP_CASH` accordingly.
  */
 @Controller()
 export class AllowanceRequestsController {
@@ -54,7 +54,7 @@ export class AllowanceRequestsController {
    * sides and deliberately not two endpoints.
    */
   @Get('allowance-requests')
-  @Roles(...CAN_READ_SHIPMENTS)
+  @Roles(...CAN_READ_TRIP_CASH)
   list(@Query() query: AllowanceRequestListQueryDto): Promise<AllowanceRequest[]> {
     return this.requests.list(query);
   }
@@ -62,7 +62,7 @@ export class AllowanceRequestsController {
   // --- through the trip ----------------------------------------------------
 
   @Get('shipments/:shipmentId/allowance-requests')
-  @Roles(...CAN_READ_SHIPMENTS)
+  @Roles(...CAN_READ_TRIP_CASH)
   async listForShipment(
     @Param('shipmentId') shipmentId: string,
     @CurrentUser() user: RequestUser,

@@ -26,6 +26,7 @@ import type { RequestUser } from '../auth/request-user';
 import {
   CAN_EDIT_RATE_CHAIN,
   CAN_READ_SHIPMENTS,
+  CAN_READ_TRIP_MARGIN,
   CAN_RECORD_THIRD_PARTY_PAYMENT,
   CAN_REMOVE_ANY_SHIPMENT,
   CAN_REMOVE_DRAFT_SHIPMENTS,
@@ -87,7 +88,7 @@ export class ShipmentsController {
 
     // The list carries the rate chain too, so redacting only the detail would
     // leave the same figures one screen earlier.
-    return { ...page, items: page.items.map((row) => this.redactRevenueForCrew(row, user)) };
+    return { ...page, items: page.items.map((row) => this.redact(row, user)) };
   }
 
   @Get(':id')
@@ -97,19 +98,26 @@ export class ShipmentsController {
 
     this.assertCrewMayRead(shipment, user);
 
-    return this.redactRevenueForCrew(shipment, user);
+    return this.redact(shipment, user);
   }
 
   @Post()
   @Roles(...CAN_WRITE_SHIPMENTS)
-  create(@Body() dto: CreateShipmentDto): Promise<Shipment> {
-    return this.shipments.create(dto);
+  async create(
+    @Body() dto: CreateShipmentDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Shipment> {
+    return this.redact(await this.shipments.create(dto), user);
   }
 
   @Patch(':id')
   @Roles(...CAN_WRITE_SHIPMENTS)
-  update(@Param('id') id: string, @Body() dto: UpdateShipmentDto): Promise<Shipment> {
-    return this.shipments.update(id, dto);
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateShipmentDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Shipment> {
+    return this.redact(await this.shipments.update(id, dto), user);
   }
 
   /**
@@ -149,8 +157,12 @@ export class ShipmentsController {
 
   @Patch(':id/crew')
   @Roles(...CAN_WRITE_SHIPMENTS)
-  assignCrew(@Param('id') id: string, @Body() dto: AssignCrewDto): Promise<Shipment> {
-    return this.shipments.assignCrew(id, dto);
+  async assignCrew(
+    @Param('id') id: string,
+    @Body() dto: AssignCrewDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Shipment> {
+    return this.redact(await this.shipments.assignCrew(id, dto), user);
   }
 
   /**
@@ -160,8 +172,12 @@ export class ShipmentsController {
    */
   @Patch(':id/truck')
   @Roles(...CAN_WRITE_SHIPMENTS)
-  assignTruck(@Param('id') id: string, @Body() dto: AssignTruckDto): Promise<Shipment> {
-    return this.shipments.assignTruck(id, dto);
+  async assignTruck(
+    @Param('id') id: string,
+    @Body() dto: AssignTruckDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<Shipment> {
+    return this.redact(await this.shipments.assignTruck(id, dto), user);
   }
 
   /**
@@ -171,7 +187,7 @@ export class ShipmentsController {
    */
   @Patch(':id/status')
   @Roles(...CAN_TRANSITION_SHIPMENTS)
-  transition(
+  async transition(
     @Param('id') id: string,
     @Body() dto: TransitionShipmentDto,
     @CurrentUser() user: RequestUser,
@@ -184,26 +200,27 @@ export class ShipmentsController {
       );
     }
 
-    return this.shipments.transition(id, dto);
+    return this.redact(await this.shipments.transition(id, dto), user);
   }
 
   /**
    * What the trip made, with the breakdown behind it.
    *
-   * `CAN_READ_SHIPMENTS` without CREW, unlike the endpoints either side of it.
+   * `CAN_READ_TRIP_MARGIN`: without CREW, unlike the endpoints either side of
+   * it, and without the DISPATCHER.
    * A crew member sees their own pay and their own liquidation because both are
    * their record; the company's margin on the trip they drove is not, and a
    * portal session that could read it could assemble the whole P&L one trip at
    * a time.
    */
   @Get(':id/gross-profit')
-  @Roles(...CAN_READ_SHIPMENTS)
+  @Roles(...CAN_READ_TRIP_MARGIN)
   grossProfit(@Param('id') id: string): Promise<GrossProfit> {
     return this.grossProfits.forShipment(id);
   }
 
   @Get(':id/gas-rate')
-  @Roles(...CAN_READ_SHIPMENTS)
+  @Roles(...CAN_READ_TRIP_MARGIN)
   gasRate(@Param('id') id: string) {
     return this.shipments.gasRateContext(id);
   }
@@ -233,21 +250,21 @@ export class ShipmentsController {
    */
   @Put(':id/third-party-payment')
   @Roles(...CAN_RECORD_THIRD_PARTY_PAYMENT)
-  markThirdPartyCommissionPaid(
+  async markThirdPartyCommissionPaid(
     @Param('id') id: string,
     @Body() dto: MarkThirdPartyCommissionPaidDto,
     @CurrentUser() user: RequestUser,
   ): Promise<Shipment> {
-    return this.shipments.markThirdPartyCommissionPaid(id, dto, user);
+    return this.redact(await this.shipments.markThirdPartyCommissionPaid(id, dto, user), user);
   }
 
   @Delete(':id/third-party-payment')
   @Roles(...CAN_RECORD_THIRD_PARTY_PAYMENT)
-  unmarkThirdPartyCommissionPaid(
+  async unmarkThirdPartyCommissionPaid(
     @Param('id') id: string,
     @CurrentUser() user: RequestUser,
   ): Promise<Shipment> {
-    return this.shipments.unmarkThirdPartyCommissionPaid(id, user);
+    return this.redact(await this.shipments.unmarkThirdPartyCommissionPaid(id, user), user);
   }
 
   @Post(':id/third-party-payment/verify')
@@ -325,6 +342,35 @@ export class ShipmentsController {
     const sort = query.sort === 'netRate' ? DEFAULT_SHIPMENT_SORT : query.sort;
 
     return { ...query, staffId: user.staffId, sort };
+  }
+
+  private redact(shipment: Shipment, user: RequestUser): Shipment {
+    return this.redactMarginForDispatcher(this.redactRevenueForCrew(shipment, user), user);
+  }
+
+  /**
+   * What a DISPATCHER is not shown: the commission base and the gas deduction
+   * cut from it, and the trip's float. The same fields `CAN_READ_TRIP_MARGIN`
+   * and `CAN_READ_TRIP_CASH` withhold by route, nulled here because they ride
+   * on the shipment itself. The rate chain and the receivable stay — booking
+   * the trip and recording what the client paid are this role's job.
+   */
+  private redactMarginForDispatcher(shipment: Shipment, user: RequestUser): Shipment {
+    if (user.role !== UserRole.DISPATCHER) {
+      return shipment;
+    }
+
+    return {
+      ...shipment,
+      commissionableCharges: null,
+      grossForCommission: null,
+      gasDeductionAmount: null,
+      appliedGasDeductionRate: null,
+      gasRateOverride: null,
+      gasRateOverrideReason: null,
+      commissionableBase: null,
+      totalAdvanced: '0.00',
+    };
   }
 
   /**

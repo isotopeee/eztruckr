@@ -3,7 +3,7 @@ import type { Allowance, AllowanceSummary } from '@eztruckr/types';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
 import {
-  CAN_READ_SHIPMENTS,
+  CAN_READ_TRIP_CASH,
   CAN_SUBMIT_LIQUIDATION,
   CAN_WRITE_SHIPMENT_MONEY,
 } from '../auth/role-policy';
@@ -32,7 +32,7 @@ export class AllowancesController {
   ) {}
 
   @Get()
-  @Roles(...CAN_READ_SHIPMENTS, ...CAN_SUBMIT_LIQUIDATION)
+  @Roles(...CAN_READ_TRIP_CASH, ...CAN_SUBMIT_LIQUIDATION)
   async summary(
     @Param('shipmentId') shipmentId: string,
     @CurrentUser() user: RequestUser,

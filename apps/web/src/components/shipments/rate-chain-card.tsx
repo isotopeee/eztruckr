@@ -102,7 +102,13 @@ export function RateChainCard({ shipment }: { shipment: Shipment }) {
   // the dispatch manager records, accounting approves.
   const mayVerifyCutPayment =
     user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
-  const mayRecordCutPayment = mayVerifyCutPayment || user?.role === UserRole.DISPATCH_MANAGER;
+  const mayRecordCutPayment =
+    mayVerifyCutPayment ||
+    user?.role === UserRole.DISPATCH_MANAGER ||
+    user?.role === UserRole.DISPATCHER;
+  // The API nulls the base for a dispatcher; the section goes with it rather
+  // than reading "not computed yet" about figures that exist.
+  const mayReadCommissionBase = user?.role !== UserRole.DISPATCHER;
 
   const mayCorrect =
     (user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING) &&
@@ -171,56 +177,62 @@ export function RateChainCard({ shipment }: { shipment: Shipment }) {
           <CorrectionForm shipment={shipment} onClose={() => setCorrecting(false)} />
         ) : null}
 
-        <div className="mt-6">
-          <h4 className="mb-1 font-medium">Commission base</h4>
-          {!computed ? (
-            <p className="text-muted-foreground py-2 text-xs">
-              Not computed yet. The base is derived when commissions are computed, and frozen at
-              that moment — {SHIPMENT_STATUS_LABELS[shipment.status].toLowerCase()} shipments show
-              it once that has happened.
-            </p>
-          ) : (
-            <>
-              <Row label="Net rate" value={shipment.netRate} />
-              <Row
-                label="Commissionable charges"
-                value={shipment.commissionableCharges}
-                operator="+"
-                note="only lines flagged commissionable"
-              />
-              <Row label="Gross for commission" value={shipment.grossForCommission} operator="=" />
-              <Row
-                label="Gas expense deduction"
-                value={shipment.gasDeductionAmount}
-                operator="−"
-                // The rate this computation used, stated plainly and nothing
-                // more. It deliberately does NOT say whether that rate came
-                // from an override: `gasRateOverrideReason` describes the
-                // override in force *now*, which may have been set after this
-                // computation ran, so annotating from it would be a claim this
-                // card cannot substantiate. The gas card below owns that
-                // distinction, and shows the frozen and effective rates side
-                // by side when they differ.
-                note={
-                  shipment.appliedGasDeductionRate
-                    ? formatRate(shipment.appliedGasDeductionRate)
-                    : undefined
-                }
-              />
-              <Row
-                label="Commissionable base"
-                value={shipment.commissionableBase}
-                operator="="
-                emphasis
-              />
-              <p className="text-muted-foreground mt-3 text-xs">
-                The gas deduction reduces the commission base only. It is not a cost line — actual
-                fuel is recognised through the liquidation, and counting it here as well would
-                double it.
+        {mayReadCommissionBase ? (
+          <div className="mt-6">
+            <h4 className="mb-1 font-medium">Commission base</h4>
+            {!computed ? (
+              <p className="text-muted-foreground py-2 text-xs">
+                Not computed yet. The base is derived when commissions are computed, and frozen at
+                that moment — {SHIPMENT_STATUS_LABELS[shipment.status].toLowerCase()} shipments show
+                it once that has happened.
               </p>
-            </>
-          )}
-        </div>
+            ) : (
+              <>
+                <Row label="Net rate" value={shipment.netRate} />
+                <Row
+                  label="Commissionable charges"
+                  value={shipment.commissionableCharges}
+                  operator="+"
+                  note="only lines flagged commissionable"
+                />
+                <Row
+                  label="Gross for commission"
+                  value={shipment.grossForCommission}
+                  operator="="
+                />
+                <Row
+                  label="Gas expense deduction"
+                  value={shipment.gasDeductionAmount}
+                  operator="−"
+                  // The rate this computation used, stated plainly and nothing
+                  // more. It deliberately does NOT say whether that rate came
+                  // from an override: `gasRateOverrideReason` describes the
+                  // override in force *now*, which may have been set after this
+                  // computation ran, so annotating from it would be a claim this
+                  // card cannot substantiate. The gas card below owns that
+                  // distinction, and shows the frozen and effective rates side
+                  // by side when they differ.
+                  note={
+                    shipment.appliedGasDeductionRate
+                      ? formatRate(shipment.appliedGasDeductionRate)
+                      : undefined
+                  }
+                />
+                <Row
+                  label="Commissionable base"
+                  value={shipment.commissionableBase}
+                  operator="="
+                  emphasis
+                />
+                <p className="text-muted-foreground mt-3 text-xs">
+                  The gas deduction reduces the commission base only. It is not a cost line — actual
+                  fuel is recognised through the liquidation, and counting it here as well would
+                  double it.
+                </p>
+              </>
+            )}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );

@@ -70,8 +70,13 @@ export default function DashboardPage() {
               on: a truck does not leave until the cash does. */}
           <PendingAllowanceRequestsCard role={user?.role} />
           <PaymentsToVerifyCard role={user?.role} />
-          <OutstandingAllowancesCard />
-          <ReturnedForCorrectionCard />
+          {/* Both read trip cash, which the dispatcher is refused. */}
+          {user?.role === UserRole.DISPATCHER ? null : (
+            <>
+              <OutstandingAllowancesCard />
+              <ReturnedForCorrectionCard />
+            </>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {TILES.map((tile) => (
@@ -186,7 +191,7 @@ function PendingAllowanceRequestsCard({ role }: { role: UserRole | undefined }) 
  */
 function PaymentsToVerifyCard({ role }: { role: UserRole | undefined }) {
   const verifies = role === UserRole.ADMINISTRATOR || role === UserRole.ACCOUNTING;
-  const records = verifies || role === UserRole.DISPATCH_MANAGER;
+  const records = verifies || role === UserRole.DISPATCH_MANAGER || role === UserRole.DISPATCHER;
 
   const payments = useQuery({
     queryKey: shipmentKeys.paymentQueue(PaymentVerificationStatus.UNVERIFIED),

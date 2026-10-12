@@ -20,6 +20,7 @@ export const CAN_READ_MASTER_DATA = [
   UserRole.ACCOUNTING,
   UserRole.MANAGEMENT,
   UserRole.DISPATCH_MANAGER,
+  UserRole.DISPATCHER,
 ] as const;
 
 /**
@@ -57,6 +58,7 @@ export const CAN_READ_LIQUIDATION_REFERENCE_DATA = [
 export const CAN_WRITE_OPERATIONAL_MASTER_DATA = [
   UserRole.ADMINISTRATOR,
   UserRole.DISPATCH_MANAGER,
+  UserRole.DISPATCHER,
 ] as const;
 
 /**
@@ -109,11 +111,16 @@ export const CAN_WRITE_FINANCIAL_MASTER_DATA = [
  * a payee is who money is disbursed to, and the person claiming the expense
  * should not also be the person who invented the recipient. Management stays
  * out: they record no disbursement at all.
+ *
+ * DISPATCHER is here with their manager, and the reasoning above does not catch
+ * them: they claim no expense at all, so there is no claim for an invented
+ * recipient to sit on.
  */
 export const CAN_WRITE_PAYEES = [
   UserRole.ADMINISTRATOR,
   UserRole.ACCOUNTING,
   UserRole.DISPATCH_MANAGER,
+  UserRole.DISPATCHER,
 ] as const;
 
 /** Creating logins and assigning roles is the administrator's alone. */
@@ -129,6 +136,40 @@ export const CAN_READ_SHIPMENTS = [
   UserRole.ACCOUNTING,
   UserRole.MANAGEMENT,
   UserRole.DISPATCH_MANAGER,
+  UserRole.DISPATCHER,
+] as const;
+
+/**
+ * A trip's cash: its liquidations, the allowances released against it, the
+ * requests for more, and the settlement of the variance.
+ *
+ * `CAN_READ_SHIPMENTS` less the DISPATCHER, who works the trip and none of the
+ * money carried on it. Their view of a trip stops at the booking, the crew,
+ * the charges and what the client paid.
+ */
+export const CAN_READ_TRIP_CASH = [
+  UserRole.ADMINISTRATOR,
+  UserRole.OPERATIONS,
+  UserRole.ACCOUNTING,
+  UserRole.MANAGEMENT,
+  UserRole.DISPATCH_MANAGER,
+] as const;
+
+/**
+ * What a trip made and how the crew's base was cut from it: gross profit and
+ * the gas deduction. The same list as `CAN_READ_TRIP_CASH`, kept separate
+ * because the two have no reason to move together.
+ *
+ * THE COMMISSION BASE ON THE SHIPMENT ITSELF is the same rule, applied by
+ * redaction in `ShipmentsController` — those figures ride on the trip record
+ * every reader fetches, so no route list can withhold them.
+ */
+export const CAN_READ_TRIP_MARGIN = [
+  UserRole.ADMINISTRATOR,
+  UserRole.OPERATIONS,
+  UserRole.ACCOUNTING,
+  UserRole.MANAGEMENT,
+  UserRole.DISPATCH_MANAGER,
 ] as const;
 
 /** Booking a trip, assigning crew, dispatching: dispatch's job. */
@@ -136,6 +177,7 @@ export const CAN_WRITE_SHIPMENTS = [
   UserRole.ADMINISTRATOR,
   UserRole.OPERATIONS,
   UserRole.DISPATCH_MANAGER,
+  UserRole.DISPATCHER,
 ] as const;
 
 /**
@@ -245,6 +287,7 @@ export const CAN_WRITE_SHIPMENT_MONEY = [UserRole.ADMINISTRATOR, UserRole.ACCOUN
 export const CAN_RECORD_CLIENT_PAYMENT = [
   ...CAN_WRITE_SHIPMENT_MONEY,
   UserRole.DISPATCH_MANAGER,
+  UserRole.DISPATCHER,
 ] as const;
 
 /**
@@ -415,8 +458,11 @@ export const CAN_SUBMIT_LIQUIDATION = [
  * for their own float. A recorder who was NOT already here would have to break
  * the alias rather than be added to it — being able to attach a document is not
  * being able to submit somebody's cash account.
+ *
+ * THE DISPATCHER IS THAT RECORDER, so the alias is broken here: they attach
+ * deposit slips to the client payments they record, and submit no liquidation.
  */
-export const CAN_UPLOAD_RECEIPTS = CAN_SUBMIT_LIQUIDATION;
+export const CAN_UPLOAD_RECEIPTS = [...CAN_SUBMIT_LIQUIDATION, UserRole.DISPATCHER] as const;
 
 /**
  * Returning, approving and reversing a liquidation, and settling the variance.
@@ -454,6 +500,7 @@ export const CAN_TRANSITION_SHIPMENTS = [
   UserRole.OPERATIONS,
   UserRole.ACCOUNTING,
   UserRole.DISPATCH_MANAGER,
+  UserRole.DISPATCHER,
 ] as const;
 
 /** Every signed-in role, for routes about the caller themselves. */
@@ -464,4 +511,5 @@ export const ANY_SIGNED_IN_ROLE = [
   UserRole.MANAGEMENT,
   UserRole.CREW,
   UserRole.DISPATCH_MANAGER,
+  UserRole.DISPATCHER,
 ] as const;

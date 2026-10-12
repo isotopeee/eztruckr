@@ -410,7 +410,11 @@ function AdjustmentForm({
 }
 
 function CommissionDetail({ commission }: { commission: Commission }) {
+  const { user } = useCurrentUser();
   const isFormula = commission.appliedMethod === CommissionMethod.FORMULA;
+  // The dispatcher sees what each person earned, not the base it was cut from
+  // — and a formula's inputs are that base under other names.
+  const showsBase = user?.role !== UserRole.DISPATCHER;
 
   const base = commission.commissionableBase;
 
@@ -429,24 +433,26 @@ function CommissionDetail({ commission }: { commission: Commission }) {
           </>
         ) : null}
       </p>
-      <p className="tabular-nums">
-        {formatMoney(base)} base
-        {commission.appliedRate === null ? (
-          <span className="ml-2">
-            — no meaningful rate for this method on this shipment (the amount is authoritative)
-          </span>
-        ) : (
-          <>
-            {' × '}
-            {formatRate(commission.appliedRate)}
-            {isFormula ? ' effective' : ''}
-            {' = '}
-            {formatMoney(commission.amount)}
-          </>
-        )}
-      </p>
+      {showsBase ? (
+        <p className="tabular-nums">
+          {formatMoney(base)} base
+          {commission.appliedRate === null ? (
+            <span className="ml-2">
+              — no meaningful rate for this method on this shipment (the amount is authoritative)
+            </span>
+          ) : (
+            <>
+              {' × '}
+              {formatRate(commission.appliedRate)}
+              {isFormula ? ' effective' : ''}
+              {' = '}
+              {formatMoney(commission.amount)}
+            </>
+          )}
+        </p>
+      ) : null}
 
-      {isFormula && commission.appliedFormulaExpression ? (
+      {showsBase && isFormula && commission.appliedFormulaExpression ? (
         <div className="bg-muted/50 mt-2 rounded p-2">
           <code className="block break-all">{commission.appliedFormulaExpression}</code>
           {commission.appliedFormulaFields ? (
