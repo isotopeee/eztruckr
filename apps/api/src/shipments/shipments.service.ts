@@ -22,6 +22,7 @@ import {
   isRateChainEditable,
   isShipmentRemovableByDispatch,
   isShipmentStatus,
+  isShipmentDirection,
   liquidationAccountLabel,
   LiquidationStatus,
   money,
@@ -394,6 +395,7 @@ export class ShipmentsService {
       destination: input.destination,
       cargoDescription: input.cargoDescription,
       containerNumber: input.containerNumber,
+      shipmentDirection: input.shipmentDirection,
       grossRate: rates.grossRate,
       tpcAmount: rates.tpcAmount,
       netRate: rates.netRate,
@@ -527,6 +529,7 @@ export class ShipmentsService {
     if (input.destination !== undefined) data.destination = input.destination;
     if (input.cargoDescription !== undefined) data.cargoDescription = input.cargoDescription;
     if (input.containerNumber !== undefined) data.containerNumber = input.containerNumber;
+    if (input.shipmentDirection !== undefined) data.shipmentDirection = input.shipmentDirection;
     // Null is "the schema normalised an absent date", not "clear the date" —
     // the column is NOT NULL, so there is nothing to clear it to.
     if (input.shipmentDate) data.shipmentDate = new Date(input.shipmentDate);
@@ -1711,6 +1714,17 @@ function tpcPaymentMethodOf(row: ShipmentRow) {
   return row.tpcPaymentMethod;
 }
 
+function shipmentDirectionOf(row: ShipmentRow) {
+  if (row.shipmentDirection === null) return null;
+
+  // The column carries a CHECK, so this needs raw SQL to reach.
+  if (!isShipmentDirection(row.shipmentDirection)) {
+    throw new Error(`Shipment ${row.id} has an unrecognised shipment direction`);
+  }
+
+  return row.shipmentDirection;
+}
+
 export function toShipment(row: ShipmentRow): Shipment {
   if (!isShipmentStatus(row.status)) {
     throw new Error(`Shipment ${row.id} has an unrecognised status code ${row.status}`);
@@ -1736,6 +1750,7 @@ export function toShipment(row: ShipmentRow): Shipment {
     destination: row.destination,
     cargoDescription: row.cargoDescription,
     containerNumber: row.containerNumber,
+    shipmentDirection: shipmentDirectionOf(row),
 
     driverId: row.driverId,
     driverName: row.driver ? `${row.driver.firstName} ${row.driver.lastName}` : null,

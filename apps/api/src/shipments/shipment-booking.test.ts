@@ -10,6 +10,7 @@ import {
   LiquidationStatus,
   shipmentNumberDatePart,
   ShipmentStatus,
+  ShipmentDirection,
   type CreateShipmentInput,
 } from '@eztruckr/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -118,6 +119,7 @@ function booking(overrides: Partial<CreateShipmentInput> = {}): CreateShipmentIn
     destination: 'Batangas',
     cargoDescription: null,
     containerNumber: null,
+    shipmentDirection: null,
     grossRate: '20000.00',
     tpcRate: null,
     tpcAmount: null,
@@ -567,6 +569,7 @@ describe('the trip’s own details stay correctable after dispatch', () => {
     const corrected = await withActor({ userId: adminId }, () =>
       shipments.update(shipment.id, {
         containerNumber: 'TCLU1234567',
+        shipmentDirection: ShipmentDirection.EXPORT,
         shipmentDate: '2026-08-01T00:00:00.000Z',
         origin: 'Manila South Harbor',
         destination: 'Batangas Port',
@@ -574,6 +577,7 @@ describe('the trip’s own details stay correctable after dispatch', () => {
     );
 
     expect(corrected.containerNumber).toBe('TCLU1234567');
+    expect(corrected.shipmentDirection).toBe(ShipmentDirection.EXPORT);
     expect(corrected.shipmentDate).toBe('2026-08-01T00:00:00.000Z');
     expect(corrected.origin).toBe('Manila South Harbor');
   });

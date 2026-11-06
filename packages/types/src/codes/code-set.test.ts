@@ -13,6 +13,7 @@ import {
   SettlementStatus,
   ShipmentStatus,
   StaffRole,
+  ShipmentDirection,
   UserRole,
   isAllowedLiquidationTransition,
   isCommissionMethod,
@@ -126,6 +127,10 @@ describe('code sets are permanent', () => {
     expect(AdjustmentDirection).toEqual({ INCREASE: 1, DECREASE: 2 });
   });
 
+  it('pins every ShipmentDirection code', () => {
+    expect(ShipmentDirection).toEqual({ IMPORT: 1, EXPORT: 2 });
+  });
+
   it('pins every UserRole code', () => {
     expect(UserRole).toEqual({
       ADMINISTRATOR: 1,
@@ -181,6 +186,7 @@ describe('code sets are permanent', () => {
       CrewRole,
       StaffRole,
       AdjustmentDirection,
+      ShipmentDirection,
       UserRole,
       CommissionMethod,
       PayoutRunStatus,

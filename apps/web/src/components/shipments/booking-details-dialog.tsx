@@ -3,12 +3,15 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  SHIPMENT_DIRECTION_CODES,
+  SHIPMENT_DIRECTION_LABELS,
   UserRole,
   areBookingDetailsCorrectable,
   type Client,
   type Page,
   type Route as RouteRecord,
   type Shipment,
+  type ShipmentDirection,
 } from '@eztruckr/types';
 import { Loader2, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
@@ -105,6 +108,8 @@ function DetailsForm({ shipment, onDone }: { shipment: Shipment; onDone: () => v
     origin: shipment.origin,
     destination: shipment.destination,
     containerNumber: shipment.containerNumber ?? '',
+    shipmentDirection:
+      shipment.shipmentDirection === null ? NONE : String(shipment.shipmentDirection),
   });
 
   const clients = useQuery({
@@ -151,6 +156,8 @@ function DetailsForm({ shipment, onDone }: { shipment: Shipment; onDone: () => v
         origin: form.origin,
         destination: form.destination,
         containerNumber: form.containerNumber || null,
+        shipmentDirection:
+          form.shipmentDirection === NONE ? null : (Number(form.shipmentDirection) as ShipmentDirection),
       }),
     onSuccess: () => {
       toast.success('Trip details updated', {
@@ -258,6 +265,22 @@ function DetailsForm({ shipment, onDone }: { shipment: Shipment; onDone: () => v
           value={form.containerNumber}
           onChange={(event) => set('containerNumber')(event.target.value)}
         />
+      </Field>
+
+      <Field id="shipmentDirection" label="Direction" error={errors.shipmentDirection}>
+        <Select value={form.shipmentDirection} onValueChange={set('shipmentDirection')}>
+          <SelectTrigger id="shipmentDirection">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={NONE}>Not stated</SelectItem>
+            {SHIPMENT_DIRECTION_CODES.map((code) => (
+              <SelectItem key={code} value={String(code)}>
+                {SHIPMENT_DIRECTION_LABELS[code]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </Field>
 
       {reScopesRules ? (

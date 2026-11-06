@@ -13,6 +13,7 @@ import {
   paymentVerificationStatusSchema,
 } from '../codes/payment-verification-status';
 import { isShipmentStatus, shipmentStatusSchema } from '../codes/shipment-status';
+import { shipmentDirectionSchema } from '../codes/shipment-direction';
 import {
   auditFieldsSchema,
   idSchema,
@@ -305,6 +306,8 @@ export const shipmentSchema = auditFieldsSchema.extend({
   destination: z.string(),
   cargoDescription: z.string().nullable(),
   containerNumber: z.string().nullable(),
+  /** Import or export. Null when the booking did not say. */
+  shipmentDirection: shipmentDirectionSchema.nullable(),
 
   driverId: z.string().nullable(),
   driverName: z.string().nullable(),
@@ -526,6 +529,9 @@ const shipmentFields = z.object({
 
   /** The box on the trailer. Null for freight that is not containerised. */
   containerNumber: optionalText(40),
+
+  /** Import or export. Optional: trips booked before it existed never said. */
+  shipmentDirection: shipmentDirectionSchema.nullish().transform((value) => value ?? null),
 
   grossRate: positiveMoneyStringSchema,
   tpcRate: rateStringSchema.nullish().transform((value) => value ?? null),

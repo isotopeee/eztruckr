@@ -130,6 +130,7 @@ function booking(overrides: Partial<CreateShipmentInput> = {}): CreateShipmentIn
     destination: 'Batangas',
     cargoDescription: null,
     containerNumber: null,
+    shipmentDirection: null,
     grossRate: '50000.00',
     tpcRate: null,
     tpcAmount: null,

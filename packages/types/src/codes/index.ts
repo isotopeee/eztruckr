@@ -16,3 +16,4 @@ export * from './user-role';
 export * from './commission-method';
 export * from './payout-run-status';
 export * from './payee-type';
+export * from './shipment-direction';

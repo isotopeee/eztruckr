@@ -11,6 +11,8 @@ import {
   SHIPMENT_STATUS_CODES,
   SHIPMENT_STATUS_LABELS,
   ShipmentStatus,
+  SHIPMENT_DIRECTION_CODES,
+  SHIPMENT_DIRECTION_LABELS,
   UserRole,
   type Client,
   type Page as PageResult,
@@ -18,6 +20,7 @@ import {
   type ShipmentSortField,
   type SortDirection,
   type ThirdParty,
+  type ShipmentDirection,
   type Truck,
 } from '@eztruckr/types';
 import { ArrowDown, ArrowUp, ChevronsUpDown, Loader2 } from 'lucide-react';
@@ -271,6 +274,7 @@ export default function Page() {
                     onSort={sortBy}
                   />
                   <TableHead>Route</TableHead>
+                  <TableHead>Direction</TableHead>
                   <SortableHead
                     field="container"
                     label="Container"
@@ -327,6 +331,11 @@ export default function Page() {
                     <TableCell>{shipment.clientName ?? '—'}</TableCell>
                     <TableCell className="text-muted-foreground">
                       {shipment.origin} → {shipment.destination}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      {shipment.shipmentDirection === null
+                        ? '—'
+                        : SHIPMENT_DIRECTION_LABELS[shipment.shipmentDirection]}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
                       {shipment.containerNumber ?? '—'}
@@ -513,6 +522,7 @@ function CreateShipmentDialog() {
     origin: '',
     destination: '',
     containerNumber: '',
+    shipmentDirection: NONE,
     grossRate: '',
     tpcMode: 'rate' as 'rate' | 'amount',
     tpcValue: '',
@@ -584,6 +594,8 @@ function CreateShipmentDialog() {
         destination: form.destination,
         cargoDescription: null,
         containerNumber: form.containerNumber || null,
+        shipmentDirection:
+          form.shipmentDirection === NONE ? null : (Number(form.shipmentDirection) as ShipmentDirection),
         grossRate: form.grossRate,
         tpcRate: hasBroker && form.tpcMode === 'rate' && form.tpcValue ? form.tpcValue : null,
         tpcAmount: hasBroker && form.tpcMode === 'amount' && form.tpcValue ? form.tpcValue : null,
@@ -713,6 +725,22 @@ function CreateShipmentDialog() {
               />
             </Field>
           </div>
+
+          <Field id="shipmentDirection" label="Direction" error={errors.shipmentDirection}>
+            <Select value={form.shipmentDirection} onValueChange={set('shipmentDirection')}>
+              <SelectTrigger id="shipmentDirection">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>Not stated</SelectItem>
+                {SHIPMENT_DIRECTION_CODES.map((code) => (
+                  <SelectItem key={code} value={String(code)}>
+                    {SHIPMENT_DIRECTION_LABELS[code]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
 
           <Field id="truckId" label="Truck" error={errors.truckId}>
             <Select value={form.truckId} onValueChange={set('truckId')}>

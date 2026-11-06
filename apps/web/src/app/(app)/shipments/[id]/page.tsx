@@ -3,7 +3,7 @@
 import { use } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import { SHIPMENT_STATUS_LABELS, UserRole } from '@eztruckr/types';
+import { SHIPMENT_STATUS_LABELS, SHIPMENT_DIRECTION_LABELS, UserRole } from '@eztruckr/types';
 import { ArrowLeft } from 'lucide-react';
 import { AllowanceRequestsCard } from '@/components/shipments/allowance-requests-card';
 import { AllowancesCard } from '@/components/shipments/allowances-card';
@@ -80,6 +80,7 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
                 somebody on the phone identifies the trip, so it belongs where
                 the trip is identified. */}
             {data.containerNumber ? ` · container ${data.containerNumber}` : ''}
+            {data.shipmentDirection === null ? '' : ` · ${SHIPMENT_DIRECTION_LABELS[data.shipmentDirection]}`}
           </p>
         </div>
         {/* Office-only and status-gated, both decided inside the components so

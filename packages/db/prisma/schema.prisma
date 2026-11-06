@@ -989,6 +989,10 @@ model Shipment {
   /// because it is what a client phones up quoting.
   containerNumber String?
 
+  /// Code set: ShipmentDirection (1 IMPORT, 2 EXPORT). Null when the booking did
+  /// not say — every trip recorded before the column existed.
+  shipmentDirection Int? @db.SmallInt
+
   driverId String? @db.Uuid
   driver   Staff?  @relation("ShipmentDriver", fields: [driverId], references: [id], onDelete: Restrict)
   helperId String? @db.Uuid
