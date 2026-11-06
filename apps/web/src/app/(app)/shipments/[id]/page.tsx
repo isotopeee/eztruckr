@@ -80,7 +80,9 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
                 somebody on the phone identifies the trip, so it belongs where
                 the trip is identified. */}
             {data.containerNumber ? ` · container ${data.containerNumber}` : ''}
-            {data.shipmentDirection === null ? '' : ` · ${SHIPMENT_DIRECTION_LABELS[data.shipmentDirection]}`}
+            {data.shipmentDirection === null
+              ? ''
+              : ` · ${SHIPMENT_DIRECTION_LABELS[data.shipmentDirection]}`}
           </p>
         </div>
         {/* Office-only and status-gated, both decided inside the components so

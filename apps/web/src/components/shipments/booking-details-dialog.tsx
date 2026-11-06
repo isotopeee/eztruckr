@@ -157,7 +157,9 @@ function DetailsForm({ shipment, onDone }: { shipment: Shipment; onDone: () => v
         destination: form.destination,
         containerNumber: form.containerNumber || null,
         shipmentDirection:
-          form.shipmentDirection === NONE ? null : (Number(form.shipmentDirection) as ShipmentDirection),
+          form.shipmentDirection === NONE
+            ? null
+            : (Number(form.shipmentDirection) as ShipmentDirection),
       }),
     onSuccess: () => {
       toast.success('Trip details updated', {
