@@ -691,9 +691,9 @@ export class LiquidationService {
 
     this.assertMove(current, LiquidationStatus.SUBMITTED);
 
-    if (current.shipment.status === ShipmentStatus.CLOSED) {
+    if (current.shipment.status === ShipmentStatus.COMPLETED) {
       throw new ConflictException(
-        `Shipment ${current.shipment.shipmentNumber} is closed. Its liquidation can no longer be reversed, because everything downstream of the approval has been settled.`,
+        `Shipment ${current.shipment.shipmentNumber} is completed. Its liquidation can no longer be reversed, because everything downstream of the approval has been settled.`,
       );
     }
 

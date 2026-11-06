@@ -230,9 +230,9 @@ export class CommissionService {
       );
     }
 
-    if (status === ShipmentStatus.CLOSED) {
+    if (status === ShipmentStatus.COMPLETED) {
       throw new ConflictException(
-        `Shipment ${shipment.shipmentNumber} is closed and can no longer be recomputed.`,
+        `Shipment ${shipment.shipmentNumber} is completed and can no longer be recomputed.`,
       );
     }
   }

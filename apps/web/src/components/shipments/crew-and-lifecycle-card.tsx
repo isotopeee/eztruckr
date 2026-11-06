@@ -63,7 +63,7 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
    */
   const canDispatch =
     user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.DISPATCH_MANAGER;
-  const canClose = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
+  const canComplete = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
 
   useEffect(() => {
     setDriverId(shipment.driverId ?? UNASSIGNED);
@@ -142,7 +142,7 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
   const helpers = members.filter((member) => member.eligibleRoles.includes(CrewRole.HELPER));
   const transitions = allowedManualTransitions(shipment.status);
 
-  const mayDrive = (to: ShipmentStatus) => (to === 7 ? canClose : canDispatch);
+  const mayDrive = (to: ShipmentStatus) => (to === 7 ? canComplete : canDispatch);
 
   return (
     <Card>
@@ -239,7 +239,7 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
             ) : null}
             {shipment.closedAt ? (
               <>
-                <dt>Closed</dt>
+                <dt>Completed</dt>
                 <dd>{formatDateTime(shipment.closedAt)}</dd>
               </>
             ) : null}
@@ -265,7 +265,7 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
 
           {transitions.includes(7) ? (
             <p className="text-muted-foreground text-xs">
-              Closing needs every liquidation approved and commissions computed.
+              Completing needs every liquidation approved and commissions computed.
             </p>
           ) : null}
         </div>

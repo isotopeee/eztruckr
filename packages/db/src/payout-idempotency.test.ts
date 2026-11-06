@@ -72,7 +72,7 @@ async function createPaidCommission(suffix: string) {
       data: {
         id: testId(`shipment-${suffix}`),
         shipmentNumber: testId(`SHP-${suffix}`),
-        status: ShipmentStatus.CLOSED,
+        status: ShipmentStatus.COMPLETED,
         clientId,
         origin: 'Manila',
         destination: 'Batangas',

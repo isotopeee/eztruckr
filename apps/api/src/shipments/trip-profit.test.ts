@@ -455,10 +455,10 @@ describe('recording a cost the company paid itself', () => {
     expect(expense.amount).toBe('3000');
   });
 
-  it('stops at CLOSED, where the trip becomes part of the record', async () => {
+  it('stops at COMPLETED, where the trip becomes part of the record', async () => {
     if (!available) return;
 
-    await setStatus(ShipmentStatus.CLOSED);
+    await setStatus(ShipmentStatus.COMPLETED);
 
     await expect(
       act(() =>
@@ -472,7 +472,7 @@ describe('recording a cost the company paid itself', () => {
           receiptId: null,
         }),
       ),
-    ).rejects.toThrow(/closed; its costs are now part of the record/i);
+    ).rejects.toThrow(/completed; its costs are now part of the record/i);
 
     // The charge stops in the same place, now that it runs this far.
     await expect(
@@ -487,7 +487,7 @@ describe('recording a cost the company paid itself', () => {
           asAccounting(),
         ),
       ),
-    ).rejects.toThrow(/closed; its charges are now part of the record/i);
+    ).rejects.toThrow(/completed; its charges are now part of the record/i);
   });
 });
 

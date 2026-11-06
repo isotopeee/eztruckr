@@ -58,7 +58,7 @@ import { ShipmentsService } from './shipments.service';
  * rows rather than each being trusted separately.
  *
  * Every write here goes through `assertChargesEditable`: open until the trip
- * is CLOSED, and refused outright once a commission has been paid, so a charge
+ * is COMPLETED, and refused outright once a commission has been paid, so a charge
  * can never move a base somebody has already been paid out of.
  *
  * A DISPATCHER MAY ADD EITHER KIND, and what they add counts for nothing until

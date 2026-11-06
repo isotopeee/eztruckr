@@ -58,7 +58,7 @@ const FIXTURES = [
     date: '2026-02-02',
     netRate: '10000.0000',
     container: 'TCNU3333333',
-    status: ShipmentStatus.CLOSED,
+    status: ShipmentStatus.COMPLETED,
   },
   {
     key: 'c',
@@ -202,7 +202,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         of('c'), // Draft
         of('a'), // In transit
         of('d'), // Pending liquidation
-        of('b'), // Closed
+        of('b'), // Completed
       ]);
     });
 

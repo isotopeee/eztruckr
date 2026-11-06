@@ -171,7 +171,7 @@ export default function Page() {
           <p className="text-muted-foreground text-sm">
             {user?.role === UserRole.CREW
               ? 'The trips you worked on.'
-              : 'Every trip, from booking through to close.'}
+              : 'Every trip, from booking through to completion.'}
           </p>
         </div>
         {canCreate ? <CreateShipmentDialog /> : null}
@@ -595,7 +595,9 @@ function CreateShipmentDialog() {
         cargoDescription: null,
         containerNumber: form.containerNumber || null,
         shipmentDirection:
-          form.shipmentDirection === NONE ? null : (Number(form.shipmentDirection) as ShipmentDirection),
+          form.shipmentDirection === NONE
+            ? null
+            : (Number(form.shipmentDirection) as ShipmentDirection),
         grossRate: form.grossRate,
         tpcRate: hasBroker && form.tpcMode === 'rate' && form.tpcValue ? form.tpcValue : null,
         tpcAmount: hasBroker && form.tpcMode === 'amount' && form.tpcValue ? form.tpcValue : null,

@@ -86,7 +86,7 @@ describe('a dispatch manager dispatches trips and accounts for their own float',
       return roles ?? [];
     };
 
-    expect(may(rolesFor(ShipmentStatus.CLOSED), UserRole.DISPATCH_MANAGER)).toBe(false);
+    expect(may(rolesFor(ShipmentStatus.COMPLETED), UserRole.DISPATCH_MANAGER)).toBe(false);
 
     // But may drive it as far as delivered, which is dispatch's job.
     for (const status of [
@@ -217,7 +217,7 @@ describe('correcting the rate chain', () => {
   /**
    * The dispatch side is out, and this is the half worth asserting: they sold
    * the trip and signed the figure off once, and the correction now runs to
-   * CLOSED — so leaving it with them would let the seller restate their own
+   * COMPLETED — so leaving it with them would let the seller restate their own
    * sale after the accounts were approved against it.
    */
   it('keeps the dispatch side out, supervisor included', () => {

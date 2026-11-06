@@ -220,7 +220,7 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
           ) : (
             <p className="text-muted-foreground border-t pt-4 text-xs">
               No account on this trip can take a release — every liquidation is approved, or the
-              trip is closed. Reverse an approval, with a reason, to record another.
+              trip is completed. Reverse an approval, with a reason, to record another.
             </p>
           )
         ) : null}
@@ -246,7 +246,7 @@ export function AllowancesCard({ shipment }: { shipment: Shipment }) {
  * only place the answer can be right when somebody else approves an account
  * between this list loading and the save.
  *
- * NOT OFFERED ON A CLOSED TRIP either, which is why the row gates this on the
+ * NOT OFFERED ON A COMPLETED TRIP either, which is why the row gates this on the
  * same `canIssue` that gates removal: that flag is false exactly when no
  * account on the trip could take a release — every one approved, or the trip
  * closed — and a move is refused in both of those cases too.

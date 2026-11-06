@@ -456,7 +456,7 @@ export class ShipmentsService {
    * silently move the commission base of work already done.
    *
    * THE FACTS THAT IDENTIFY THE TRIP do not — client, date, route, lane and
-   * container number stay correctable until CLOSED, because they are
+   * container number stay correctable until COMPLETED, because they are
    * transcription of paperwork that arrives after the booking rather than terms
    * anybody committed to. See `areBookingDetailsCorrectable` for why that is a
    * third rule rather than a relaxation of the first.
@@ -594,7 +594,7 @@ export class ShipmentsService {
    * computed but not paid goes STALE and is recomputed; a commission that has
    * been paid names a voucher that has to keep reconciling, and no correction is
    * worth rewriting that. The status bound on top of it now stops only at
-   * CLOSED: approval against a mistyped figure is not a reason to keep the
+   * COMPLETED: approval against a mistyped figure is not a reason to keep the
    * mistype, and every commission the approval covered is caught by the paid
    * check rather than by the status.
    *
@@ -714,9 +714,9 @@ export class ShipmentsService {
     const current = await this.load(id);
     const status = this.statusOf(current);
 
-    // CLOSED, the bound every other correction to a trip shares. Money that
+    // COMPLETED, the bound every other correction to a trip shares. Money that
     // has already moved is guarded separately, just below.
-    if (status === ShipmentStatus.CLOSED) {
+    if (status === ShipmentStatus.COMPLETED) {
       throw new ConflictException(
         `Shipment ${current.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; its crew can no longer be changed.`,
       );
@@ -774,9 +774,9 @@ export class ShipmentsService {
     const current = await this.load(id);
     const status = this.statusOf(current);
 
-    if (status === ShipmentStatus.CLOSED) {
+    if (status === ShipmentStatus.COMPLETED) {
       throw new ConflictException(
-        `Shipment ${current.shipmentNumber} is closed; the truck on it is now part of the record.`,
+        `Shipment ${current.shipmentNumber} is completed; the truck on it is now part of the record.`,
       );
     }
 
@@ -834,8 +834,8 @@ export class ShipmentsService {
       data.deliveredAt = occurredAt;
     }
 
-    if (input.to === ShipmentStatus.CLOSED) {
-      await this.assertReadyToClose(current);
+    if (input.to === ShipmentStatus.COMPLETED) {
+      await this.assertReadyToComplete(current);
       data.closedAt = occurredAt;
     }
 
@@ -1421,8 +1421,8 @@ export class ShipmentsService {
   }
 
   private explainDeadEnd(from: ShipmentStatus, shipmentNumber: string): string {
-    if (from === ShipmentStatus.CLOSED) {
-      return `Shipment ${shipmentNumber} is closed. The workflow does not run backwards, because the frozen rates and computed commissions behind it have no defined behaviour in reverse.`;
+    if (from === ShipmentStatus.COMPLETED) {
+      return `Shipment ${shipmentNumber} is completed. The workflow does not run backwards, because the frozen rates and computed commissions behind it have no defined behaviour in reverse.`;
     }
 
     return `Shipment ${shipmentNumber} cannot be moved from ${SHIPMENT_STATUS_LABELS[from].toLowerCase()}.`;
@@ -1454,10 +1454,10 @@ export class ShipmentsService {
    * LIQUIDATED status standing in for either: a delivered trip goes straight
    * to closed, and this guard is the whole of what stands between them.
    */
-  private async assertReadyToClose(shipment: ShipmentRow): Promise<void> {
+  private async assertReadyToComplete(shipment: ShipmentRow): Promise<void> {
     if (shipment.commissionsComputedAt === null) {
       throw new ConflictException(
-        `Shipment ${shipment.shipmentNumber} has no computed commissions, so closing it would strand the crew's pay.`,
+        `Shipment ${shipment.shipmentNumber} has no computed commissions, so completing it would strand the crew's pay.`,
       );
     }
 
@@ -1470,7 +1470,7 @@ export class ShipmentsService {
 
     if (undecided > 0) {
       throw new ConflictException(
-        `Shipment ${shipment.shipmentNumber} has ${undecided} allowance request(s) still awaiting accounting. Approve or decline them before closing the trip — a closed trip can no longer release cash, so the ask could never be answered.`,
+        `Shipment ${shipment.shipmentNumber} has ${undecided} allowance request(s) still awaiting accounting. Approve or decline them before completing the trip — a completed trip can no longer release cash, so the ask could never be answered.`,
       );
     }
 
@@ -1488,7 +1488,7 @@ export class ShipmentsService {
 
     if (pendingBillable + pendingAdditional > 0) {
       throw new ConflictException(
-        `Shipment ${shipment.shipmentNumber} has ${pendingBillable + pendingAdditional} charge(s) still awaiting accounting. Approve or return them before closing the trip — a closed trip's charges can no longer change, so they could never be approved.`,
+        `Shipment ${shipment.shipmentNumber} has ${pendingBillable + pendingAdditional} charge(s) still awaiting accounting. Approve or return them before completing the trip — a completed trip's charges can no longer change, so they could never be approved.`,
       );
     }
 
@@ -1524,7 +1524,7 @@ export class ShipmentsService {
         .join(', ');
 
       throw new ConflictException(
-        `Shipment ${shipment.shipmentNumber} has ${outstanding.length} unapproved liquidation(s) — ${who}. Every liquidation has to be approved before the trip can close, so the cash advanced and the costs spent are accounted for.`,
+        `Shipment ${shipment.shipmentNumber} has ${outstanding.length} unapproved liquidation(s) — ${who}. Every liquidation has to be approved before the trip can be completed, so the cash advanced and the costs spent are accounted for.`,
       );
     }
   }

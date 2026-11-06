@@ -785,7 +785,7 @@ function RequestForm({
       <p className="text-muted-foreground border-t pt-4 text-xs">
         {accounts.length === 0
           ? 'No cash account on this trip yet. Assign the helper, or ask for an account to be opened for whoever will hold the money — a request names the account it would land on.'
-          : 'No account on this trip can take a release: every liquidation is approved, or the trip is closed. Accounting can reverse an approval, with a reason.'}
+          : 'No account on this trip can take a release: every liquidation is approved, or the trip is completed. Accounting can reverse an approval, with a reason.'}
       </p>
     );
   }

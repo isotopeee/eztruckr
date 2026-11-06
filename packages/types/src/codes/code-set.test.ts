@@ -41,14 +41,14 @@ describe('code sets are permanent', () => {
    * Renumbered once, in Phase 4, by explicit decision.
    *
    * PENDING_LIQUIDATION was specified from the start and omitted in Phase 2,
-   * which left LIQUIDATED on 5 and CLOSED on 6. They moved to 6 and 7 while
+   * which left LIQUIDATED on 5 and CLOSED (now COMPLETED) on 6. They moved to 6 and 7 while
    * the `shipment` table was still empty, so no stored row changed meaning —
    * which is the only circumstance in which the rule above does not apply.
    * Shipments exist now, so this map is frozen for good.
    *
    * 5 and 6 (PENDING_LIQUIDATION, LIQUIDATED) were later RETIRED — removed
    * with their rows migrated to DELIVERED, not renumbered. The gap is the
-   * point: CLOSED stays 7, and nothing may ever take 5 or 6.
+   * point: COMPLETED stays 7, and nothing may ever take 5 or 6.
    */
   it('pins every ShipmentStatus code', () => {
     expect(ShipmentStatus).toEqual({
@@ -56,7 +56,7 @@ describe('code sets are permanent', () => {
       DISPATCHED: 2,
       IN_TRANSIT: 3,
       DELIVERED: 4,
-      CLOSED: 7,
+      COMPLETED: 7,
     });
   });
 
@@ -214,7 +214,7 @@ describe('code sets are permanent', () => {
 
 describe('code guards', () => {
   it('accepts valid codes and rejects everything else', () => {
-    expect(isShipmentStatus(ShipmentStatus.CLOSED)).toBe(true);
+    expect(isShipmentStatus(ShipmentStatus.COMPLETED)).toBe(true);
     expect(isShipmentStatus(0)).toBe(false);
     // One past the highest allocated code, so this moves whenever one is
     // appended — which is the point of asserting it at all.
@@ -228,7 +228,7 @@ describe('code guards', () => {
 
 describe('order-dependent logic', () => {
   it('compares by workflow position, not by numeric code', () => {
-    expect(shipmentStatusAtLeast(ShipmentStatus.CLOSED, ShipmentStatus.DELIVERED)).toBe(true);
+    expect(shipmentStatusAtLeast(ShipmentStatus.COMPLETED, ShipmentStatus.DELIVERED)).toBe(true);
     expect(shipmentStatusAtLeast(ShipmentStatus.IN_TRANSIT, ShipmentStatus.DELIVERED)).toBe(false);
     expect(shipmentStatusAtLeast(ShipmentStatus.DELIVERED, ShipmentStatus.DELIVERED)).toBe(true);
   });
@@ -247,7 +247,7 @@ describe('order-dependent logic', () => {
       ShipmentStatus.DISPATCHED,
       ShipmentStatus.IN_TRANSIT,
       ShipmentStatus.DELIVERED,
-      ShipmentStatus.CLOSED,
+      ShipmentStatus.COMPLETED,
     ].map((status, index) => ({ status, index }));
 
     for (const { status, index } of ranks) {

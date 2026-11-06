@@ -650,7 +650,7 @@ describe('an undecided ask keeps its trip and its account reachable', () => {
     ).resolves.toEqual({ removed: true });
   });
 
-  it('refuses to close a trip with a request still awaiting a decision', async () => {
+  it('refuses to complete a trip with a request still awaiting a decision', async () => {
     if (!available) return;
 
     const { shipmentId, liquidationId } = await trip('close');
@@ -668,7 +668,7 @@ describe('an undecided ask keeps its trip and its account reachable', () => {
 
     await expect(
       withActor({ userId: adminId }, () =>
-        shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),
+        shipments.transition(shipmentId, { to: ShipmentStatus.COMPLETED, occurredAt: null }),
       ),
     ).rejects.toThrow(/allowance request\(s\) still awaiting accounting/);
 
@@ -681,10 +681,10 @@ describe('an undecided ask keeps its trip and its account reachable', () => {
     await freezeAccount(liquidationId);
 
     const closed = await withActor({ userId: adminId }, () =>
-      shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),
+      shipments.transition(shipmentId, { to: ShipmentStatus.COMPLETED, occurredAt: null }),
     );
 
-    expect(closed.status).toBe(ShipmentStatus.CLOSED);
+    expect(closed.status).toBe(ShipmentStatus.COMPLETED);
   });
 });
 

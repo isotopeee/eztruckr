@@ -686,7 +686,7 @@ describe('which trips count', () => {
       ShipmentStatus.DISPATCHED,
       ShipmentStatus.IN_TRANSIT,
       ShipmentStatus.DELIVERED,
-      ShipmentStatus.CLOSED,
+      ShipmentStatus.COMPLETED,
     ]) {
       await prisma.shipment.update({ where: { id: AUGUST_TRIP }, data: { status } });
 

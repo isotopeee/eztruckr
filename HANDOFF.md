@@ -267,7 +267,7 @@ deduction.
   checked first**, so an unbilled trip reports UNPAID rather than "paid in full" beside its zero
   balance. **OVERPAID is reported, not refused**: one check applied to the wrong trip is real, and
   what is owed moves on its own as charges are recorded.
-- **A payment may be recorded at ANY status, CLOSED included** — the deliberate difference from an
+- **A payment may be recorded at ANY status, COMPLETED included** — the deliberate difference from an
   allowance, which a closed trip refuses. Thirty- and sixty-day terms mean the check routinely
   arrives after the crew were paid and the trip closed, so refusing it would make the LAST payment
   on every trip the one that cannot be recorded. Symmetrically, **closing does not require the

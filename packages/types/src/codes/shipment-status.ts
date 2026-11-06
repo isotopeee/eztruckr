@@ -6,7 +6,7 @@ import { defineCodeSet } from './code-set';
  * Codes are permanent: never renumber, never reuse, append only.
  *
  * HISTORICAL NOTE. Phase 2 shipped this set without PENDING_LIQUIDATION, which
- * gave LIQUIDATED code 5 and CLOSED code 6. Phase 4 renumbered them to the
+ * gave LIQUIDATED code 5 and CLOSED (now COMPLETED) code 6. Phase 4 renumbered them to the
  * values below, on an explicit decision: the permanence rule exists to stop a
  * renumber silently rewriting the meaning of stored rows, and at that moment
  * the `shipment` table was empty. Nothing was reinterpreted. The rule is back
@@ -26,7 +26,7 @@ export const ShipmentStatus = {
   DISPATCHED: 2,
   IN_TRANSIT: 3,
   DELIVERED: 4,
-  CLOSED: 7,
+  COMPLETED: 7,
 } as const;
 
 export type ShipmentStatus = (typeof ShipmentStatus)[keyof typeof ShipmentStatus];
@@ -42,7 +42,7 @@ export const SHIPMENT_STATUS_LABELS: Readonly<Record<ShipmentStatus, string>> = 
   [ShipmentStatus.DISPATCHED]: 'Dispatched',
   [ShipmentStatus.IN_TRANSIT]: 'In transit',
   [ShipmentStatus.DELIVERED]: 'Delivered',
-  [ShipmentStatus.CLOSED]: 'Closed',
+  [ShipmentStatus.COMPLETED]: 'Completed',
 };
 
 /**
@@ -55,7 +55,7 @@ export const SHIPMENT_STATUS_SEQUENCE: readonly ShipmentStatus[] = [
   ShipmentStatus.DISPATCHED,
   ShipmentStatus.IN_TRANSIT,
   ShipmentStatus.DELIVERED,
-  ShipmentStatus.CLOSED,
+  ShipmentStatus.COMPLETED,
 ];
 
 /** Position in the workflow, or -1 if the status is not part of it. */
@@ -77,9 +77,9 @@ export function shipmentStatusAtLeast(
 /**
  * Transitions a human may ask for, as `from -> to`.
  *
- * DELIVERED -> CLOSED is requested like the rest, but guarded: closing is
+ * DELIVERED -> COMPLETED is requested like the rest, but guarded: closing is
  * refused until every liquidation account is approved and commissions are
- * computed (`ShipmentsService.assertReadyToClose`). Those are facts about rows,
+ * computed (`ShipmentsService.assertReadyToComplete`). Those are facts about rows,
  * so they are checked there rather than encoded as statuses here.
  *
  * The workflow only moves forward. Nothing here reopens a shipment, because
@@ -91,8 +91,8 @@ const ALLOWED_MANUAL_TRANSITIONS: Readonly<Record<ShipmentStatus, readonly Shipm
   [ShipmentStatus.DRAFT]: [ShipmentStatus.DISPATCHED],
   [ShipmentStatus.DISPATCHED]: [ShipmentStatus.IN_TRANSIT],
   [ShipmentStatus.IN_TRANSIT]: [ShipmentStatus.DELIVERED],
-  [ShipmentStatus.DELIVERED]: [ShipmentStatus.CLOSED],
-  [ShipmentStatus.CLOSED]: [],
+  [ShipmentStatus.DELIVERED]: [ShipmentStatus.COMPLETED],
+  [ShipmentStatus.COMPLETED]: [],
 };
 
 export function allowedManualTransitions(from: ShipmentStatus): readonly ShipmentStatus[] {
@@ -130,7 +130,7 @@ export function isRateChainEditable(status: ShipmentStatus): boolean {
  * What the stop actually produced was a trip whose revenue was known to be
  * wrong and could never be fixed — the approval had been given against a
  * mistyped number, so preserving it preserved the mistake rather than the
- * agreement. Correcting it restates what the broker agreed; CLOSED is where the
+ * agreement. Correcting it restates what the broker agreed; COMPLETED is where the
  * trip's record stops for good, and that is now the only status bound.
  *
  * And the harder bound is not here at all — a correction is refused once any
@@ -143,7 +143,7 @@ export function isRateChainEditable(status: ShipmentStatus): boolean {
  * `CAN_EDIT_RATE_CHAIN`.
  */
 export function isRateChainCorrectable(status: ShipmentStatus): boolean {
-  return status !== ShipmentStatus.CLOSED;
+  return status !== ShipmentStatus.COMPLETED;
 }
 
 /**
@@ -159,7 +159,7 @@ export function isRateChainCorrectable(status: ShipmentStatus): boolean {
  * wrong client is one nobody can find, and refusing the correction does not
  * make the record true, it just makes it permanently false.
  *
- * BOUNDED AT CLOSED, where the trip's record stops for good — the same point as
+ * BOUNDED AT COMPLETED, where the trip's record stops for good — the same point as
  * the rate correction above and the charges below, so the three rules now agree
  * on where a trip stops being writable and differ only in WHO and WHAT. It was
  * LIQUIDATED until the rate chain's bound moved, and holding these back would
@@ -173,14 +173,14 @@ export function isRateChainCorrectable(status: ShipmentStatus): boolean {
  * fact about the payout that no status can express.
  */
 export function areBookingDetailsCorrectable(status: ShipmentStatus): boolean {
-  return status !== ShipmentStatus.CLOSED;
+  return status !== ShipmentStatus.COMPLETED;
 }
 
 /**
- * Charges and billable expenses stay open until the trip is CLOSED.
+ * Charges and billable expenses stay open until the trip is COMPLETED.
  *
  * THEY ARE DISCOVERED, NOT AGREED, which used to be what separated them from
- * the two rules above and now only explains why they reached CLOSED first. Port
+ * the two rules above and now only explains why they reached COMPLETED first. Port
  * fees and detention turn up en route, and the invoice for them routinely lands
  * after the liquidation has been approved. Refusing it does not make the trip
  * cheaper — it makes the record false and the client under-invoiced, and there
@@ -199,7 +199,7 @@ export function areBookingDetailsCorrectable(status: ShipmentStatus): boolean {
  * service.
  */
 export function areChargesEditable(status: ShipmentStatus): boolean {
-  return status !== ShipmentStatus.CLOSED;
+  return status !== ShipmentStatus.COMPLETED;
 }
 
 /**

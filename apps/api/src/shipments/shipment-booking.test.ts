@@ -440,14 +440,14 @@ describe('the rate chain stays correctable after dispatch', () => {
   /**
    * LIQUIDATION IS NO LONGER THE BOUND, and the pair of assertions below is the
    * point: approval against a mistyped gross does not make the mistype true, so
-   * the correction survives it and stops only at CLOSED, where the trip's
+   * the correction survives it and stops only at COMPLETED, where the trip's
    * record ends.
    *
    * What actually protects the approved accounts is not a status at all — a
    * PAID commission stops a correction through `assertNothingPaid`, the same
    * line that governs a late charge, and that is covered on its own below.
    */
-  it('survives liquidation and is refused only once the trip is closed', async () => {
+  it('survives liquidation and is refused only once the trip is completed', async () => {
     if (!available) return;
 
     const shipment = await book();
@@ -468,7 +468,7 @@ describe('the rate chain stays correctable after dispatch', () => {
     await withActor({ userId: adminId }, async () =>
       prisma.shipment.update({
         where: { id: shipment.id },
-        data: { status: ShipmentStatus.CLOSED },
+        data: { status: ShipmentStatus.COMPLETED },
       }),
     );
 
@@ -688,12 +688,12 @@ describe('the trip’s own details stay correctable after dispatch', () => {
   });
 
   /**
-   * CLOSED closes the trip's record for good — the same bound as the charges
+   * COMPLETED closes the trip's record for good — the same bound as the charges
    * and the rate correction, because it is the same reason. Liquidation is
    * asserted alongside it deliberately: a liquidated trip filed under the wrong
    * client is still one nobody can find.
    */
-  it('survives liquidation and is refused only once the trip is closed', async () => {
+  it('survives liquidation and is refused only once the trip is completed', async () => {
     if (!available) return;
 
     const shipment = await book();
@@ -714,7 +714,7 @@ describe('the trip’s own details stay correctable after dispatch', () => {
     await withActor({ userId: adminId }, async () =>
       prisma.shipment.update({
         where: { id: shipment.id },
-        data: { status: ShipmentStatus.CLOSED },
+        data: { status: ShipmentStatus.COMPLETED },
       }),
     );
 

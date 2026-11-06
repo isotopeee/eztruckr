@@ -24,7 +24,7 @@ import { PrismaService } from '../prisma/prisma.service';
  * shape — begins every method by loading a shipment: to scope the read, to
  * check the trip is still open, and to prove the row being edited belongs to
  * the trip in the path. None of those three has an analogue here. There is no
- * trip to scope to, no CLOSED to refuse against, and no second entity a row
+ * trip to scope to, no COMPLETED to refuse against, and no second entity a row
  * could belong to, so an id is either ours or does not exist.
  *
  * WHICH LEAVES NO LOCK AT ALL, and that is deliberate rather than unfinished.

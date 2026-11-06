@@ -236,14 +236,14 @@ describe('when a truck may still change — deliberately not the crew rule', () 
     expect(updated.truckId).toBe(activeTruckId);
   });
 
-  it('stops at CLOSED, where the trip becomes part of the record', async () => {
+  it('stops at COMPLETED, where the trip becomes part of the record', async () => {
     if (!available) return;
 
-    const closed = await shipmentAt(ShipmentStatus.CLOSED, activeTruckId);
+    const closed = await shipmentAt(ShipmentStatus.COMPLETED, activeTruckId);
 
     await expect(
       act(async () => shipments.assignTruck(closed, { truckId: retiredTruckId })),
-    ).rejects.toThrow(/closed; the truck on it is now part of the record/i);
+    ).rejects.toThrow(/completed; the truck on it is now part of the record/i);
   });
 
   it('lets a draft be left without one', async () => {

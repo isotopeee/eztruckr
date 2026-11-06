@@ -946,7 +946,7 @@ model Shipment {
   shipmentNumber String
 
   /// Code set: ShipmentStatus (1 DRAFT, 2 DISPATCHED, 3 IN_TRANSIT,
-  /// 4 DELIVERED, 7 CLOSED). Order comes from the declared sequence in
+  /// 4 DELIVERED, 7 COMPLETED). Order comes from the declared sequence in
   /// @eztruckr/types, never from the numeric value.
   ///
   /// 5 and 6 (PENDING_LIQUIDATION, LIQUIDATED) are retired and never reused:
@@ -1880,7 +1880,7 @@ model BillableExpense {
 /// row. Contrast LiquidationLine, whose cost is recognised only on approval
 /// because until then it is the crew's claim about cash they were given.
 ///
-/// Editable until the trip is CLOSED — deliberately NOT locked on `paid`, the
+/// Editable until the trip is COMPLETED — deliberately NOT locked on `paid`, the
 /// way charges are. A charge feeds the commission base and a paid commission
 /// names a figure it must keep reconciling; this feeds no commission at all, so
 /// the only thing that should stop the record being corrected is the trip being

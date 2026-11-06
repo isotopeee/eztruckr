@@ -1236,7 +1236,7 @@ describe('two people holding cash on one trip', () => {
     expect((await liquidations.get(driverAccountId)).totalAllowance).toBe('10000');
   });
 
-  it('refuses to close over an unapproved account even when no cash was advanced', async () => {
+  it('refuses to complete over an unapproved account even when no cash was advanced', async () => {
     if (!available) return;
 
     // No allowance at all: the account carries only what the crew paid out of
@@ -1267,7 +1267,7 @@ describe('two people holding cash on one trip', () => {
 
     await expect(
       act(async () =>
-        shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),
+        shipments.transition(shipmentId, { to: ShipmentStatus.COMPLETED, occurredAt: null }),
       ),
     ).rejects.toThrow(/1 unapproved liquidation\(s\)/);
 
@@ -1275,13 +1275,13 @@ describe('two people holding cash on one trip', () => {
     await act(async () => liquidations.approve(liquidationId, { remarks: null }, actor));
 
     const closed = await act(async () =>
-      shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),
+      shipments.transition(shipmentId, { to: ShipmentStatus.COMPLETED, occurredAt: null }),
     );
 
-    expect(closed.status).toBe(ShipmentStatus.CLOSED);
+    expect(closed.status).toBe(ShipmentStatus.COMPLETED);
   });
 
-  it('refuses to close the trip while one account is unapproved, and names who', async () => {
+  it('refuses to complete the trip while one account is unapproved, and names who', async () => {
     if (!available) return;
 
     const { shipmentId, driverAccountId, helperAccountId } = await tripWithTwoAccounts('close');
@@ -1305,7 +1305,7 @@ describe('two people holding cash on one trip', () => {
     // trip on the driver's paperwork and strand the helper's ₱3,000.
     await expect(
       act(async () =>
-        shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),
+        shipments.transition(shipmentId, { to: ShipmentStatus.COMPLETED, occurredAt: null }),
       ),
     ).rejects.toThrow(/unapproved liquidation\(s\) — Test Helper/);
 
@@ -1313,10 +1313,10 @@ describe('two people holding cash on one trip', () => {
     await act(async () => liquidations.approve(helperAccountId, { remarks: null }, actor));
 
     const closed = await act(async () =>
-      shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),
+      shipments.transition(shipmentId, { to: ShipmentStatus.COMPLETED, occurredAt: null }),
     );
 
-    expect(closed.status).toBe(ShipmentStatus.CLOSED);
+    expect(closed.status).toBe(ShipmentStatus.COMPLETED);
   });
 });
 

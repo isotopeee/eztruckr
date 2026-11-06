@@ -49,14 +49,14 @@ import { ShipmentsService } from './shipments.service';
  * on one figure and a margin reported on another cannot happen. Nothing here
  * writes to the P&L and nothing in the P&L reads this table.
  *
- * A PAYMENT MAY BE RECORDED AT ANY STATUS, INCLUDING CLOSED, and that is the
+ * A PAYMENT MAY BE RECORDED AT ANY STATUS, INCLUDING COMPLETED, and that is the
  * deliberate difference from an allowance. A release is refused on a closed
  * trip because a closed trip can no longer account for cash it hands out. A
  * client's payment is the other direction entirely: terms of thirty or sixty
  * days mean the check routinely arrives long after the crew were paid and the
  * trip was closed, and a system that refused it would be a system where the
  * last payment on every trip cannot be recorded. For the same reason, closing a
- * trip does NOT require it to be paid — see `assertReadyToClose`, which asks
+ * trip does NOT require it to be paid — see `assertReadyToComplete`, which asks
  * about the crew's cash and deliberately not about the client's.
  */
 

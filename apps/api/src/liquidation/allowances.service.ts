@@ -274,15 +274,15 @@ export class AllowancesService {
       }),
     ]);
 
-    return openAccounts > 0 && shipment?.status !== ShipmentStatus.CLOSED;
+    return openAccounts > 0 && shipment?.status !== ShipmentStatus.COMPLETED;
   }
 
   private async assertShipmentOpen(shipmentId: string): Promise<void> {
     const shipment = await this.loadShipment(shipmentId);
 
-    if (shipment.status === ShipmentStatus.CLOSED) {
+    if (shipment.status === ShipmentStatus.COMPLETED) {
       throw new ConflictException(
-        `Shipment ${shipment.shipmentNumber} is closed; no further cash can be released against it.`,
+        `Shipment ${shipment.shipmentNumber} is completed; no further cash can be released against it.`,
       );
     }
   }

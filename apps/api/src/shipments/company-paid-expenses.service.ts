@@ -28,13 +28,13 @@ import { ShipmentsService } from './shipments.service';
  *
  * A company-paid expense feeds no commission at all. It is a cost of the trip
  * and nothing downstream of it is anybody's pay, so the only thing that should
- * stop the record being corrected is the trip being CLOSED — the same argument
+ * stop the record being corrected is the trip being COMPLETED — the same argument
  * that keeps truck assignment out of `assignCrew`. Sharing a class with the
  * charges would put the two guards one method apart and make the looser one
  * look like an oversight; the next person to "make it consistent" would
  * silently forbid recording a fuel invoice that arrived after payday.
  *
- * THE STATUS BOUNDS HAVE SINCE CONVERGED — a charge runs to CLOSED as well,
+ * THE STATUS BOUNDS HAVE SINCE CONVERGED — a charge runs to COMPLETED as well,
  * because a port fee is discovered as late as a fuel invoice is. The split
  * survives on what is left: a charge is still refused once a commission has
  * been paid, and this is not, so the two guards remain genuinely different
@@ -150,9 +150,9 @@ export class CompanyPaidExpensesService {
   private async assertEditable(shipmentId: string): Promise<void> {
     const shipment = await this.shipments.load(shipmentId);
 
-    if (this.shipments.statusOf(shipment) === ShipmentStatus.CLOSED) {
+    if (this.shipments.statusOf(shipment) === ShipmentStatus.COMPLETED) {
       throw new ConflictException(
-        `Shipment ${shipment.shipmentNumber} is closed; its costs are now part of the record.`,
+        `Shipment ${shipment.shipmentNumber} is completed; its costs are now part of the record.`,
       );
     }
   }

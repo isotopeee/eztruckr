@@ -401,11 +401,11 @@ describe('what the trip is owed', () => {
 
     expect((await payments.summary(SHIPMENT_ID)).amountDueIsProvisional).toBe(true);
 
-    await setStatus(ShipmentStatus.CLOSED);
+    await setStatus(ShipmentStatus.COMPLETED);
 
     expect((await payments.summary(SHIPMENT_ID)).amountDueIsProvisional).toBe(false);
 
-    // Handed back at the status the rest of the file inherited before CLOSED
+    // Handed back at the status the rest of the file inherited before COMPLETED
     // came into this test, so nothing downstream reads a trip closed early.
     await setStatus(ShipmentStatus.DELIVERED);
   });
@@ -636,11 +636,11 @@ describe('the third-party cut', () => {
  * arrives after the crew were paid and the trip was closed, and refusing it
  * would make the LAST payment on every trip the one that cannot be recorded.
  */
-describe('a trip that has already closed', () => {
+describe('a trip that has already been completed', () => {
   it('still accepts the payment that finally arrives', async () => {
     if (!available) return;
 
-    await setStatus(ShipmentStatus.CLOSED);
+    await setStatus(ShipmentStatus.COMPLETED);
 
     const payment = await pay('50000.00');
 

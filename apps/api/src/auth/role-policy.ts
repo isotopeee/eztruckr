@@ -385,7 +385,7 @@ export const CAN_DECIDE_ALLOWANCE_REQUEST = CAN_WRITE_SHIPMENT_MONEY;
  * obvious one, so it is written down here. The correction used to sit with the
  * supervisor who sold the trip, on the reading that the negotiator owns the
  * agreed figure. What it is in practice is a book correction: it now runs to
- * CLOSED, which means most of the corrections it will carry arrive after the
+ * COMPLETED, which means most of the corrections it will carry arrive after the
  * accounts were approved, against a figure the dispatch side already signed off
  * once. Leaving it with them lets the seller restate their own sale after the
  * trip is settled; accounting restates it against the paperwork instead.
@@ -394,7 +394,7 @@ export const CAN_DECIDE_ALLOWANCE_REQUEST = CAN_WRITE_SHIPMENT_MONEY;
  * service applies underneath: the correction is refused once any commission has
  * been PAID, exactly as a late charge is. Commissions computed but unpaid go
  * stale and are recomputed. That guard carries more weight than it used to —
- * the status half now stops only at CLOSED — so anyone who widens this list
+ * the status half now stops only at COMPLETED — so anyone who widens this list
  * should read `assertNothingPaid` first. That is the line that matters, and it
  * does not move.
  */
@@ -491,7 +491,7 @@ export const ROLES_BY_TRANSITION: Readonly<Record<number, readonly UserRole[]>> 
   [ShipmentStatus.IN_TRANSIT]: CAN_WRITE_SHIPMENTS,
   [ShipmentStatus.DELIVERED]: CAN_WRITE_SHIPMENTS,
   // Closing asserts the money is settled, which is accounting's call.
-  [ShipmentStatus.CLOSED]: CAN_WRITE_SHIPMENT_MONEY,
+  [ShipmentStatus.COMPLETED]: CAN_WRITE_SHIPMENT_MONEY,
 };
 
 export const CAN_TRANSITION_SHIPMENTS = [
