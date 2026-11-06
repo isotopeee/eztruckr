@@ -424,7 +424,7 @@ describe('recording a cost the company paid itself', () => {
   it('can still be recorded on a liquidated trip, and so can a charge', async () => {
     if (!available) return;
 
-    await setStatus(ShipmentStatus.LIQUIDATED);
+    await setStatus(ShipmentStatus.DELIVERED);
 
     const charge = await act(() =>
       charges.addAdditionalCharge(

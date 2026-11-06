@@ -77,7 +77,7 @@ const FIXTURES = [
     date: '2026-03-03',
     netRate: '20000.0000',
     container: 'MSKU2222222',
-    status: ShipmentStatus.PENDING_LIQUIDATION,
+    status: ShipmentStatus.DELIVERED,
   },
 ] as const;
 

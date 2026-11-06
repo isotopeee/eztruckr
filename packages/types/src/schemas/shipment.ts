@@ -1,12 +1,18 @@
 import { z } from 'zod';
 import { crewRoleSchema } from '../codes/crew-role';
+import {
+  isLiquidationStatus,
+  LiquidationStatus,
+  liquidationStatusRank,
+  liquidationStatusSchema,
+} from '../codes/liquidation-status';
 import { paymentMethodSchema } from '../codes/payment-method';
 import {
   isPaymentVerificationStatus,
   PaymentVerificationStatus,
   paymentVerificationStatusSchema,
 } from '../codes/payment-verification-status';
-import { isShipmentStatus, shipmentStatusSchema, ShipmentStatus } from '../codes/shipment-status';
+import { isShipmentStatus, shipmentStatusSchema } from '../codes/shipment-status';
 import {
   auditFieldsSchema,
   idSchema,
@@ -403,9 +409,58 @@ export const shipmentSchema = auditFieldsSchema.extend({
    */
   amountDue: z.string().nullable().default(null),
   balance: z.string().nullable().default(null),
+
+  /**
+   * Where the trip's paperwork stands, as one status for the whole trip.
+   *
+   * A trip can carry several liquidation accounts — a driver and a helper each
+   * holding cash — so this is the LEAST advanced of them, by
+   * `LIQUIDATION_STATUS_SEQUENCE`: the trip is only as far along as its
+   * slowest account, which is the same test `assertClosable` applies. Null
+   * means the trip has no account at all yet.
+   *
+   * `liquidationAccounts` and `liquidationsApproved` say how many there are
+   * and how many are done, so "Submitted" on a two-account trip does not hide
+   * that one of the two is already approved.
+   *
+   * LIST ONLY, like `amountDue`: one query for the whole page. The detail
+   * endpoint leaves these at their defaults and the liquidation card answers
+   * the question account by account.
+   */
+  liquidationStatus: liquidationStatusSchema.nullable().default(null),
+  liquidationAccounts: z.number().int().nonnegative().default(0),
+  liquidationsApproved: z.number().int().nonnegative().default(0),
 });
 
 export type Shipment = z.infer<typeof shipmentSchema>;
+
+export type ShipmentLiquidationSummary = Pick<
+  Shipment,
+  'liquidationStatus' | 'liquidationAccounts' | 'liquidationsApproved'
+>;
+
+/**
+ * Folds a trip's live liquidation accounts into the list's three fields.
+ *
+ * Pure, so the "least advanced wins" rule is tested once rather than trusted
+ * to whichever query feeds it.
+ */
+export function summariseLiquidations(
+  statuses: readonly LiquidationStatus[],
+): ShipmentLiquidationSummary {
+  let least: LiquidationStatus | null = null;
+  for (const status of statuses) {
+    if (least === null || liquidationStatusRank(status) < liquidationStatusRank(least)) {
+      least = status;
+    }
+  }
+
+  return {
+    liquidationStatus: least,
+    liquidationAccounts: statuses.length,
+    liquidationsApproved: statuses.filter((status) => status === LiquidationStatus.APPROVED).length,
+  };
+}
 
 /**
  * The third-party cut, expressed the way it was actually agreed.
@@ -692,6 +747,11 @@ export type ShipmentSortField = (typeof SHIPMENT_SORT_FIELDS)[number];
 
 export const shipmentSortFieldSchema = z.enum(SHIPMENT_SORT_FIELDS);
 
+/** The list's liquidation filter value for "no account on this trip yet". */
+export const NO_LIQUIDATION = 'none';
+
+export type ShipmentLiquidationFilter = typeof NO_LIQUIDATION | LiquidationStatus;
+
 export const shipmentListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(25),
@@ -701,6 +761,26 @@ export const shipmentListQuerySchema = z.object({
   status: z.coerce.number().int().refine(isShipmentStatus, 'unknown shipment status').optional(),
   clientId: idSchema.optional(),
   staffId: idSchema.optional(),
+  /**
+   * Trips whose paperwork stands at a given point, by the same rule as the
+   * list's Liquidation column (`summariseLiquidations`: the least advanced
+   * account wins), or `none` for a trip with no account yet.
+   *
+   * Answered from the accounts in the database, not from anything stored on
+   * the shipment — this is what replaced filtering on the retired "Pending
+   * liquidation" shipment status.
+   */
+  liquidation: z
+    .union([
+      z.literal(NO_LIQUIDATION),
+      // Query strings arrive as text; same coerce-then-check as `status`.
+      z.coerce
+        .number()
+        .int()
+        .refine(isLiquidationStatus, 'unknown liquidation status')
+        .transform((value) => value as LiquidationStatus),
+    ])
+    .optional(),
   // Newest trip first, which is the list the office opens the screen to read.
   // Defaulted here rather than in the service so that the API's own default
   // and the web app's initial header state cannot drift apart.
@@ -709,14 +789,5 @@ export const shipmentListQuerySchema = z.object({
 });
 
 export type ShipmentListQuery = z.infer<typeof shipmentListQuerySchema>;
-
-/**
- * Statuses a dashboard treats as "needs attention from accounting". Declared
- * here so the API filter and any UI badge agree on what awaiting-liquidation
- * means, rather than each hard-coding a status.
- */
-export const AWAITING_LIQUIDATION_STATUSES: readonly ShipmentStatus[] = [
-  ShipmentStatus.PENDING_LIQUIDATION,
-];
 
 export const crewRoleAssignmentSchema = crewRoleSchema;

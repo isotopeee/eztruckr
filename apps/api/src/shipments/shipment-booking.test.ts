@@ -453,7 +453,7 @@ describe('the rate chain stays correctable after dispatch', () => {
     await withActor({ userId: adminId }, async () =>
       prisma.shipment.update({
         where: { id: shipment.id },
-        data: { status: ShipmentStatus.LIQUIDATED },
+        data: { status: ShipmentStatus.DELIVERED },
       }),
     );
 
@@ -492,7 +492,7 @@ describe('the rate chain stays correctable after dispatch', () => {
     await withActor({ userId: adminId }, async () =>
       prisma.shipment.update({
         where: { id: shipment.id },
-        data: { status: ShipmentStatus.LIQUIDATED },
+        data: { status: ShipmentStatus.DELIVERED },
       }),
     );
 
@@ -697,7 +697,7 @@ describe('the trip’s own details stay correctable after dispatch', () => {
     await withActor({ userId: adminId }, async () =>
       prisma.shipment.update({
         where: { id: shipment.id },
-        data: { status: ShipmentStatus.LIQUIDATED },
+        data: { status: ShipmentStatus.DELIVERED },
       }),
     );
 

@@ -11,14 +11,21 @@ import { defineCodeSet } from './code-set';
  * renumber silently rewriting the meaning of stored rows, and at that moment
  * the `shipment` table was empty. Nothing was reinterpreted. The rule is back
  * in force now that shipments exist — from here the set is append-only.
+ *
+ * RETIRED: 5 (PENDING_LIQUIDATION) and 6 (LIQUIDATED). Both restated, as a
+ * shipment status, what the trip's liquidation accounts already say — and a
+ * trip can carry several accounts, so the copy had to be kept in step from two
+ * services that each saw half of it. Where the paperwork stands is now read
+ * from the accounts alone (`summariseLiquidations`). Stored rows were moved to
+ * DELIVERED by migration `20261106120000_retire_liquidation_shipment_statuses`.
+ * NEVER REUSE 5 OR 6: a backup restored from before that migration still holds
+ * them, and must fail the check constraint rather than mean something new.
  */
 export const ShipmentStatus = {
   DRAFT: 1,
   DISPATCHED: 2,
   IN_TRANSIT: 3,
   DELIVERED: 4,
-  PENDING_LIQUIDATION: 5,
-  LIQUIDATED: 6,
   CLOSED: 7,
 } as const;
 
@@ -35,8 +42,6 @@ export const SHIPMENT_STATUS_LABELS: Readonly<Record<ShipmentStatus, string>> = 
   [ShipmentStatus.DISPATCHED]: 'Dispatched',
   [ShipmentStatus.IN_TRANSIT]: 'In transit',
   [ShipmentStatus.DELIVERED]: 'Delivered',
-  [ShipmentStatus.PENDING_LIQUIDATION]: 'Pending liquidation',
-  [ShipmentStatus.LIQUIDATED]: 'Liquidated',
   [ShipmentStatus.CLOSED]: 'Closed',
 };
 
@@ -50,8 +55,6 @@ export const SHIPMENT_STATUS_SEQUENCE: readonly ShipmentStatus[] = [
   ShipmentStatus.DISPATCHED,
   ShipmentStatus.IN_TRANSIT,
   ShipmentStatus.DELIVERED,
-  ShipmentStatus.PENDING_LIQUIDATION,
-  ShipmentStatus.LIQUIDATED,
   ShipmentStatus.CLOSED,
 ];
 
@@ -74,16 +77,10 @@ export function shipmentStatusAtLeast(
 /**
  * Transitions a human may ask for, as `from -> to`.
  *
- * Two steps are deliberately absent, because no operator performs them:
- *
- *   DELIVERED -> PENDING_LIQUIDATION  happens the instant delivery is
- *     recorded, in the same write. The shipment is never left sitting in
- *     DELIVERED for a dispatcher to notice, so "awaiting liquidation" is a
- *     state you can query rather than the absence of a liquidation row.
- *
- *   PENDING_LIQUIDATION -> LIQUIDATED  is earned, not requested: it needs an
- *     approved liquidation AND computed commissions. The service applies it
- *     when the second of those two lands, from whichever side arrives last.
+ * DELIVERED -> CLOSED is requested like the rest, but guarded: closing is
+ * refused until every liquidation account is approved and commissions are
+ * computed (`ShipmentsService.assertReadyToClose`). Those are facts about rows,
+ * so they are checked there rather than encoded as statuses here.
  *
  * The workflow only moves forward. Nothing here reopens a shipment, because
  * the money downstream — frozen rates, computed commissions, payout lines —
@@ -94,9 +91,7 @@ const ALLOWED_MANUAL_TRANSITIONS: Readonly<Record<ShipmentStatus, readonly Shipm
   [ShipmentStatus.DRAFT]: [ShipmentStatus.DISPATCHED],
   [ShipmentStatus.DISPATCHED]: [ShipmentStatus.IN_TRANSIT],
   [ShipmentStatus.IN_TRANSIT]: [ShipmentStatus.DELIVERED],
-  [ShipmentStatus.DELIVERED]: [],
-  [ShipmentStatus.PENDING_LIQUIDATION]: [],
-  [ShipmentStatus.LIQUIDATED]: [ShipmentStatus.CLOSED],
+  [ShipmentStatus.DELIVERED]: [ShipmentStatus.CLOSED],
   [ShipmentStatus.CLOSED]: [],
 };
 
@@ -106,14 +101,6 @@ export function allowedManualTransitions(from: ShipmentStatus): readonly Shipmen
 
 export function isAllowedManualTransition(from: ShipmentStatus, to: ShipmentStatus): boolean {
   return ALLOWED_MANUAL_TRANSITIONS[from].includes(to);
-}
-
-/**
- * Recording delivery lands the shipment in PENDING_LIQUIDATION, not DELIVERED.
- * Callers ask for DELIVERED; this is what actually gets stored.
- */
-export function statusAfterManualTransition(requested: ShipmentStatus): ShipmentStatus {
-  return requested === ShipmentStatus.DELIVERED ? ShipmentStatus.PENDING_LIQUIDATION : requested;
 }
 
 /**

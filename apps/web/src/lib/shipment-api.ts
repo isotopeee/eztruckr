@@ -26,6 +26,7 @@ import type {
   ShipmentChargeQueueItem,
   ShipmentSortField,
   ShipmentStatus,
+  ShipmentLiquidationFilter,
   SortDirection,
   UpdateRateChainInput,
   UpdateShipmentInput,
@@ -66,6 +67,8 @@ export interface ShipmentFilters {
   pageSize: number;
   search: string;
   status?: ShipmentStatus;
+  /** Where the trip's paperwork stands — see `shipmentListQuerySchema`. */
+  liquidation?: ShipmentLiquidationFilter;
   /** Ordering, applied by the API — the list is paginated, so it has to be. */
   sort: ShipmentSortField;
   direction: SortDirection;
@@ -78,6 +81,7 @@ export function listShipments(filters: ShipmentFilters): Promise<Page<Shipment>>
       pageSize: filters.pageSize,
       search: filters.search,
       status: filters.status,
+      liquidation: filters.liquidation,
       sort: filters.sort,
       direction: filters.direction,
     })}`,

@@ -72,8 +72,6 @@ export const commissionComputationSchema = z.object({
   commissions: z.array(commissionSchema),
   /** True when this run replaced an earlier, unpaid computation. */
   recomputed: z.boolean(),
-  /** Set when computing also moved the shipment on. */
-  statusAdvancedTo: z.number().int().nullable(),
 });
 
 export type CommissionComputation = z.infer<typeof commissionComputationSchema>;

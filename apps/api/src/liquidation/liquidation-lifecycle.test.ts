@@ -286,7 +286,7 @@ async function deliveredTrip(suffix: string, advance: string) {
       data: {
         id: shipmentId,
         shipmentNumber: id(`SHP-${suffix}`).toUpperCase(),
-        status: ShipmentStatus.PENDING_LIQUIDATION,
+        status: ShipmentStatus.DELIVERED,
         clientId,
         driverId,
         origin: 'Manila',
@@ -334,7 +334,7 @@ async function tripWithTwoAccounts(suffix: string) {
       data: {
         id: shipmentId,
         shipmentNumber: id(`SHP-${suffix}`).toUpperCase(),
-        status: ShipmentStatus.PENDING_LIQUIDATION,
+        status: ShipmentStatus.DELIVERED,
         clientId,
         driverId,
         helperId,
@@ -758,14 +758,14 @@ describe('approval is the lock, and reversing it is a reasoned act', () => {
     ).rejects.toThrow(/approved and locked/i);
   });
 
-  it('unwinds the settlement, clears the approver, and moves the shipment back', async () => {
+  it('unwinds the settlement and clears the approver, leaving the shipment alone', async () => {
     if (!available) return;
 
     const { shipmentId, liquidationId } = await deliveredTrip('reversed', '5000.00');
     await addLine(liquidationId, '3500.00');
 
-    // Commissions computed, so approval earns LIQUIDATED — the symmetric
-    // predicate both sides share.
+    // Commissions computed: under the retired LIQUIDATED status this was the
+    // case where approval moved the shipment. It must not any more.
     await act(async () =>
       prisma.shipment.update({
         where: { id: shipmentId },
@@ -777,7 +777,7 @@ describe('approval is the lock, and reversing it is a reasoned act', () => {
     await act(async () => liquidations.approve(liquidationId, { remarks: null }, actor));
 
     const afterApproval = await prisma.shipment.findFirst({ where: { id: shipmentId } });
-    expect(afterApproval?.status).toBe(ShipmentStatus.LIQUIDATED);
+    expect(afterApproval?.status).toBe(ShipmentStatus.DELIVERED);
 
     const reversed = await act(async () =>
       liquidations.reverse(liquidationId, { reason: 'Wrong category on the fuel line' }, actor, {
@@ -796,10 +796,10 @@ describe('approval is the lock, and reversing it is a reasoned act', () => {
     const live = await prisma.settlement.count({ where: { shipmentId } });
     expect(live).toBe(0);
 
-    // And the shipment is honest about no longer having an approved
-    // liquidation, rather than sailing through the close guard.
+    // The shipment never restated the approval, so there is nothing to undo
+    // on it: the close guard reads the accounts directly.
     const afterReversal = await prisma.shipment.findFirst({ where: { id: shipmentId } });
-    expect(afterReversal?.status).toBe(ShipmentStatus.PENDING_LIQUIDATION);
+    expect(afterReversal?.status).toBe(ShipmentStatus.DELIVERED);
 
     const audit = await prisma.auditLog.findFirst({
       where: { entityType: 'Liquidation', entityId: reversed.id },
@@ -1161,7 +1161,7 @@ describe('two people holding cash on one trip', () => {
     expect(mine.map((item) => item.custodianName).sort()).toEqual(['Test Driver', 'Test Helper']);
   });
 
-  it('does not call the trip liquidated on one custodian squaring up', async () => {
+  it('does not call the trip accounted for on one custodian squaring up', async () => {
     if (!available) return;
 
     const { shipmentId, driverAccountId, helperAccountId } =
@@ -1170,7 +1170,7 @@ describe('two people holding cash on one trip', () => {
     await addLine(driverAccountId, '8000.00');
     await addLine(helperAccountId, '2500.00');
 
-    // The other half of the predicate, so approval is the only thing missing.
+    // Commissions computed, so approval is the only thing missing.
     await act(async () =>
       prisma.shipment.update({
         where: { id: shipmentId },
@@ -1183,16 +1183,16 @@ describe('two people holding cash on one trip', () => {
 
     // "Somebody squared up" is a far weaker claim than "the trip is accounted
     // for", and the helper is still holding ₱3,000 nobody has counted.
-    const midway = await prisma.shipment.findFirst({ where: { id: shipmentId } });
-    expect(midway?.status).toBe(ShipmentStatus.PENDING_LIQUIDATION);
     expect(await liquidations.allApproved(shipmentId)).toBe(false);
 
     await act(async () => liquidations.submit(helperAccountId, { remarks: null }, actor));
     await act(async () => liquidations.approve(helperAccountId, { remarks: null }, actor));
 
-    const afterBoth = await prisma.shipment.findFirst({ where: { id: shipmentId } });
-    expect(afterBoth?.status).toBe(ShipmentStatus.LIQUIDATED);
     expect(await liquidations.allApproved(shipmentId)).toBe(true);
+
+    // Approval is about the accounts; the trip stays where delivery left it.
+    const afterBoth = await prisma.shipment.findFirst({ where: { id: shipmentId } });
+    expect(afterBoth?.status).toBe(ShipmentStatus.DELIVERED);
   });
 
   it('lets cash still go to the helper after the driver is approved', async () => {
@@ -1236,6 +1236,51 @@ describe('two people holding cash on one trip', () => {
     expect((await liquidations.get(driverAccountId)).totalAllowance).toBe('10000');
   });
 
+  it('refuses to close over an unapproved account even when no cash was advanced', async () => {
+    if (!available) return;
+
+    // No allowance at all: the account carries only what the crew paid out of
+    // pocket. The guard used to return early on "no advances", which was safe
+    // only while LIQUIDATED already promised every account was approved.
+    const shipmentId = id('shipment-close-no-advance');
+    let liquidationId = '';
+
+    await act(async () => {
+      await prisma.shipment.create({
+        data: {
+          id: shipmentId,
+          shipmentNumber: id('SHP-close-no-advance').toUpperCase(),
+          status: ShipmentStatus.DELIVERED,
+          clientId,
+          driverId,
+          origin: 'Manila',
+          destination: 'Batangas',
+          grossRate: '20000.0000',
+          netRate: '20000.0000',
+          commissionsComputedAt: new Date(),
+        },
+      });
+      liquidationId = await ensurePendingLiquidation(prisma, shipmentId);
+    });
+
+    await addLine(liquidationId, '1200.00');
+
+    await expect(
+      act(async () =>
+        shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),
+      ),
+    ).rejects.toThrow(/1 unapproved liquidation\(s\)/);
+
+    await act(async () => liquidations.submit(liquidationId, { remarks: null }, actor));
+    await act(async () => liquidations.approve(liquidationId, { remarks: null }, actor));
+
+    const closed = await act(async () =>
+      shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),
+    );
+
+    expect(closed.status).toBe(ShipmentStatus.CLOSED);
+  });
+
   it('refuses to close the trip while one account is unapproved, and names who', async () => {
     if (!available) return;
 
@@ -1254,29 +1299,10 @@ describe('two people holding cash on one trip', () => {
     await act(async () => liquidations.submit(driverAccountId, { remarks: null }, actor));
     await act(async () => liquidations.approve(driverAccountId, { remarks: null }, actor));
 
-    // FIRST LINE: the trip cannot reach CLOSED because it has not reached
-    // LIQUIDATED — that status is earned by every account being approved, and
-    // the driver's paperwork alone does not earn it.
-    await expect(
-      act(async () =>
-        shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),
-      ),
-    ).rejects.toThrow(/awaiting liquidation/i);
-
-    // SECOND LINE, and the one worth a test of its own: the close guard itself,
-    // reached by forcing the status the first line would have withheld. It is
-    // defence in depth — a trip should not be sitting at LIQUIDATED with an
-    // unapproved account — and depth that has never been exercised is a guess.
-    // It counted approvals and passed on one, which was the same test while a
-    // trip could hold a single account; here that would close the trip on the
-    // driver's paperwork and strand the helper's ₱3,000.
-    await act(async () =>
-      prisma.shipment.update({
-        where: { id: shipmentId },
-        data: { status: ShipmentStatus.LIQUIDATED },
-      }),
-    );
-
+    // The close guard is the only line now: no LIQUIDATED status stands in
+    // front of it. It counted approvals and passed on one, which was the same
+    // test while a trip could hold a single account; here that would close the
+    // trip on the driver's paperwork and strand the helper's ₱3,000.
     await expect(
       act(async () =>
         shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),
@@ -1438,7 +1464,7 @@ describe('one person holding two piles of cash on one trip', () => {
         data: {
           id: shipmentId,
           shipmentNumber: id('SHP-backstop-reopen').toUpperCase(),
-          status: ShipmentStatus.PENDING_LIQUIDATION,
+          status: ShipmentStatus.DELIVERED,
           clientId,
           driverId,
           origin: 'Manila',

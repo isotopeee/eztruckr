@@ -26,14 +26,15 @@ import {
   LiquidationStatus,
   money,
   nextShipmentNumber,
+  NO_LIQUIDATION,
   PaymentVerificationStatus,
   SAME_PERSON_BOTH_SLOTS_MESSAGE,
   SHIPMENT_STATUS_LABELS,
   ShipmentStatus,
   shipmentNumberDatePart,
   shipmentStatusAtLeast,
-  statusAfterManualTransition,
   sum,
+  summariseLiquidations,
   toDecimalString,
   TPC_EXCLUSIVE_MESSAGE,
   TPC_WITHOUT_BROKER_MESSAGE,
@@ -46,6 +47,8 @@ import {
   type ReturnClientPaymentInput,
   type SetGasRateOverrideInput,
   type Shipment,
+  type ShipmentLiquidationFilter,
+  type ShipmentLiquidationSummary,
   type ShipmentListQuery,
   type ShipmentSortField,
   type SortDirection,
@@ -133,6 +136,47 @@ function orderFor(
 }
 
 /**
+ * The list's liquidation filter, as a relation filter on the trip's accounts.
+ *
+ * THE SAME RULE AS THE COLUMN, `summariseLiquidations`: a trip is at its least
+ * advanced account. So "Submitted" means some account is submitted and none is
+ * still pending, and "Approved" means there is at least one account and every
+ * one of them is approved. A filter that disagreed with the column beside it
+ * would list trips under a heading their own row contradicts.
+ *
+ * `deletedAt: null` IS WRITTEN OUT in every clause, because the soft-delete
+ * extension filters relation READS (`include` / `select`) but not relation
+ * filters in a `where`. Without it a removed PENDING account would hold a
+ * trip at "Pending" for ever.
+ */
+function liquidationFilter(filter: ShipmentLiquidationFilter): Prisma.ShipmentWhereInput {
+  const live = { deletedAt: null };
+
+  if (filter === NO_LIQUIDATION) {
+    return { liquidations: { none: live } };
+  }
+
+  switch (filter) {
+    case LiquidationStatus.PENDING:
+      return { liquidations: { some: { ...live, status: LiquidationStatus.PENDING } } };
+    case LiquidationStatus.SUBMITTED:
+      return {
+        AND: [
+          { liquidations: { some: { ...live, status: LiquidationStatus.SUBMITTED } } },
+          { liquidations: { none: { ...live, status: LiquidationStatus.PENDING } } },
+        ],
+      };
+    case LiquidationStatus.APPROVED:
+      return {
+        AND: [
+          { liquidations: { some: live } },
+          { liquidations: { none: { ...live, status: { not: LiquidationStatus.APPROVED } } } },
+        ],
+      };
+  }
+}
+
+/**
  * How many times a booking will recompute its number before giving up.
  *
  * Each retry costs one round trip and only happens when two bookings land in
@@ -179,6 +223,7 @@ export class ShipmentsService {
       // One filter for "trips this person worked", either slot. The crew
       // portal relies on this, so it is scoped server-side by the controller.
       ...(query.staffId ? { OR: [{ driverId: query.staffId }, { helperId: query.staffId }] } : {}),
+      ...(query.liquidation === undefined ? {} : liquidationFilter(query.liquidation)),
       ...(query.search
         ? {
             OR: [
@@ -205,10 +250,17 @@ export class ShipmentsService {
       this.shipments.count({ where }),
     ]);
 
-    const receivables = await this.receivablesFor(rows);
+    const [receivables, liquidations] = await Promise.all([
+      this.receivablesFor(rows),
+      this.liquidationsFor(rows),
+    ]);
 
     return {
-      items: rows.map((row) => ({ ...toShipment(row), ...receivables.get(row.id) })),
+      items: rows.map((row) => ({
+        ...toShipment(row),
+        ...receivables.get(row.id),
+        ...liquidations.get(row.id),
+      })),
       total,
       page: query.page,
       pageSize: query.pageSize,
@@ -246,6 +298,33 @@ export class ShipmentsService {
     ]);
 
     return receivablesOf(rows, billable, additional, payments);
+  }
+
+  /**
+   * Where each trip on the page stands with its liquidation accounts.
+   *
+   * One query for the page, by `IN`, like `receivablesFor`. Soft-deleted
+   * accounts are left out by the client extension, so a removed account does
+   * not hold a trip at "Pending" for ever.
+   */
+  private async liquidationsFor(
+    rows: readonly ShipmentRow[],
+  ): Promise<Map<string, ShipmentLiquidationSummary>> {
+    const accounts = await this.prisma.client.liquidation.findMany({
+      where: { shipmentId: { in: rows.map((row) => row.id) } },
+      select: { shipmentId: true, status: true },
+    });
+
+    const byShipment = new Map<string, LiquidationStatus[]>();
+    for (const account of accounts) {
+      const statuses = byShipment.get(account.shipmentId) ?? [];
+      statuses.push(account.status as LiquidationStatus);
+      byShipment.set(account.shipmentId, statuses);
+    }
+
+    return new Map(
+      rows.map((row) => [row.id, summariseLiquidations(byShipment.get(row.id) ?? [])]),
+    );
   }
 
   async get(id: string): Promise<Shipment> {
@@ -632,7 +711,9 @@ export class ShipmentsService {
     const current = await this.load(id);
     const status = this.statusOf(current);
 
-    if (shipmentStatusAtLeast(status, ShipmentStatus.LIQUIDATED)) {
+    // CLOSED, the bound every other correction to a trip shares. Money that
+    // has already moved is guarded separately, just below.
+    if (status === ShipmentStatus.CLOSED) {
       throw new ConflictException(
         `Shipment ${current.shipmentNumber} is ${SHIPMENT_STATUS_LABELS[status].toLowerCase()}; its crew can no longer be changed.`,
       );
@@ -719,9 +800,8 @@ export class ShipmentsService {
   /**
    * Moves the shipment along its lifecycle.
    *
-   * DELIVERED is special: asking for it stores PENDING_LIQUIDATION, so a
-   * delivered trip is immediately visible in queries as awaiting liquidation
-   * rather than inferred from the absence of a liquidation row.
+   * What is asked for is what is stored. Where a delivered trip's paperwork
+   * stands is read from its liquidation accounts, not from this status.
    */
   async transition(id: string, input: TransitionShipmentInput): Promise<Shipment> {
     const current = await this.load(id);
@@ -740,8 +820,7 @@ export class ShipmentsService {
     }
 
     const occurredAt = input.occurredAt === null ? new Date() : new Date(input.occurredAt);
-    const stored = statusAfterManualTransition(input.to);
-    const data: Prisma.ShipmentUncheckedUpdateInput = { status: stored };
+    const data: Prisma.ShipmentUncheckedUpdateInput = { status: input.to };
 
     if (input.to === ShipmentStatus.DISPATCHED) {
       this.assertReadyToDispatch(current);
@@ -1143,7 +1222,7 @@ export class ShipmentsService {
    * below safe rather than lucky.
    *
    * COMMISSIONS, SETTLEMENTS AND CREW DEDUCTIONS ARE DELIBERATELY ABSENT.
-   * None can exist before PENDING_LIQUIDATION — computing is refused below it,
+   * None can exist before DELIVERED — computing is refused below it,
    * and the other two are made out of an approved liquidation — so on a DRAFT
    * they would be three counts that can only ever return zero. If dispatch is
    * ever let past DRAFT, they are the probes to add, and this comment is where
@@ -1339,10 +1418,6 @@ export class ShipmentsService {
   }
 
   private explainDeadEnd(from: ShipmentStatus, shipmentNumber: string): string {
-    if (from === ShipmentStatus.PENDING_LIQUIDATION) {
-      return `Shipment ${shipmentNumber} is awaiting liquidation. It becomes liquidated on its own once the liquidation is approved and commissions are computed — that step is earned, not requested.`;
-    }
-
     if (from === ShipmentStatus.CLOSED) {
       return `Shipment ${shipmentNumber} is closed. The workflow does not run backwards, because the frozen rates and computed commissions behind it have no defined behaviour in reverse.`;
     }
@@ -1372,10 +1447,9 @@ export class ShipmentsService {
    * The guard rail from the brief: a shipment cannot close until the allowance
    * is liquidated and commissions are computed.
    *
-   * Reaching LIQUIDATED already required an approved liquidation, so by here
-   * the first half is satisfied by the status itself. The commission check is
-   * still made explicitly rather than assumed, because it is the half that
-   * actually costs someone money if it is wrong.
+   * Both halves are checked here, from the rows. There is no longer a
+   * LIQUIDATED status standing in for either: a delivered trip goes straight
+   * to closed, and this guard is the whole of what stands between them.
    */
   private async assertReadyToClose(shipment: ShipmentRow): Promise<void> {
     if (shipment.commissionsComputedAt === null) {
@@ -1384,9 +1458,7 @@ export class ShipmentsService {
       );
     }
 
-    // BEFORE THE EARLY RETURN BELOW, because a trip can carry an undecided ask
-    // and no advances at all — which is exactly the case that would slip
-    // through. Closing on top of one strands it in accounting's queue forever:
+    // A trip can carry an undecided ask and no advances at all. Closing on top of one strands it in accounting's queue forever:
     // approving it afterwards is refused by the closed shipment, and nothing
     // else clears it. Deciding is one click, and declining is a decision.
     const undecided = await this.prisma.client.allowanceRequest.count({
@@ -1417,23 +1489,14 @@ export class ShipmentsService {
       );
     }
 
-    const advances = await this.prisma.client.allowance.count({
-      where: { shipmentId: shipment.id },
-    });
-
-    if (advances === 0) {
-      return;
-    }
-
-    // An allowance is a receivable from the crew, not a cost, and it is
-    // cleared by the liquidation. Cash handed over and never accounted for is
-    // exactly what closing a trip must not be able to hide.
+    // EVERY ACCOUNT, not any one of them, and whether or not cash was ever
+    // advanced. An account with no allowance still carries receipts — costs
+    // the crew paid out of pocket — and closing over it unapproved would leave
+    // those costs off the P&L for good, since nothing reopens a closed trip.
     //
-    // EVERY ACCOUNT, not any one of them. This counted approvals and passed on
-    // one, which was the same test while a trip could only have one — with a
-    // driver and a helper each holding cash it would close the trip on the
-    // driver's paperwork alone, stranding the helper's advance in a shipment
-    // nothing can reopen.
+    // This used to sit behind an "any advances?" early return, which was safe
+    // only while reaching LIQUIDATED already required every account approved.
+    // That status is gone; this check is now the whole of that guarantee.
     //
     // APPROVED is the only status that counts, and it is the last one: approval
     // is the lock, so there is nothing beyond it to also accept here.
@@ -1458,7 +1521,7 @@ export class ShipmentsService {
         .join(', ');
 
       throw new ConflictException(
-        `Shipment ${shipment.shipmentNumber} has ${advances} allowance(s) advanced to the crew and ${outstanding.length} unapproved liquidation(s) — ${who}. Cash advanced has to be accounted for before the trip can close.`,
+        `Shipment ${shipment.shipmentNumber} has ${outstanding.length} unapproved liquidation(s) — ${who}. Every liquidation has to be approved before the trip can close, so the cash advanced and the costs spent are accounted for.`,
       );
     }
   }
@@ -1716,6 +1779,10 @@ export function toShipment(row: ShipmentRow): Shipment {
     // card asks the same question with every receipt beside it.
     amountDue: null,
     balance: null,
+    // List only, for the same reason; see `liquidationsFor`.
+    liquidationStatus: null,
+    liquidationAccounts: 0,
+    liquidationsApproved: 0,
 
     ...auditFields(row),
   };

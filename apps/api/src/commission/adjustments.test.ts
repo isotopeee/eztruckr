@@ -119,7 +119,7 @@ beforeEach(async () => {
         id: SHIPMENT_ID,
         shipmentNumber: id('SHP').toUpperCase(),
         // Delivered, so commissions may be computed against a settled base.
-        status: ShipmentStatus.PENDING_LIQUIDATION,
+        status: ShipmentStatus.DELIVERED,
         clientId: id('client'),
         driverId,
         helperId,

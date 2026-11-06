@@ -662,7 +662,7 @@ describe('an undecided ask keeps its trip and its account reachable', () => {
     await withActor({ userId: adminId }, async () => {
       await prisma.shipment.update({
         where: { id: shipmentId },
-        data: { status: ShipmentStatus.LIQUIDATED, commissionsComputedAt: new Date() },
+        data: { status: ShipmentStatus.DELIVERED, commissionsComputedAt: new Date() },
       });
     });
 
@@ -670,11 +670,15 @@ describe('an undecided ask keeps its trip and its account reachable', () => {
       withActor({ userId: adminId }, () =>
         shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),
       ),
-    ).rejects.toBeInstanceOf(ConflictException);
+    ).rejects.toThrow(/allowance request\(s\) still awaiting accounting/);
 
     await withActor({ userId: adminId }, () =>
       requests.decline(request.id, { reason: 'Trip is over' }, accountant),
     );
+
+    // The account itself has to be approved too — closing reads every one,
+    // with or without cash advanced on it.
+    await freezeAccount(liquidationId);
 
     const closed = await withActor({ userId: adminId }, () =>
       shipments.transition(shipmentId, { to: ShipmentStatus.CLOSED, occurredAt: null }),

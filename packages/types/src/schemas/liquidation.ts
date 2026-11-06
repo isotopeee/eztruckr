@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { liquidationHistoryActionSchema } from '../codes/liquidation-history-action';
 import { liquidationStatusSchema, LiquidationStatus } from '../codes/liquidation-status';
-import { ShipmentStatus } from '../codes/shipment-status';
 import {
   auditFieldsSchema,
   idSchema,
@@ -368,47 +367,6 @@ export function liquidationAccountLabel(
 // ---------------------------------------------------------------------------
 // The predicate both sides share
 // ---------------------------------------------------------------------------
-
-/**
- * What a shipment's status should be, given the two facts that decide it.
- *
- * A shipment is LIQUIDATED when EVERY liquidation on it is approved AND
- * commissions have been computed. Neither half owns the transition: whichever
- * lands second applies it. Phase 4 wrote the commission half; this function is
- * the whole rule, called from both sides, so the two can never drift into
- * disagreeing about what "liquidated" means.
- *
- * The first fact is `allLiquidationsApproved`, not "an approved liquidation
- * exists", and the rename is the point. A trip can now carry one account per
- * cash holder, and "somebody has squared up" is a much weaker claim than "the
- * trip is accounted for" — the old wording would have marked a trip liquidated
- * while a second custodian still held cash nobody had counted.
- *
- * It also runs backwards, and that is deliberate. Reversing an approval retracts
- * one of the two facts, and a shipment left sitting at LIQUIDATED with no
- * approved liquidation would sail through the close guard on the strength of a
- * status that is no longer true. This is the one backward move in the shipment
- * workflow, it is derived rather than requested, and it stops at CLOSED — where
- * the money has been settled and reversal is refused outright.
- *
- * Returns null when nothing should change.
- */
-export function shipmentStatusAfterLiquidationMilestone(
-  current: ShipmentStatus,
-  facts: { allLiquidationsApproved: boolean; commissionsComputed: boolean },
-): ShipmentStatus | null {
-  const earned = facts.allLiquidationsApproved && facts.commissionsComputed;
-
-  if (current === ShipmentStatus.PENDING_LIQUIDATION) {
-    return earned ? ShipmentStatus.LIQUIDATED : null;
-  }
-
-  if (current === ShipmentStatus.LIQUIDATED) {
-    return earned ? null : ShipmentStatus.PENDING_LIQUIDATION;
-  }
-
-  return null;
-}
 
 /**
  * "Returned for correction" as the dashboard means it: with the crew, and not

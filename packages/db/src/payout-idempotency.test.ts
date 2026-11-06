@@ -540,7 +540,7 @@ describe.runIf(process.env.SKIP_DB_TESTS !== '1')('a commission records its rule
         data: {
           id: testId(`rshipment-${suffix}`),
           shipmentNumber: testId(`RSHP-${suffix}`),
-          status: ShipmentStatus.PENDING_LIQUIDATION,
+          status: ShipmentStatus.DELIVERED,
           clientId,
           origin: 'Manila',
           destination: 'Batangas',

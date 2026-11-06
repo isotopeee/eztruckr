@@ -246,11 +246,7 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
           </dl>
 
           {transitions.length === 0 ? (
-            <p className="text-muted-foreground text-xs">
-              {shipment.status === 5
-                ? 'Becomes liquidated on its own once the liquidation is approved and commissions are computed. That step is earned, not requested.'
-                : 'No further step from here.'}
-            </p>
+            <p className="text-muted-foreground text-xs">No further step from here.</p>
           ) : (
             <div className="flex flex-wrap gap-2">
               {transitions.map((to) => (
@@ -267,10 +263,9 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
             </div>
           )}
 
-          {transitions.includes(4) ? (
+          {transitions.includes(7) ? (
             <p className="text-muted-foreground text-xs">
-              Marking it delivered moves it straight to pending liquidation, so it shows up as
-              awaiting accounting rather than sitting in a state nobody queries.
+              Closing needs every liquidation approved and commissions computed.
             </p>
           ) : null}
         </div>

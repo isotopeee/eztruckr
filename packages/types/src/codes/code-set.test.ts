@@ -44,6 +44,10 @@ describe('code sets are permanent', () => {
    * the `shipment` table was still empty, so no stored row changed meaning —
    * which is the only circumstance in which the rule above does not apply.
    * Shipments exist now, so this map is frozen for good.
+   *
+   * 5 and 6 (PENDING_LIQUIDATION, LIQUIDATED) were later RETIRED — removed
+   * with their rows migrated to DELIVERED, not renumbered. The gap is the
+   * point: CLOSED stays 7, and nothing may ever take 5 or 6.
    */
   it('pins every ShipmentStatus code', () => {
     expect(ShipmentStatus).toEqual({
@@ -51,8 +55,6 @@ describe('code sets are permanent', () => {
       DISPATCHED: 2,
       IN_TRANSIT: 3,
       DELIVERED: 4,
-      PENDING_LIQUIDATION: 5,
-      LIQUIDATED: 6,
       CLOSED: 7,
     });
   });
@@ -220,10 +222,15 @@ describe('code guards', () => {
 
 describe('order-dependent logic', () => {
   it('compares by workflow position, not by numeric code', () => {
-    expect(shipmentStatusAtLeast(ShipmentStatus.CLOSED, ShipmentStatus.LIQUIDATED)).toBe(true);
-    expect(shipmentStatusAtLeast(ShipmentStatus.DELIVERED, ShipmentStatus.LIQUIDATED)).toBe(false);
-    // "cannot close before it is liquidated"
-    expect(shipmentStatusAtLeast(ShipmentStatus.LIQUIDATED, ShipmentStatus.LIQUIDATED)).toBe(true);
+    expect(shipmentStatusAtLeast(ShipmentStatus.CLOSED, ShipmentStatus.DELIVERED)).toBe(true);
+    expect(shipmentStatusAtLeast(ShipmentStatus.IN_TRANSIT, ShipmentStatus.DELIVERED)).toBe(false);
+    expect(shipmentStatusAtLeast(ShipmentStatus.DELIVERED, ShipmentStatus.DELIVERED)).toBe(true);
+  });
+
+  it('keeps the retired liquidation codes out of the set', () => {
+    // 5 and 6 were PENDING_LIQUIDATION and LIQUIDATED. Retired, never reused.
+    expect(isShipmentStatus(5)).toBe(false);
+    expect(isShipmentStatus(6)).toBe(false);
   });
 
   it('does not depend on codes being contiguous or monotonic', () => {
@@ -234,7 +241,6 @@ describe('order-dependent logic', () => {
       ShipmentStatus.DISPATCHED,
       ShipmentStatus.IN_TRANSIT,
       ShipmentStatus.DELIVERED,
-      ShipmentStatus.LIQUIDATED,
       ShipmentStatus.CLOSED,
     ].map((status, index) => ({ status, index }));
 

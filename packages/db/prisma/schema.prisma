@@ -946,13 +946,12 @@ model Shipment {
   shipmentNumber String
 
   /// Code set: ShipmentStatus (1 DRAFT, 2 DISPATCHED, 3 IN_TRANSIT,
-  /// 4 DELIVERED, 5 PENDING_LIQUIDATION, 6 LIQUIDATED, 7 CLOSED). Order comes
-  /// from the declared sequence in @eztruckr/types, never from the numeric
-  /// value.
+  /// 4 DELIVERED, 7 CLOSED). Order comes from the declared sequence in
+  /// @eztruckr/types, never from the numeric value.
   ///
-  /// DELIVERED is a transition, not a resting place: recording delivery writes
-  /// PENDING_LIQUIDATION in the same statement, so "awaiting liquidation" is a
-  /// state you can filter on rather than one inferred from a missing row.
+  /// 5 and 6 (PENDING_LIQUIDATION, LIQUIDATED) are retired and never reused:
+  /// where a delivered trip's paperwork stands is read from its liquidation
+  /// accounts, not restated here.
   status Int @default(1) @db.SmallInt
 
   clientId String @db.Uuid

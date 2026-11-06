@@ -397,7 +397,7 @@ describe('what the trip is owed', () => {
     // Still provisional at LIQUIDATED, because a charge may still be added
     // there. Asserted rather than skipped past: this is the step where the
     // caveat used to disappear while the figure could still move.
-    await setStatus(ShipmentStatus.LIQUIDATED);
+    await setStatus(ShipmentStatus.DELIVERED);
 
     expect((await payments.summary(SHIPMENT_ID)).amountDueIsProvisional).toBe(true);
 
@@ -407,7 +407,7 @@ describe('what the trip is owed', () => {
 
     // Handed back at the status the rest of the file inherited before CLOSED
     // came into this test, so nothing downstream reads a trip closed early.
-    await setStatus(ShipmentStatus.LIQUIDATED);
+    await setStatus(ShipmentStatus.DELIVERED);
   });
 });
 

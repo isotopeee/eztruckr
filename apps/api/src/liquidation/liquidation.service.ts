@@ -14,7 +14,6 @@ import {
   isLiquidationEditable,
   isLiquidationHistoryAction,
   isLiquidationStatus,
-  isShipmentStatus,
   liquidationAccountLabel,
   LIQUIDATION_STATUS_LABELS,
   LiquidationHistoryAction,
@@ -22,7 +21,6 @@ import {
   money,
   SettlementStatus,
   ShipmentStatus,
-  shipmentStatusAfterLiquidationMilestone,
   sum,
   toDecimalString,
   wasReturnedForCorrection,
@@ -96,10 +94,6 @@ export const LIQUIDATION_INCLUDE = {
       status: true,
       driverId: true,
       helperId: true,
-      // The second half of the LIQUIDATED predicate. Carried on every read so
-      // approval and reversal both decide the shipment's status from the same
-      // two facts rather than re-querying one of them.
-      commissionsComputedAt: true,
     },
   },
   custodian: { select: { firstName: true, lastName: true } },
@@ -643,7 +637,6 @@ export class LiquidationService {
 
     const totals = await this.computeTotals(current.id);
     const variance = totals.variance;
-    const advanceTo = await this.shipmentStatusAfterApproval(current, true);
 
     await this.prisma.client.$transaction(async (tx) => {
       await tx.liquidation.update({
@@ -675,13 +668,6 @@ export class LiquidationService {
           ...(nothingToMove ? { settledAt: new Date(), settledBy: user.id } : {}),
         },
       });
-
-      if (advanceTo !== null) {
-        await tx.shipment.update({
-          where: { id: current.shipmentId },
-          data: { status: advanceTo },
-        });
-      }
     });
 
     return this.get(liquidationId);
@@ -712,7 +698,6 @@ export class LiquidationService {
     }
 
     const settlement = await this.settlementToUnwind(current.id);
-    const revertTo = await this.shipmentStatusAfterApproval(current, false);
 
     await this.prisma.client.$transaction(async (tx) => {
       await tx.liquidation.update({
@@ -736,13 +721,6 @@ export class LiquidationService {
         if (settlement.crewDeductionId !== null) {
           await tx.crewDeduction.softDelete({ id: settlement.crewDeductionId });
         }
-      }
-
-      if (revertTo !== null) {
-        await tx.shipment.update({
-          where: { id: current.shipmentId },
-          data: { status: revertTo },
-        });
       }
 
       await tx.auditLog.create({
@@ -934,36 +912,6 @@ export class LiquidationService {
         'Nobody has been made custodian of this cash yet, and you are not on the trip. Ask for the account to be named to you.',
       );
     }
-  }
-
-  /**
-   * The shipment status implied by THIS approval landing or being retracted.
-   *
-   * The trip's half of the question is "are they all approved", so this counts
-   * the siblings rather than speaking for them. `approved` says what this one
-   * is about to become, because the row has not been written yet — reading the
-   * database for it would give the value it is replacing.
-   */
-  private async shipmentStatusAfterApproval(
-    row: LiquidationRow,
-    approved: boolean,
-  ): Promise<ShipmentStatus | null> {
-    if (!isShipmentStatus(row.shipment.status)) {
-      throw new Error(`Shipment ${row.shipmentId} has an unrecognised status code.`);
-    }
-
-    const othersOutstanding = await this.prisma.client.liquidation.count({
-      where: {
-        shipmentId: row.shipmentId,
-        id: { not: row.id },
-        status: { not: LiquidationStatus.APPROVED },
-      },
-    });
-
-    return shipmentStatusAfterLiquidationMilestone(row.shipment.status, {
-      allLiquidationsApproved: approved && othersOutstanding === 0,
-      commissionsComputed: row.shipment.commissionsComputedAt !== null,
-    });
   }
 
   /**

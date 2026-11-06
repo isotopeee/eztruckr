@@ -225,12 +225,12 @@ describe('when a truck may still change — deliberately not the crew rule', () 
    * commission chain, so a breakdown swapped at a roadside is a correction the
    * system has to accept — long after the crew have stopped being editable.
    */
-  it('allows a swap on a trip that is already liquidated', async () => {
+  it('allows a swap on a trip that is already delivered', async () => {
     if (!available) return;
 
-    const liquidated = await shipmentAt(ShipmentStatus.LIQUIDATED, retiredTruckId);
+    const delivered = await shipmentAt(ShipmentStatus.DELIVERED, retiredTruckId);
     const updated = await act(async () =>
-      shipments.assignTruck(liquidated, { truckId: activeTruckId }),
+      shipments.assignTruck(delivered, { truckId: activeTruckId }),
     );
 
     expect(updated.truckId).toBe(activeTruckId);

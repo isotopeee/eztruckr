@@ -7,11 +7,9 @@ import {
 import type { Prisma } from '@eztruckr/db';
 import {
   CrewRole,
-  LiquidationStatus,
   ShipmentStatus,
   isCommissionMethod,
   isCrewRole,
-  shipmentStatusAfterLiquidationMilestone,
   shipmentStatusAtLeast,
   type CommissionComputation,
   type Commission as CommissionResponse,
@@ -52,7 +50,6 @@ const SHIPMENT_INCLUDE = {
     select: { billedAmount: true, isCommissionable: true },
   },
   additionalCharges: { where: COUNTED_CHARGE, select: { amount: true, isCommissionable: true } },
-  liquidations: { select: { status: true } },
   commissions: { select: { id: true, payoutLineId: true, role: true } },
 } satisfies Prisma.ShipmentInclude;
 
@@ -103,8 +100,6 @@ export class CommissionService {
     const computed = await this.computeSlots(shipment, chain, gasDeductionRate, slots);
     const recomputed = shipment.commissions.length > 0;
 
-    const advancedTo = this.statusAfterComputing(shipment);
-
     const commissions = await this.prisma.client.$transaction(async (tx) => {
       if (recomputed) {
         // Superseded, not erased: the old rows stay readable under
@@ -121,7 +116,6 @@ export class CommissionService {
           gasDeductionAmount: chain.gasDeductionAmount,
           commissionableBase: chain.commissionableBase,
           commissionsComputedAt: new Date(),
-          ...(advancedTo === null ? {} : { status: advancedTo }),
         },
       });
 
@@ -166,7 +160,6 @@ export class CommissionService {
       },
       commissions: commissions.map((row) => toCommissionResponse(row, shipment.shipmentNumber)),
       recomputed,
-      statusAdvancedTo: advancedTo,
     };
   }
 
@@ -231,7 +224,7 @@ export class CommissionService {
       throw new UnprocessableEntityException(`Shipment ${shipment.id} has an unrecognised status.`);
     }
 
-    if (!shipmentStatusAtLeast(status, ShipmentStatus.PENDING_LIQUIDATION)) {
+    if (!shipmentStatusAtLeast(status, ShipmentStatus.DELIVERED)) {
       throw new ConflictException(
         `Shipment ${shipment.shipmentNumber} has not been delivered yet, so its commission base is not final.`,
       );
@@ -373,35 +366,6 @@ export class CommissionService {
             : { OR: [{ routeId: null }, { routeId: shipment.routeId }] },
         ],
       },
-    });
-  }
-
-  /**
-   * Computing is one of the two conditions for LIQUIDATED; an approved
-   * liquidation is the other. Whichever lands second applies the move, so this
-   * side checks for the liquidation.
-   *
-   * The rule itself lives in `@eztruckr/types` and the liquidation service
-   * calls the same function from the other side. Two copies of a symmetric
-   * predicate is how the two sides end up disagreeing about what "liquidated"
-   * means; there is one.
-   */
-  private statusAfterComputing(shipment: ShipmentWithChain): ShipmentStatus | null {
-    if (!isShipmentStatusCode(shipment.status)) {
-      throw new UnprocessableEntityException(`Shipment ${shipment.id} has an unrecognised status.`);
-    }
-
-    return shipmentStatusAfterLiquidationMilestone(shipment.status, {
-      // EVERY account, not any. A trip can carry one per cash holder, and the
-      // driver squaring up says nothing about the helper still holding change.
-      allLiquidationsApproved:
-        shipment.liquidations.length > 0 &&
-        shipment.liquidations.every(
-          (liquidation) => liquidation.status === LiquidationStatus.APPROVED,
-        ),
-      // This is the computation that makes it true, so it is true by the time
-      // the caller applies the result.
-      commissionsComputed: true,
     });
   }
 }

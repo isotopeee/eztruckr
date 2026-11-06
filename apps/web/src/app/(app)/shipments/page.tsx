@@ -4,6 +4,10 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  LIQUIDATION_STATUS_CODES,
+  LIQUIDATION_STATUS_LABELS,
+  LiquidationStatus,
+  NO_LIQUIDATION,
   SHIPMENT_STATUS_CODES,
   SHIPMENT_STATUS_LABELS,
   ShipmentStatus,
@@ -50,7 +54,12 @@ import {
 } from '@/components/ui/table';
 import { ApiError, apiFetch } from '@/lib/api-client';
 import { formatDate, formatMoney } from '@/lib/format';
-import { createShipment, listShipments, shipmentKeys } from '@/lib/shipment-api';
+import {
+  createShipment,
+  listShipments,
+  shipmentKeys,
+  type ShipmentFilters,
+} from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 import { cn } from '@/lib/utils';
 
@@ -78,6 +87,7 @@ export default function Page() {
   const { user } = useCurrentUser();
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<string>(ALL);
+  const [liquidation, setLiquidation] = useState<string>(ALL);
   const [sort, setSort] = useState<ShipmentSortField>('date');
   const [direction, setDirection] = useState<SortDirection>('desc');
   const [page, setPage] = useState(1);
@@ -93,11 +103,17 @@ export default function Page() {
    */
   const showRevenue = user?.role !== UserRole.CREW;
 
-  const filters = {
+  const filters: ShipmentFilters = {
     page,
     pageSize,
     search,
     status: status === ALL ? undefined : (Number(status) as ShipmentStatus),
+    liquidation:
+      liquidation === ALL
+        ? undefined
+        : liquidation === NO_LIQUIDATION
+          ? NO_LIQUIDATION
+          : (Number(liquidation) as LiquidationStatus),
     sort,
     direction,
   };
@@ -194,6 +210,29 @@ export default function Page() {
               </SelectContent>
             </Select>
           </div>
+          <div className="w-full space-y-1 sm:w-48">
+            <Label htmlFor="liquidation">Liquidation</Label>
+            <Select
+              value={liquidation}
+              onValueChange={(value) => {
+                setLiquidation(value);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger id="liquidation">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All liquidations</SelectItem>
+                {LIQUIDATION_STATUS_CODES.map((code) => (
+                  <SelectItem key={code} value={String(code)}>
+                    {LIQUIDATION_STATUS_LABELS[code]}
+                  </SelectItem>
+                ))}
+                <SelectItem value={NO_LIQUIDATION}>No account yet</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </CardHeader>
         <CardContent>
           {shipments.isPending ? (
@@ -266,6 +305,9 @@ export default function Page() {
                     direction={direction}
                     onSort={sortBy}
                   />
+                  {/* Not sortable: summarised over the page's accounts after
+                      the page has been chosen, like the totals above. */}
+                  <TableHead>Liquidation</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -321,13 +363,18 @@ export default function Page() {
                     <TableCell>
                       <Badge
                         variant={
-                          shipment.status === ShipmentStatus.PENDING_LIQUIDATION
-                            ? 'default'
-                            : 'secondary'
+                          shipment.status === ShipmentStatus.DELIVERED ? 'default' : 'secondary'
                         }
                       >
                         {SHIPMENT_STATUS_LABELS[shipment.status]}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <LiquidationCell
+                        status={shipment.liquidationStatus}
+                        accounts={shipment.liquidationAccounts}
+                        approved={shipment.liquidationsApproved}
+                      />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -350,6 +397,47 @@ export default function Page() {
           ) : null}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * The trip's liquidation, as its least advanced account.
+ *
+ * Approved reads quiet, like a settled balance: it is the row nobody has to
+ * act on. Submitted is what accounting acts on, so it is the loud one. With
+ * more than one account the count of approved ones rides alongside, so a
+ * trip held back by one helper's paperwork does not look untouched.
+ */
+function LiquidationCell({
+  status,
+  accounts,
+  approved,
+}: {
+  status: LiquidationStatus | null;
+  accounts: number;
+  approved: number;
+}) {
+  if (status === null) return <span className="text-muted-foreground">—</span>;
+
+  return (
+    <div className="flex items-center gap-2 whitespace-nowrap">
+      <Badge
+        variant={
+          status === LiquidationStatus.SUBMITTED
+            ? 'default'
+            : status === LiquidationStatus.APPROVED
+              ? 'outline'
+              : 'secondary'
+        }
+      >
+        {LIQUIDATION_STATUS_LABELS[status]}
+      </Badge>
+      {accounts > 1 ? (
+        <span className="text-muted-foreground text-xs tabular-nums">
+          {approved}/{accounts} approved
+        </span>
+      ) : null}
     </div>
   );
 }
