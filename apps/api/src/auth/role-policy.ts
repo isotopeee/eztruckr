@@ -16,7 +16,6 @@ import { ShipmentStatus, UserRole } from '@eztruckr/types';
 /** Everyone with a desk. Master data has to be readable to be selectable. */
 export const CAN_READ_MASTER_DATA = [
   UserRole.ADMINISTRATOR,
-  UserRole.OPERATIONS,
   UserRole.ACCOUNTING,
   UserRole.MANAGEMENT,
   UserRole.DISPATCH_MANAGER,
@@ -45,34 +44,26 @@ export const CAN_READ_LIQUIDATION_REFERENCE_DATA = [
 /**
  * The fleet and the counterparty directories: trucks, clients, brokers.
  *
- * OPERATIONS USED TO BE HERE AND IS NOT ANY MORE. A dispatcher books trips
- * against these lists all day and still may not edit them: adding a client is
- * how a duplicate client appears, and the broker directory carries the default
- * cut that seeds a rate chain. Keeping the trip and the directory it is booked
- * against in different hands is the point — the dispatcher's own supervisor is
- * the nearest person who can add one, not an accountant two floors away.
+ * The dispatch manager keeps these; the DISPATCHER reads them and edits none.
+ * Adding a client is how a duplicate client appears, and the broker directory
+ * carries the default cut that seeds a rate chain.
  *
  * Reading is untouched and stays `CAN_READ_MASTER_DATA`, because every one of
- * these is a picker on the booking form.
+ * these is a picker somewhere.
  */
 export const CAN_WRITE_OPERATIONAL_MASTER_DATA = [
   UserRole.ADMINISTRATOR,
   UserRole.DISPATCH_MANAGER,
-  UserRole.DISPATCHER,
 ] as const;
 
 /**
- * Routes, which a dispatcher does keep.
+ * Routes: the same hands as the directories above.
  *
- * The one list above that describes the company's own operation rather than
- * somebody outside it: a lane discovered on a Tuesday is dispatch's to record,
- * and its standard rate and allowance only ever prefill a form — every figure
- * that matters is frozen onto the shipment.
+ * A separate constant because routes were once kept by a role that kept none
+ * of the others (OPERATIONS, retired). It is an alias now; a role that should
+ * keep routes and nothing else is added here rather than to the list above.
  */
-export const CAN_WRITE_ROUTES = [
-  ...CAN_WRITE_OPERATIONAL_MASTER_DATA,
-  UserRole.OPERATIONS,
-] as const;
+export const CAN_WRITE_ROUTES = CAN_WRITE_OPERATIONAL_MASTER_DATA;
 
 /**
  * The staff directory: the administrator alone.
@@ -111,16 +102,11 @@ export const CAN_WRITE_FINANCIAL_MASTER_DATA = [
  * a payee is who money is disbursed to, and the person claiming the expense
  * should not also be the person who invented the recipient. Management stays
  * out: they record no disbursement at all.
- *
- * DISPATCHER is here with their manager, and the reasoning above does not catch
- * them: they claim no expense at all, so there is no claim for an invented
- * recipient to sit on.
  */
 export const CAN_WRITE_PAYEES = [
   UserRole.ADMINISTRATOR,
   UserRole.ACCOUNTING,
   UserRole.DISPATCH_MANAGER,
-  UserRole.DISPATCHER,
 ] as const;
 
 /** Creating logins and assigning roles is the administrator's alone. */
@@ -132,7 +118,6 @@ export const CAN_ADMINISTER = [UserRole.ADMINISTRATOR] as const;
  */
 export const CAN_READ_SHIPMENTS = [
   UserRole.ADMINISTRATOR,
-  UserRole.OPERATIONS,
   UserRole.ACCOUNTING,
   UserRole.MANAGEMENT,
   UserRole.DISPATCH_MANAGER,
@@ -143,13 +128,13 @@ export const CAN_READ_SHIPMENTS = [
  * A trip's cash: its liquidations, the allowances released against it, the
  * requests for more, and the settlement of the variance.
  *
- * `CAN_READ_SHIPMENTS` less the DISPATCHER, who works the trip and none of the
- * money carried on it. Their view of a trip stops at the booking, the crew,
- * the charges and what the client paid.
+ * `CAN_READ_SHIPMENTS` less the DISPATCHER, who sees every trip but only their
+ * own float on it. They reach their own account through
+ * `CAN_SUBMIT_LIQUIDATION`, which every one of these routes also admits, and
+ * `ShipmentAccessService` confines them to it — see `seesOnlyOwnFloat`.
  */
 export const CAN_READ_TRIP_CASH = [
   UserRole.ADMINISTRATOR,
-  UserRole.OPERATIONS,
   UserRole.ACCOUNTING,
   UserRole.MANAGEMENT,
   UserRole.DISPATCH_MANAGER,
@@ -166,19 +151,18 @@ export const CAN_READ_TRIP_CASH = [
  */
 export const CAN_READ_TRIP_MARGIN = [
   UserRole.ADMINISTRATOR,
-  UserRole.OPERATIONS,
   UserRole.ACCOUNTING,
   UserRole.MANAGEMENT,
   UserRole.DISPATCH_MANAGER,
 ] as const;
 
-/** Booking a trip, assigning crew, dispatching: dispatch's job. */
-export const CAN_WRITE_SHIPMENTS = [
-  UserRole.ADMINISTRATOR,
-  UserRole.OPERATIONS,
-  UserRole.DISPATCH_MANAGER,
-  UserRole.DISPATCHER,
-] as const;
+/**
+ * Booking a trip, assigning crew, dispatching: the dispatch manager's job.
+ *
+ * THE DISPATCHER IS NOT HERE, despite the name. They carry a float and add the
+ * trip's charges for accounting to approve, and they book nothing.
+ */
+export const CAN_WRITE_SHIPMENTS = [UserRole.ADMINISTRATOR, UserRole.DISPATCH_MANAGER] as const;
 
 /**
  * Removing a booking made in error: the same hands that book one.
@@ -280,14 +264,13 @@ export const CAN_WRITE_SHIPMENT_MONEY = [UserRole.ADMINISTRATOR, UserRole.ACCOUN
  * this list without that one is the change that makes the control cosmetic,
  * which is worth knowing before anybody does it.
  *
- * OPERATIONS IS ABSENT, on the same reasoning that puts payees and the rate
- * chain with the manager rather than the dispatcher: the supervisor answers for
- * what was sold, and is who a client rings about an invoice.
+ * THE DISPATCHER IS ABSENT, on the same reasoning that puts payees and the
+ * rate chain with the manager: the supervisor answers for what was sold, and is
+ * who a client rings about an invoice. They may still READ the balance.
  */
 export const CAN_RECORD_CLIENT_PAYMENT = [
   ...CAN_WRITE_SHIPMENT_MONEY,
   UserRole.DISPATCH_MANAGER,
-  UserRole.DISPATCHER,
 ] as const;
 
 /**
@@ -425,7 +408,7 @@ export const CAN_EDIT_RATE_CHAIN = [UserRole.ADMINISTRATOR, UserRole.ACCOUNTING]
  * worked, checked against the record rather than the route, so the widened role
  * list does not widen what any individual can reach.
  *
- * OPERATIONS and DISPATCH_MANAGER are here for the same reason as CREW and not
+ * DISPATCHER and DISPATCH_MANAGER are here for the same reason as CREW and not
  * for the office one: they hold floats, so they have their own accounts to
  * explain. Being in this list does NOT let them touch anybody else's — all
  * three are in `ROLES_CONFINED_TO_THEIR_OWN_FLOAT`, and the service checks
@@ -440,10 +423,10 @@ export const CAN_EDIT_RATE_CHAIN = [UserRole.ADMINISTRATOR, UserRole.ACCOUNTING]
  */
 export const CAN_SUBMIT_LIQUIDATION = [
   UserRole.ADMINISTRATOR,
-  UserRole.OPERATIONS,
   UserRole.ACCOUNTING,
   UserRole.CREW,
   UserRole.DISPATCH_MANAGER,
+  UserRole.DISPATCHER,
 ] as const;
 
 /**
@@ -458,11 +441,27 @@ export const CAN_SUBMIT_LIQUIDATION = [
  * for their own float. A recorder who was NOT already here would have to break
  * the alias rather than be added to it — being able to attach a document is not
  * being able to submit somebody's cash account.
- *
- * THE DISPATCHER IS THAT RECORDER, so the alias is broken here: they attach
- * deposit slips to the client payments they record, and submit no liquidation.
  */
-export const CAN_UPLOAD_RECEIPTS = [...CAN_SUBMIT_LIQUIDATION, UserRole.DISPATCHER] as const;
+export const CAN_UPLOAD_RECEIPTS = CAN_SUBMIT_LIQUIDATION;
+
+/**
+ * Adding a billable expense or an additional charge to a trip.
+ *
+ * WIDER THAN `CAN_WRITE_SHIPMENT_MONEY` by the DISPATCHER alone, and safe for
+ * the same reason a dispatch manager's client payment is: what they add arrives
+ * UNVERIFIED and counts toward nothing — not the client's balance, not the
+ * commission base, not the margin — until `CAN_APPROVE_SHIPMENT_CHARGE`
+ * approves it. Unlike a payment, an unapproved charge counts for NOTHING,
+ * because a charge is a decision about what the client owes, and that decision
+ * stays accounting's.
+ *
+ * Their edits and removals are confined to rows accounting has not approved;
+ * see `ShipmentChargesService.assertMayAlter`.
+ */
+export const CAN_ADD_SHIPMENT_CHARGE = [...CAN_WRITE_SHIPMENT_MONEY, UserRole.DISPATCHER] as const;
+
+/** Approving one, or returning it with a reason. Accounting's, by derivation. */
+export const CAN_APPROVE_SHIPMENT_CHARGE = CAN_WRITE_SHIPMENT_MONEY;
 
 /**
  * Returning, approving and reversing a liquidation, and settling the variance.
@@ -483,7 +482,7 @@ export const CAN_DECIDE_LIQUIDATION = CAN_WRITE_SHIPMENT_MONEY;
  * The route-level `@Roles` on the transition endpoint is necessarily the union
  * of these, because the guard cannot see the request body. This map is the
  * real policy and the controller applies it per target status, so that
- * operations cannot close a trip and accounting cannot dispatch one. Declared
+ * dispatch cannot close a trip and accounting cannot dispatch one. Declared
  * here rather than inline for the same reason as everything else in this file:
  * a policy scattered across handlers is impossible to audit as a whole.
  */
@@ -497,16 +496,13 @@ export const ROLES_BY_TRANSITION: Readonly<Record<number, readonly UserRole[]>> 
 
 export const CAN_TRANSITION_SHIPMENTS = [
   UserRole.ADMINISTRATOR,
-  UserRole.OPERATIONS,
   UserRole.ACCOUNTING,
   UserRole.DISPATCH_MANAGER,
-  UserRole.DISPATCHER,
 ] as const;
 
 /** Every signed-in role, for routes about the caller themselves. */
 export const ANY_SIGNED_IN_ROLE = [
   UserRole.ADMINISTRATOR,
-  UserRole.OPERATIONS,
   UserRole.ACCOUNTING,
   UserRole.MANAGEMENT,
   UserRole.CREW,

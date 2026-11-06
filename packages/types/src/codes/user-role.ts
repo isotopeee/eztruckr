@@ -3,29 +3,23 @@ import { defineCodeSet } from './code-set';
 /**
  * Access role. Stored as `user.role` SMALLINT.
  *
- * These are NOT ranked: ACCOUNTING is not "more" than OPERATIONS, it is a
+ * These are NOT ranked: ACCOUNTING is not "more" than DISPATCHER, it is a
  * different job. Never compare roles with `<` or `>`; check membership.
  *
  * Codes are permanent: never renumber, never reuse, append only.
+ *
+ * 2 IS RETIRED. It was OPERATIONS ("Operations / Dispatcher"); its logins were
+ * moved to DISPATCHER by migration `20261012090000_retire_operations_role`,
+ * and the database CHECK no longer admits it. Never hand 2 to a new role.
  */
 export const UserRole = {
   ADMINISTRATOR: 1,
-  /**
-   * The dispatcher. Books trips, assigns crew, moves them down the road, and
-   * carries a float of their own — so their login names a `staff` row and
-   * their liquidation work is confined to accounts they are custodian of.
-   *
-   * They keep no master data beyond routes: the fleet, the client and broker
-   * directories and the payee list belong to their manager. That is a
-   * deliberate narrowing of what this role used to be.
-   */
-  OPERATIONS: 2,
   ACCOUNTING: 3,
   MANAGEMENT: 4,
   CREW: 5,
   /**
-   * The dispatcher's supervisor: everything OPERATIONS may do, plus the master
-   * data a dispatcher may not keep. They hold cash floats too, so they are
+   * The dispatcher's supervisor, and the one who books and dispatches trips and
+   * keeps the operational master data. They hold cash floats too, so they are
    * liquidation custodians and deliberately cannot approve a liquidation or
    * release cash — either would let them sign off their own float. See
    * `role-policy.ts`.
@@ -38,13 +32,14 @@ export const UserRole = {
    */
   DISPATCH_MANAGER: 6,
   /**
-   * A dispatcher who books and moves trips like their manager, and keeps the
-   * same master data, but is kept out of the trip's cash and margin entirely:
-   * no liquidations, allowances or allowance requests, no gas deduction, no
-   * gross profit and no commission base. See `role-policy.ts`.
+   * Reads every trip and its balance, carries a float of their own, and adds a
+   * trip's billable expenses and additional charges for accounting to approve.
+   * Books, dispatches and edits nothing else, keeps no master data and records
+   * no payment. See `role-policy.ts`.
    *
-   * NOT LINKED TO A STAFF ROW, unlike OPERATIONS and DISPATCH_MANAGER: every
-   * linked role holds trip cash, and this one never does.
+   * Linked to a `staff` row because they hold cash, and — unlike the dispatch
+   * manager — they see ONLY their own float: no other account on the trip, no
+   * allowance requests, no gas deduction, gross profit or commission base.
    */
   DISPATCHER: 7,
 } as const;
@@ -59,7 +54,6 @@ export const userRoleSchema = meta.schema;
 
 export const USER_ROLE_LABELS: Readonly<Record<UserRole, string>> = {
   [UserRole.ADMINISTRATOR]: 'Administrator',
-  [UserRole.OPERATIONS]: 'Operations / Dispatcher',
   [UserRole.ACCOUNTING]: 'Accounting / Finance',
   [UserRole.MANAGEMENT]: 'Management',
   [UserRole.CREW]: 'Crew member',
@@ -96,8 +90,8 @@ export function isPortalOnlyRole(role: UserRole): boolean {
  */
 export const ROLES_LINKED_TO_STAFF: readonly UserRole[] = [
   UserRole.CREW,
-  UserRole.OPERATIONS,
   UserRole.DISPATCH_MANAGER,
+  UserRole.DISPATCHER,
 ];
 
 export function roleRequiresStaffLink(role: UserRole): boolean {
@@ -122,9 +116,29 @@ export function roleRequiresStaffLink(role: UserRole): boolean {
  */
 export const ROLES_CONFINED_TO_THEIR_OWN_FLOAT: readonly UserRole[] = [
   UserRole.CREW,
-  UserRole.OPERATIONS,
   UserRole.DISPATCH_MANAGER,
+  UserRole.DISPATCHER,
 ];
+
+/**
+ * Roles that may not even SEE a float that is not theirs.
+ *
+ * Narrower than `ROLES_CONFINED_TO_THEIR_OWN_FLOAT`, which is about writing: a
+ * dispatch manager may edit only their own account but reads every account on
+ * the trip, because they run it. A crew member and a dispatcher read only the
+ * accounts they are custodian of.
+ *
+ * THE TRIP ITSELF IS A DIFFERENT QUESTION. Crew see only trips they worked; a
+ * dispatcher sees every trip. Only the cash on it is narrowed.
+ */
+export const ROLES_THAT_SEE_ONLY_THEIR_OWN_FLOAT: readonly UserRole[] = [
+  UserRole.CREW,
+  UserRole.DISPATCHER,
+];
+
+export function seesOnlyOwnFloat(role: UserRole): boolean {
+  return ROLES_THAT_SEE_ONLY_THEIR_OWN_FLOAT.includes(role);
+}
 
 export function isConfinedToTheirOwnFloat(role: UserRole): boolean {
   return ROLES_CONFINED_TO_THEIR_OWN_FLOAT.includes(role);

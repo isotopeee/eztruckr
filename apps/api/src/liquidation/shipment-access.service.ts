@@ -1,5 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { UserRole } from '@eztruckr/types';
+import { seesOnlyOwnFloat, UserRole } from '@eztruckr/types';
 import type { RequestUser } from '../auth/request-user';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -29,10 +29,11 @@ export class ShipmentAccessService {
    * crew-pay routes, which is why the fix is stated here rather than repeated
    * at each door.
    *
-   * CREW ONLY. The office roles see every account on a trip, including the two
-   * that hold floats: a dispatcher books the trip and needs to see whether the
-   * driver has liquidated. What they may not do is EDIT somebody else's, and
-   * that is `assertMayAccountForThisFloat`, deliberately a different list.
+   * CREW AND THE DISPATCHER — `seesOnlyOwnFloat`. The other office roles see
+   * every account on a trip, including the dispatch manager, who holds a float
+   * and runs the trip and needs to see whether the driver has liquidated. What
+   * they may not do is EDIT somebody else's, and that is
+   * `assertMayAccountForThisFloat`, deliberately a different list.
    *
    * Custodianship, and not the unnamed account delivery opens — it is nobody's
    * until the office names one, and the portal's list has always excluded it.
@@ -49,12 +50,12 @@ export class ShipmentAccessService {
 
     await this.assertMayRead(liquidation.shipmentId, user);
 
-    if (user.role !== UserRole.CREW) {
+    if (!seesOnlyOwnFloat(user.role)) {
       return;
     }
 
     if (!user.staffId) {
-      throw new ForbiddenException('This crew account is not linked to a staff member.');
+      throw new ForbiddenException('This account is not linked to a staff member.');
     }
 
     if (liquidation.custodianId !== user.staffId) {
@@ -74,12 +75,12 @@ export class ShipmentAccessService {
    * widens it.
    */
   accountScopeFor(user: RequestUser): string | null {
-    if (user.role !== UserRole.CREW) {
+    if (!seesOnlyOwnFloat(user.role)) {
       return null;
     }
 
     if (!user.staffId) {
-      throw new ForbiddenException('This crew account is not linked to a staff member.');
+      throw new ForbiddenException('This account is not linked to a staff member.');
     }
 
     return user.staffId;

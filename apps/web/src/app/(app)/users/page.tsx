@@ -253,7 +253,7 @@ export default function UsersPage() {
         </div>
         <Button
           onClick={() => {
-            setValues({ role: String(UserRole.OPERATIONS), isActive: true });
+            setValues({ role: String(UserRole.DISPATCHER), isActive: true });
             setCreating(true);
           }}
         >

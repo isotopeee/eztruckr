@@ -37,26 +37,21 @@ const OFFICE_BEYOND_DISPATCH = [
   UserRole.MANAGEMENT,
 ] as const;
 
-/** Everyone who works a trip from a desk and holds cash for it. */
-const DISPATCH_ROLES = [UserRole.OPERATIONS, UserRole.DISPATCH_MANAGER] as const;
+/** The office roles that hold a float, and so have a staff row to show. */
+const DISPATCH_ROLES = [UserRole.DISPATCH_MANAGER, UserRole.DISPATCHER] as const;
 
-/**
- * Works a trip from a desk too, but holds no cash and has no staff row — so
- * not in `DISPATCH_ROLES`, which is also the list that opens /my-record.
- */
-const EVERY_DESK = [...OFFICE_BEYOND_DISPATCH, ...DISPATCH_ROLES, UserRole.DISPATCHER] as const;
+const EVERY_DESK = [...OFFICE_BEYOND_DISPATCH, ...DISPATCH_ROLES] as const;
 
-/** Who keeps the operational directories: the dispatch manager and the dispatcher. */
-const KEEPS_DIRECTORIES = [UserRole.DISPATCH_MANAGER, UserRole.DISPATCHER] as const;
+/** Who keeps the operational directories: the dispatch manager alone. */
+const KEEPS_DIRECTORIES = [UserRole.DISPATCH_MANAGER] as const;
 
 /**
  * Who may open each master data screen. Imported by `resources.tsx` as well, so
  * the door and the room are the same decision.
  *
- * THE DISPATCHER IS ABSENT FROM ALL BUT ROUTES, which is the narrowing this map
- * was written for: they book trips against these lists all day and keep none of
- * them. Their manager keeps the operational ones — a dispatcher who needs a new
- * client asks the person sitting next to them, not accounting.
+ * THE DISPATCHER IS ABSENT FROM ALL OF THEM: they keep none of these lists,
+ * and read them only through the pickers on their own liquidation. Their
+ * manager keeps the operational ones.
  *
  * STAFF IS NARROWER STILL, and neither dispatch role is on it: `eligibleRoles`
  * decides who may be handed a trip's cash, so editing this table is how someone
@@ -68,9 +63,7 @@ export const PAGE_ROLES = {
   clients: [...OFFICE_BEYOND_DISPATCH, ...KEEPS_DIRECTORIES],
   thirdParties: [...OFFICE_BEYOND_DISPATCH, ...KEEPS_DIRECTORIES],
   payees: [...OFFICE_BEYOND_DISPATCH, ...KEEPS_DIRECTORIES],
-  // The one list that describes this company's own operation rather than
-  // somebody outside it, and the one a dispatcher keeps.
-  routes: EVERY_DESK,
+  routes: [...OFFICE_BEYOND_DISPATCH, ...KEEPS_DIRECTORIES],
   expenseCategories: OFFICE_BEYOND_DISPATCH,
   commissionRules: OFFICE_BEYOND_DISPATCH,
   // NOT a master data screen — a ledger. It is in this map anyway because the

@@ -267,25 +267,33 @@ describe('what the trip is owed', () => {
     if (!available) return;
 
     await act(() =>
-      charges.addAdditionalCharge(SHIPMENT_ID, {
-        description: 'Extra drop',
-        amount: '2500.00',
-        isCommissionable: false,
-      }),
+      charges.addAdditionalCharge(
+        SHIPMENT_ID,
+        {
+          description: 'Extra drop',
+          amount: '2500.00',
+          isCommissionable: false,
+        },
+        asAccounting(),
+      ),
     );
 
     await act(() =>
-      charges.addBillableExpense(SHIPMENT_ID, {
-        expenseCategoryId: null,
-        description: 'Port charges',
-        amount: '1500.00',
-        spentAt: '2026-08-11T00:00:00.000Z',
-        isCommissionable: false,
-        payeeId: null,
-        liquidationLineId: null,
-        referenceNumber: null,
-        receiptId: null,
-      }),
+      charges.addBillableExpense(
+        SHIPMENT_ID,
+        {
+          expenseCategoryId: null,
+          description: 'Port charges',
+          amount: '1500.00',
+          spentAt: '2026-08-11T00:00:00.000Z',
+          isCommissionable: false,
+          payeeId: null,
+          liquidationLineId: null,
+          referenceNumber: null,
+          receiptId: null,
+        },
+        asAccounting(),
+      ),
     );
 
     const [summary, profit] = await Promise.all([
@@ -314,28 +322,36 @@ describe('what the trip is owed', () => {
     if (!available) return;
 
     await act(() =>
-      charges.addAdditionalCharge(SHIPMENT_ID, {
-        description: 'Extra drop',
-        amount: '2500.00',
-        isCommissionable: false,
-      }),
+      charges.addAdditionalCharge(
+        SHIPMENT_ID,
+        {
+          description: 'Extra drop',
+          amount: '2500.00',
+          isCommissionable: false,
+        },
+        asAccounting(),
+      ),
     );
 
     // Billed BELOW cost, so the row that reads `amount` instead of
     // `billedAmount` fails rather than coinciding.
     await act(() =>
-      charges.addBillableExpense(SHIPMENT_ID, {
-        expenseCategoryId: null,
-        description: 'Port charges',
-        amount: '1500.00',
-        billedAmount: '1200.00',
-        spentAt: '2026-08-11T00:00:00.000Z',
-        isCommissionable: false,
-        payeeId: null,
-        liquidationLineId: null,
-        referenceNumber: null,
-        receiptId: null,
-      }),
+      charges.addBillableExpense(
+        SHIPMENT_ID,
+        {
+          expenseCategoryId: null,
+          description: 'Port charges',
+          amount: '1500.00',
+          billedAmount: '1200.00',
+          spentAt: '2026-08-11T00:00:00.000Z',
+          isCommissionable: false,
+          payeeId: null,
+          liquidationLineId: null,
+          referenceNumber: null,
+          receiptId: null,
+        },
+        asAccounting(),
+      ),
     );
 
     await pay('20000.00');

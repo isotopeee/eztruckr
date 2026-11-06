@@ -39,7 +39,7 @@ const userFields = z.object({
    * Required for the roles in `ROLES_LINKED_TO_STAFF` and forbidden for every
    * other, but for two different reasons. A CREW login that resolved to nobody
    * would see an empty portal, because the link IS its scope key. The two
-   * office cash holders — OPERATIONS and DISPATCH_MANAGER — are not confined to
+   * office cash holders — DISPATCH_MANAGER and DISPATCHER — are not confined to
    * their own trips at all, and are linked so the system can tell which of the
    * floats out there are theirs to explain. An office login that resolved to a
    * person without needing to would be silently narrowed to that person's

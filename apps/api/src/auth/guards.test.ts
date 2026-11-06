@@ -89,7 +89,7 @@ describe('RolesGuard', () => {
 
   it('admits a permitted role', () => {
     const guard = new RolesGuard(
-      reflectorReturning({ [ROLES_KEY]: [UserRole.ADMINISTRATOR, UserRole.OPERATIONS] }),
+      reflectorReturning({ [ROLES_KEY]: [UserRole.ADMINISTRATOR, UserRole.DISPATCHER] }),
     );
     expect(guard.canActivate(contextWith(admin))).toBe(true);
   });

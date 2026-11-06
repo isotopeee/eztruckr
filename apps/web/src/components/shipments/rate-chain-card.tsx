@@ -102,10 +102,7 @@ export function RateChainCard({ shipment }: { shipment: Shipment }) {
   // the dispatch manager records, accounting approves.
   const mayVerifyCutPayment =
     user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
-  const mayRecordCutPayment =
-    mayVerifyCutPayment ||
-    user?.role === UserRole.DISPATCH_MANAGER ||
-    user?.role === UserRole.DISPATCHER;
+  const mayRecordCutPayment = mayVerifyCutPayment || user?.role === UserRole.DISPATCH_MANAGER;
   // The API nulls the base for a dispatcher; the section goes with it rather
   // than reading "not computed yet" about figures that exist.
   const mayReadCommissionBase = user?.role !== UserRole.DISPATCHER;

@@ -63,10 +63,7 @@ export function BookingDetailsDialog({ shipment }: { shipment: Shipment }) {
    * the server naming how many were paid.
    */
   const mayEdit =
-    (user?.role === UserRole.ADMINISTRATOR ||
-      user?.role === UserRole.OPERATIONS ||
-      user?.role === UserRole.DISPATCH_MANAGER ||
-      user?.role === UserRole.DISPATCHER) &&
+    (user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.DISPATCH_MANAGER) &&
     areBookingDetailsCorrectable(shipment.status);
 
   if (!mayEdit) {

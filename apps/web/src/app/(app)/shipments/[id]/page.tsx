@@ -53,9 +53,10 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
 
   const data = shipment.data;
   const isCrew = user?.role === UserRole.CREW;
-  // Works the trip without its cash or margin: no liquidation, allowances,
-  // allowance requests, settlement, gas deduction or gross profit. The API
-  // refuses every route behind these cards for this role.
+  // Sees their own liquidation and nothing else of the trip's cash or margin:
+  // no allowances, allowance requests, settlement, gas deduction or gross
+  // profit. The API refuses every route behind those cards for this role, and
+  // scopes the liquidation list to accounts they are custodian of.
   const isDispatcher = user?.role === UserRole.DISPATCHER;
 
   return (
@@ -100,7 +101,7 @@ export default function Page({ params }: { params: Promise<{ id: string }> }) {
           {/* The crew's half of the trip's cash: what they were given, and what
               they spent it on. Both are theirs to see and one is theirs to
               fill in, so neither is hidden from a crew session. */}
-          {isDispatcher ? null : <LiquidationCard shipment={data} />}
+          <LiquidationCard shipment={data} />
           {/* Office-only. A crew member's pay is not shown in the portal at
               all — see the crew-visibility table in HANDOFF.md, including what
               that costs them. The API refuses the routes behind this card too,

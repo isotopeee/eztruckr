@@ -11,7 +11,7 @@ import {
   UserRole,
   type Page as ApiPage,
 } from '@eztruckr/types';
-import { AlertTriangle, BadgeCheck, HandCoins, Undo2 } from 'lucide-react';
+import { AlertTriangle, BadgeCheck, HandCoins, Receipt, Undo2 } from 'lucide-react';
 import { HealthStatusCard } from '@/components/health-status-card';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,7 +23,7 @@ import {
   listAllowanceRequestQueue,
   listLiquidations,
 } from '@/lib/liquidation-api';
-import { listClientPaymentQueue, shipmentKeys } from '@/lib/shipment-api';
+import { listClientPaymentQueue, listShipmentChargeQueue, shipmentKeys } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
 
 /** The counts an office user can actually see, keyed to a screen they can open. */
@@ -70,13 +70,11 @@ export default function DashboardPage() {
               on: a truck does not leave until the cash does. */}
           <PendingAllowanceRequestsCard role={user?.role} />
           <PaymentsToVerifyCard role={user?.role} />
-          {/* Both read trip cash, which the dispatcher is refused. */}
-          {user?.role === UserRole.DISPATCHER ? null : (
-            <>
-              <OutstandingAllowancesCard />
-              <ReturnedForCorrectionCard />
-            </>
-          )}
+          <ChargesToApproveCard role={user?.role} />
+          {/* Every float on every trip, which the dispatcher is refused. */}
+          {user?.role === UserRole.DISPATCHER ? null : <OutstandingAllowancesCard />}
+          {/* Scoped by the API to the dispatcher's own accounts. */}
+          <ReturnedForCorrectionCard />
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {TILES.map((tile) => (
@@ -191,7 +189,7 @@ function PendingAllowanceRequestsCard({ role }: { role: UserRole | undefined }) 
  */
 function PaymentsToVerifyCard({ role }: { role: UserRole | undefined }) {
   const verifies = role === UserRole.ADMINISTRATOR || role === UserRole.ACCOUNTING;
-  const records = verifies || role === UserRole.DISPATCH_MANAGER || role === UserRole.DISPATCHER;
+  const records = verifies || role === UserRole.DISPATCH_MANAGER;
 
   const payments = useQuery({
     queryKey: shipmentKeys.paymentQueue(PaymentVerificationStatus.UNVERIFIED),
@@ -247,6 +245,69 @@ function PaymentsToVerifyCard({ role }: { role: UserRole | undefined }) {
                 ) : null}
               </div>
               <span className="shrink-0 tabular-nums">{formatMoney(payment.amount)}</span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Charges a dispatcher added and accounting has not approved.
+ *
+ * THE SAME LIST READ FROM TWO SIDES, like the payments above: accounting sees
+ * work to do, a dispatcher sees what they are waiting on. Until approved, none
+ * of these count toward what the client owes. Decided on the trip.
+ */
+function ChargesToApproveCard({ role }: { role: UserRole | undefined }) {
+  const approves = role === UserRole.ADMINISTRATOR || role === UserRole.ACCOUNTING;
+  const adds = approves || role === UserRole.DISPATCHER;
+
+  const charges = useQuery({
+    queryKey: shipmentKeys.chargeQueue(PaymentVerificationStatus.UNVERIFIED),
+    queryFn: () => listShipmentChargeQueue(PaymentVerificationStatus.UNVERIFIED),
+    enabled: adds,
+  });
+
+  const rows = charges.data ?? [];
+
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <Card className={approves ? 'border-amber-500/40' : undefined}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Receipt
+            className={approves ? 'h-4 w-4 text-amber-600' : 'text-muted-foreground h-4 w-4'}
+          />
+          {approves ? 'Charges to approve' : 'Charges awaiting accounting'}
+        </CardTitle>
+        <CardDescription>
+          {rows.length} charge{rows.length === 1 ? '' : 's'} added by dispatch and not yet approved
+          — none of them count toward what the client owes until then.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="divide-y text-sm">
+          {rows.map((charge) => (
+            <li key={charge.id} className="flex items-start justify-between gap-3 py-2">
+              <div className="min-w-0">
+                <Link
+                  href={`/shipments/${charge.shipmentId}`}
+                  className="font-medium underline-offset-4 hover:underline"
+                >
+                  {charge.shipmentNumber ?? 'Trip'}
+                </Link>
+                <p className="text-muted-foreground truncate text-xs">
+                  {charge.kind === 'billable-expense' ? 'Billable expense' : 'Additional charge'}
+                  {charge.description ? ` · ${charge.description}` : ''}
+                  {charge.recordedByName ? ` · added by ${charge.recordedByName}` : ''}
+                </p>
+              </div>
+              <span className="shrink-0 tabular-nums">{formatMoney(charge.amount)}</span>
             </li>
           ))}
         </ul>

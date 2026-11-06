@@ -36,12 +36,8 @@ import { PAGE_ROLES } from '@/lib/nav';
  * different question: reading master data is wide, because a picker cannot
  * offer what the session may not fetch.
  */
-const WRITE_OPERATIONAL = [
-  UserRole.ADMINISTRATOR,
-  UserRole.DISPATCH_MANAGER,
-  UserRole.DISPATCHER,
-] as const;
-const WRITE_ROUTES = [...WRITE_OPERATIONAL, UserRole.OPERATIONS] as const;
+const WRITE_OPERATIONAL = [UserRole.ADMINISTRATOR, UserRole.DISPATCH_MANAGER] as const;
+const WRITE_ROUTES = WRITE_OPERATIONAL;
 const WRITE_STAFF = [UserRole.ADMINISTRATOR] as const;
 const WRITE_FINANCIAL = [UserRole.ADMINISTRATOR, UserRole.ACCOUNTING] as const;
 
@@ -50,7 +46,6 @@ const WRITE_PAYEES = [
   UserRole.ADMINISTRATOR,
   UserRole.ACCOUNTING,
   UserRole.DISPATCH_MANAGER,
-  UserRole.DISPATCHER,
 ] as const;
 
 /** Renders a nullable cell without printing "null" at anyone. */

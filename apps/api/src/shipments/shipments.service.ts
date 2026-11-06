@@ -65,6 +65,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { collectReferences, type ReferenceProbe } from '../master-data/removal';
 import { auditFields, dateToIso, decimalToString } from '../master-data/serialize';
 import { receivablesOf, type Receivable } from './receivables';
+import { CHARGE_MAY_HAVE_MOVED_BASE, COUNTED_CHARGE } from './shipment-revenue';
 
 /**
  * Shipments: the rate chain, the crew, and the status lifecycle.
@@ -231,11 +232,11 @@ export class ShipmentsService {
 
     const [billable, additional, payments] = await Promise.all([
       this.prisma.client.billableExpense.findMany({
-        where: { shipmentId },
+        where: { shipmentId, ...COUNTED_CHARGE },
         select: { shipmentId: true, amount: true, billedAmount: true, liquidationId: true },
       }),
       this.prisma.client.additionalCharge.findMany({
-        where: { shipmentId },
+        where: { shipmentId, ...COUNTED_CHARGE },
         select: { shipmentId: true, amount: true },
       }),
       this.prisma.client.clientPayment.findMany({
@@ -1321,11 +1322,11 @@ export class ShipmentsService {
 
     const [expense, charge] = await Promise.all([
       this.prisma.client.billableExpense.findFirst({
-        where: { shipmentId, updatedAt: { gt: computedAt } },
+        where: { shipmentId, updatedAt: { gt: computedAt }, ...CHARGE_MAY_HAVE_MOVED_BASE },
         select: { id: true },
       }),
       this.prisma.client.additionalCharge.findFirst({
-        where: { shipmentId, updatedAt: { gt: computedAt } },
+        where: { shipmentId, updatedAt: { gt: computedAt }, ...CHARGE_MAY_HAVE_MOVED_BASE },
         select: { id: true },
       }),
     ]);
@@ -1395,6 +1396,24 @@ export class ShipmentsService {
     if (undecided > 0) {
       throw new ConflictException(
         `Shipment ${shipment.shipmentNumber} has ${undecided} allowance request(s) still awaiting accounting. Approve or decline them before closing the trip — a closed trip can no longer release cash, so the ask could never be answered.`,
+      );
+    }
+
+    // The same stranding, for a charge a dispatcher added: approving it is a
+    // charge write, which a closed trip refuses. Returned lines do not block —
+    // accounting has already said they do not count.
+    const waiting = {
+      shipmentId: shipment.id,
+      verificationStatus: PaymentVerificationStatus.UNVERIFIED,
+    };
+    const [pendingBillable, pendingAdditional] = await Promise.all([
+      this.prisma.client.billableExpense.count({ where: waiting }),
+      this.prisma.client.additionalCharge.count({ where: waiting }),
+    ]);
+
+    if (pendingBillable + pendingAdditional > 0) {
+      throw new ConflictException(
+        `Shipment ${shipment.shipmentNumber} has ${pendingBillable + pendingAdditional} charge(s) still awaiting accounting. Approve or return them before closing the trip — a closed trip's charges can no longer change, so they could never be approved.`,
       );
     }
 

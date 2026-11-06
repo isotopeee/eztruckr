@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import { crewRoleSchema } from '../codes/crew-role';
 import { paymentMethodSchema } from '../codes/payment-method';
-import { paymentVerificationStatusSchema } from '../codes/payment-verification-status';
+import {
+  isPaymentVerificationStatus,
+  PaymentVerificationStatus,
+  paymentVerificationStatusSchema,
+} from '../codes/payment-verification-status';
 import { isShipmentStatus, shipmentStatusSchema, ShipmentStatus } from '../codes/shipment-status';
 import {
   auditFieldsSchema,
@@ -68,6 +72,27 @@ const chargeLineFields = {
  * paid. What the company absorbed is the gap between them, and is derived
  * wherever it is shown rather than stored anywhere.
  */
+/**
+ * Has accounting approved this charge line?
+ *
+ * The same states as a client payment, with one difference that is the point:
+ * ONLY A VERIFIED LINE COUNTS. An UNVERIFIED or RETURNED charge is visible on
+ * the trip and reaches neither the client's amount due nor the commission
+ * base, gross profit or the P&L. A dispatcher's entry arrives UNVERIFIED;
+ * accounting's is VERIFIED on the spot.
+ */
+const chargeVerificationFields = {
+  verificationStatus: paymentVerificationStatusSchema,
+  /** Who approved or returned it. Null while UNVERIFIED, and on rows that predate approval. */
+  verifiedBy: z.string().nullable(),
+  verifiedByName: z.string().nullable(),
+  verifiedAt: z.string().nullable(),
+  /** Why accounting returned it. Present on RETURNED only. */
+  verificationNote: z.string().nullable(),
+  /** Who typed the line in. */
+  recordedByName: z.string().nullable(),
+};
+
 export const billableExpenseSchema = auditFieldsSchema.extend({
   id: z.string(),
   shipmentId: z.string(),
@@ -127,6 +152,7 @@ export const billableExpenseSchema = auditFieldsSchema.extend({
   referenceNumber: z.string().nullable(),
   receiptId: z.string().nullable(),
   receiptFileName: z.string().nullable(),
+  ...chargeVerificationFields,
 });
 
 export type BillableExpense = z.infer<typeof billableExpenseSchema>;
@@ -195,9 +221,53 @@ export const additionalChargeSchema = auditFieldsSchema.extend({
   description: z.string(),
   amount: z.string(),
   isCommissionable: z.boolean(),
+  ...chargeVerificationFields,
 });
 
 export type AdditionalCharge = z.infer<typeof additionalChargeSchema>;
+
+/** Handing a charge back to whoever added it, with the reason that makes it actionable. */
+export const returnShipmentChargeSchema = z.object({
+  reason: requiredText(400),
+});
+
+export type ReturnShipmentChargeInput = z.infer<typeof returnShipmentChargeSchema>;
+
+export const SHIPMENT_CHARGE_KINDS = ['billable-expense', 'additional-charge'] as const;
+export const shipmentChargeKindSchema = z.enum(SHIPMENT_CHARGE_KINDS);
+export type ShipmentChargeKind = z.infer<typeof shipmentChargeKindSchema>;
+
+/**
+ * One line of accounting's cross-trip queue: either kind of charge, flattened
+ * to what the queue shows. The decision is taken on the trip.
+ */
+export const shipmentChargeQueueItemSchema = z.object({
+  kind: shipmentChargeKindSchema,
+  id: z.string(),
+  shipmentId: z.string(),
+  shipmentNumber: z.string().nullable(),
+  clientName: z.string().nullable(),
+  description: z.string().nullable(),
+  /** What the client would be charged: `billedAmount` for a billable expense. */
+  amount: z.string(),
+  verificationStatus: paymentVerificationStatusSchema,
+  verificationNote: z.string().nullable(),
+  recordedByName: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+export type ShipmentChargeQueueItem = z.infer<typeof shipmentChargeQueueItemSchema>;
+
+/** Defaults to UNVERIFIED, the only state anybody is waiting on. */
+export const shipmentChargeQueueQuerySchema = z.object({
+  verificationStatus: z.coerce
+    .number()
+    .int()
+    .refine(isPaymentVerificationStatus, 'unknown verification status')
+    .default(PaymentVerificationStatus.UNVERIFIED),
+});
+
+export type ShipmentChargeQueueQuery = z.infer<typeof shipmentChargeQueueQuerySchema>;
 
 export const createAdditionalChargeSchema = z.object(chargeLineFields);
 export type CreateAdditionalChargeInput = z.infer<typeof createAdditionalChargeSchema>;

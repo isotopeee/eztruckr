@@ -51,7 +51,8 @@ const id = (name: string) => testUuid('0000000c', name);
  * — who stamped the row — and there is one seeded user to stamp with.
  */
 const administrator = { role: UserRole.ADMINISTRATOR } as RequestUser;
-const dispatcher = { role: UserRole.OPERATIONS } as RequestUser;
+// The dispatch manager: the one dispatch role that books, and so may undo, a trip.
+const dispatcher = { role: UserRole.DISPATCH_MANAGER } as RequestUser;
 
 async function cleanup(): Promise<void> {
   await withTriggersSuspended(prisma, async (tx) => {

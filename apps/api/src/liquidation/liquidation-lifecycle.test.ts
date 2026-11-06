@@ -1906,7 +1906,7 @@ describe('a dispatch manager holds cash without being on the truck', () => {
    */
   it.each([
     ['a dispatch manager', UserRole.DISPATCH_MANAGER],
-    ['a dispatcher', UserRole.OPERATIONS],
+    ['a dispatcher', UserRole.DISPATCHER],
   ])('refuses %s the crew’s account', async (_label, role) => {
     if (!available) return;
 
@@ -2209,9 +2209,26 @@ describe('a crew session reaches only the cash it answers for', () => {
     await expect(
       access.assertMayReadAccount(
         driverAccountId,
-        officeCashHolderActor(UserRole.OPERATIONS, dispatcherId),
+        officeCashHolderActor(UserRole.DISPATCH_MANAGER, dispatcherId),
       ),
     ).resolves.toBeUndefined();
+  });
+
+  /**
+   * THE DISPATCHER IS THE EXCEPTION among office roles: they hold a float and
+   * see only that one, the way crew do. The trip is still theirs to read.
+   */
+  it('lets a dispatcher read their own account and nobody else’s', async () => {
+    if (!available) return;
+
+    const { driverAccountId } = await tripWithTwoAccounts('dispatcher-read');
+
+    await expect(
+      access.assertMayReadAccount(
+        driverAccountId,
+        officeCashHolderActor(UserRole.DISPATCHER, dispatcherId),
+      ),
+    ).rejects.toThrow(/only see what you were made custodian of/i);
   });
 
   /**

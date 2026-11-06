@@ -127,14 +127,14 @@ describe('code sets are permanent', () => {
   it('pins every UserRole code', () => {
     expect(UserRole).toEqual({
       ADMINISTRATOR: 1,
-      OPERATIONS: 2,
+      // 2 was OPERATIONS, retired and never to be reused.
       ACCOUNTING: 3,
       MANAGEMENT: 4,
       CREW: 5,
       // Appended, never renumbered: a dispatch manager dispatches trips and
       // holds their cash floats, which no earlier role combined.
       DISPATCH_MANAGER: 6,
-      // Appended: dispatches like the manager, with no access to trip cash.
+      // Appended: holds a float and proposes a trip's charges; books nothing.
       DISPATCHER: 7,
     });
   });

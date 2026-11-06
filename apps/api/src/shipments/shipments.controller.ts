@@ -352,8 +352,8 @@ export class ShipmentsController {
    * What a DISPATCHER is not shown: the commission base and the gas deduction
    * cut from it, and the trip's float. The same fields `CAN_READ_TRIP_MARGIN`
    * and `CAN_READ_TRIP_CASH` withhold by route, nulled here because they ride
-   * on the shipment itself. The rate chain and the receivable stay — booking
-   * the trip and recording what the client paid are this role's job.
+   * on the shipment itself. `totalAdvanced` is every custodian's float summed,
+   * and a dispatcher sees only their own. The rate chain and the balance stay.
    */
   private redactMarginForDispatcher(shipment: Shipment, user: RequestUser): Shipment {
     if (user.role !== UserRole.DISPATCHER) {

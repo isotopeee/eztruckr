@@ -143,7 +143,7 @@ custodianId IS NULL` — because two accounts with nobody on them cannot be told
 - **Who received cash ≠ who answers for it**, and **a custodian need not be on the truck** —
   `assertMayHoldTripCash`, for all three callers.
 - **Holding a float and editing one are different permissions.**
-  `assertMayAccountForThisFloat` confines CREW, OPERATIONS and DISPATCH_MANAGER to their own
+  `assertMayAccountForThisFloat` confines CREW, DISPATCHER and DISPATCH_MANAGER to their own
   accounts; ADMINISTRATOR and ACCOUNTING act on any and hold none. The **unnamed** account admits
   whoever is in a slot and nobody else — an office cash holder holds nothing until somebody with
   `CAN_WRITE_SHIPMENT_MONEY` names them to it.
@@ -299,7 +299,14 @@ is decorative.
 dispatch manager is kept out of `CAN_WRITE_SHIPMENT_MONEY` because they hold trip cash and releasing
 it would let them pay themselves — a rule about money going OUT to the crew. A client's payment comes
 IN, reaches nobody's pocket, moves no variance, and is unverified until accounting says otherwise.
-OPERATIONS is absent on the payee/rate-chain reasoning: the supervisor answers for what was sold.
+DISPATCHER is absent on the payee/rate-chain reasoning: the supervisor answers for what was sold.
+
+**A DISPATCHER adds charges; ACCOUNTING approves them.** `billable_expense` and `additional_charge`
+carry the same `PaymentVerificationStatus` columns, with the opposite rule: **only VERIFIED counts**
+— `COUNTED_CHARGE` in `shipment-revenue.ts` is spread into the amount due, receivables, gross profit,
+P&L and commission chain reads. A charge decides what the client owes, so it stays accounting's
+until approved. Closing is refused while one is UNVERIFIED (approving is a charge write, which a
+closed trip refuses). Staleness ignores UNVERIFIED lines (`CHARGE_MAY_HAVE_MOVED_BASE`).
 
 `PaymentVerificationStatus` 1 UNVERIFIED · 2 VERIFIED · 3 RETURNED, on the payment row rather than in a
 second table. **The liquidation's shape, not the allowance request's**: there is no ask preceding the
@@ -618,11 +625,14 @@ Kept so a later session sees what was decided rather than reopening it.
 | Does a dispatch manager earn a commission?              | **No** — enforced by the crew-role CHECK.                       |
 | May they approve or release?                            | **No.** They are custodians; it would be their own float.       |
 | Are they scoped like crew?                              | Only for liquidations. They read every trip.                    |
+| `UserRole.OPERATIONS` (2)                               | **Retired.** Logins moved to DISPATCHER (7); code never reused. |
+| What does a DISPATCHER (7) do?                          | Reads trips + balance, own float, proposes charges. Books none. |
+| May a dispatcher see other floats on a trip?            | **No** — `seesOnlyOwnFloat`, like crew. DM reads all of them.   |
 | May a dispatcher hold a trip's float?                   | **Yes.** `StaffRole.DISPATCHER` (4), appended for it.           |
-| Reuse DISPATCH_MANAGER for them instead?                | **No** — it carries master data a dispatcher may not keep.      |
 | Must a dispatcher's login name a staff row?             | **Yes**, like the other two cash holders. Backfilled.           |
 | Who may edit a dispatcher's liquidation?                | Them, plus ADMINISTRATOR and ACCOUNTING. Not a colleague.       |
-| May a dispatcher keep clients, trucks, payees?          | **No** — their manager does. Routes are the exception.          |
+| May a dispatcher keep any master data, routes included? | **No** — their manager does.                                    |
+| Does a dispatcher's unapproved charge count anywhere?   | **No.** Not the balance, base, margin or P&L until approved.    |
 | May either dispatch role edit `staff`?                  | **No.** It decides who may hold cash.                           |
 | May the gross rate be corrected after DRAFT?            | **Yes**, until a commission is paid, by admin or DM.            |
 | May client, date, route or container be fixed after it? | **Yes**, to LIQUIDATED — client and route also stop at paid.    |

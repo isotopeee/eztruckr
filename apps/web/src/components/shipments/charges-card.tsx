@@ -4,12 +4,15 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   liquidationAccountLabel,
+  PAYMENT_VERIFICATION_STATUS_LABELS,
+  PaymentVerificationStatus,
   UserRole,
   type ExpenseCategory,
   type Page,
   type Shipment,
+  type ShipmentChargeKind,
 } from '@eztruckr/types';
-import { Loader2, Paperclip } from 'lucide-react';
+import { Check, Loader2, Paperclip, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { ConfirmDeleteButton } from '@/components/confirm-delete-button';
 import { PayeeField } from '@/components/shipments/payee-field';
@@ -33,10 +36,12 @@ import { liquidationKeys, listShipmentLiquidations } from '@/lib/liquidation-api
 import {
   addAdditionalCharge,
   addBillableExpense,
+  approveShipmentCharge,
   listAdditionalCharges,
   listBillableExpenses,
   removeAdditionalCharge,
   removeBillableExpense,
+  returnShipmentCharge,
   shipmentKeys,
 } from '@/lib/shipment-api';
 import { useCurrentUser } from '@/lib/use-current-user';
@@ -80,16 +85,155 @@ import { useCurrentUser } from '@/lib/use-current-user';
  * The commissionable switch is the only thing on this screen that changes what
  * the crew are paid, which is why it is labelled with its consequence rather
  * than just its name.
+ *
+ * A DISPATCHER ADDS LINES TOO, and accounting approves them. Mirrors
+ * `CAN_ADD_SHIPMENT_CHARGE` and `CAN_APPROVE_SHIPMENT_CHARGE`: a line awaiting
+ * approval, or returned, counts toward nothing — the API leaves it out of the
+ * amount due, the commission base and the margin. Once approved it is closed to
+ * the dispatcher, so their remove button goes with it.
  */
 export function ChargesCard({ shipment }: { shipment: Shipment }) {
   const { user } = useCurrentUser();
-  const canEdit = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
+  const canApprove = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
+  const access = { canAdd: canApprove || user?.role === UserRole.DISPATCHER, canApprove };
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
-      <BillableExpenses shipment={shipment} canEdit={canEdit} />
-      <AdditionalCharges shipment={shipment} canEdit={canEdit} />
+      <BillableExpenses shipment={shipment} {...access} />
+      <AdditionalCharges shipment={shipment} {...access} />
     </div>
+  );
+}
+
+interface ChargeAccess {
+  canAdd: boolean;
+  canApprove: boolean;
+}
+
+/** May this session remove this line? Accounting always; a dispatcher until it is approved. */
+function mayRemove(access: ChargeAccess, verificationStatus: number): boolean {
+  return (
+    access.canApprove ||
+    (access.canAdd && verificationStatus !== PaymentVerificationStatus.VERIFIED)
+  );
+}
+
+/**
+ * Where a line stands with accounting, and accounting's two buttons.
+ *
+ * NOTHING IS SHOWN FOR AN APPROVED LINE: that is every line accounting typed,
+ * and a badge on all of them would bury the few that are waiting.
+ */
+function ChargeApproval({
+  shipmentId,
+  kind,
+  line,
+  canApprove,
+}: {
+  shipmentId: string;
+  kind: ShipmentChargeKind;
+  line: {
+    id: string;
+    verificationStatus: number;
+    verificationNote: string | null;
+    recordedByName: string | null;
+    verifiedByName: string | null;
+  };
+  canApprove: boolean;
+}) {
+  const invalidate = useChargeInvalidation();
+  const [returning, setReturning] = useState(false);
+  const [reason, setReason] = useState('');
+
+  const approve = useMutation({
+    mutationFn: () => approveShipmentCharge(shipmentId, kind, line.id),
+    onSuccess: invalidate,
+    onError: reportFailure,
+  });
+
+  const sendBack = useMutation({
+    mutationFn: () => returnShipmentCharge(shipmentId, kind, line.id, reason),
+    onSuccess: () => {
+      setReturning(false);
+      setReason('');
+      invalidate();
+    },
+    onError: reportFailure,
+  });
+
+  if (line.verificationStatus === PaymentVerificationStatus.VERIFIED) {
+    return null;
+  }
+
+  const waiting = line.verificationStatus === PaymentVerificationStatus.UNVERIFIED;
+
+  return (
+    <div className="space-y-1">
+      <p className={`text-xs ${waiting ? 'text-amber-600' : 'text-destructive'}`}>
+        {PAYMENT_VERIFICATION_STATUS_LABELS[line.verificationStatus as PaymentVerificationStatus]}
+        {line.recordedByName ? ` · added by ${line.recordedByName}` : ''}
+        {' · not counted until approved'}
+      </p>
+      {!waiting && line.verificationNote ? (
+        <p className="text-destructive text-xs">
+          {line.verifiedByName ? `${line.verifiedByName}: ` : ''}
+          {line.verificationNote}
+        </p>
+      ) : null}
+      {canApprove && waiting ? (
+        returning ? (
+          <form
+            className="flex gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              sendBack.mutate();
+            }}
+          >
+            <Input
+              aria-label="Reason for returning"
+              placeholder="Why it cannot be approved"
+              required
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              className="h-8"
+            />
+            <Button type="submit" size="sm" variant="outline" disabled={sendBack.isPending}>
+              Return
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setReturning(false)}>
+              Cancel
+            </Button>
+          </form>
+        ) : (
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={approve.isPending}
+              onClick={() => approve.mutate()}
+            >
+              <Check className="size-4" />
+              Approve
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setReturning(true)}>
+              <Undo2 className="size-4" />
+              Return
+            </Button>
+          </div>
+        )
+      ) : null}
+    </div>
+  );
+}
+
+/** Said once under each form for a dispatcher, so a missing total is not a surprise. */
+function NeedsApprovalNote({ canApprove }: { canApprove: boolean }) {
+  if (canApprove) return null;
+
+  return (
+    <p className="text-muted-foreground text-xs">
+      Accounting approves each line before it counts toward what the client owes.
+    </p>
   );
 }
 
@@ -127,7 +271,8 @@ function isZeroMoney(value: string): boolean {
   return /^-?0*(\.0*)?$/.test(value.trim());
 }
 
-function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: boolean }) {
+function BillableExpenses({ shipment, canAdd, canApprove }: { shipment: Shipment } & ChargeAccess) {
+  const canEdit = canAdd;
   const invalidate = useChargeInvalidation();
 
   const [draft, setDraft] = useState({
@@ -317,6 +462,12 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                     </p>
                   ) : null}
                   {line.isCommissionable ? <Badge variant="secondary">Commissionable</Badge> : null}
+                  <ChargeApproval
+                    shipmentId={shipment.id}
+                    kind="billable-expense"
+                    line={line}
+                    canApprove={canApprove}
+                  />
                 </div>
                 <div className="flex shrink-0 items-start gap-2">
                   {/* The BILLED figure leads, because this list sits beside the
@@ -332,7 +483,7 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
                       </span>
                     ) : null}
                   </span>
-                  {canEdit ? (
+                  {mayRemove({ canAdd, canApprove }, line.verificationStatus) ? (
                     <ConfirmDeleteButton
                       label={`Remove ${line.expenseCategoryName ?? line.description ?? 'expense'}`}
                       title="Remove this billable expense?"
@@ -551,6 +702,7 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
               {add.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Add expense
             </Button>
+            <NeedsApprovalNote canApprove={canApprove} />
           </form>
         ) : null}
       </CardContent>
@@ -558,7 +710,12 @@ function BillableExpenses({ shipment, canEdit }: { shipment: Shipment; canEdit: 
   );
 }
 
-function AdditionalCharges({ shipment, canEdit }: { shipment: Shipment; canEdit: boolean }) {
+function AdditionalCharges({
+  shipment,
+  canAdd,
+  canApprove,
+}: { shipment: Shipment } & ChargeAccess) {
+  const canEdit = canAdd;
   const invalidate = useChargeInvalidation();
   const [draft, setDraft] = useState({ description: '', amount: '', isCommissionable: false });
 
@@ -598,7 +755,7 @@ function AdditionalCharges({ shipment, canEdit }: { shipment: Shipment; canEdit:
         ) : (
           <ul className="divide-y text-sm">
             {rows.map((line) => (
-              <li key={line.id} className="flex items-center justify-between gap-3 py-2">
+              <li key={line.id} className="flex items-start justify-between gap-3 py-2">
                 <div className="min-w-0">
                   <p className="truncate">{line.description}</p>
                   {line.isCommissionable ? (
@@ -606,10 +763,16 @@ function AdditionalCharges({ shipment, canEdit }: { shipment: Shipment; canEdit:
                       Commissionable
                     </Badge>
                   ) : null}
+                  <ChargeApproval
+                    shipmentId={shipment.id}
+                    kind="additional-charge"
+                    line={line}
+                    canApprove={canApprove}
+                  />
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="tabular-nums">{formatMoney(line.amount)}</span>
-                  {canEdit ? (
+                  {mayRemove({ canAdd, canApprove }, line.verificationStatus) ? (
                     <ConfirmDeleteButton
                       label={`Remove ${line.description}`}
                       title="Remove this charge?"
@@ -680,6 +843,7 @@ function AdditionalCharges({ shipment, canEdit }: { shipment: Shipment; canEdit:
               {add.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Add line
             </Button>
+            <NeedsApprovalNote canApprove={canApprove} />
           </form>
         ) : null}
       </CardContent>

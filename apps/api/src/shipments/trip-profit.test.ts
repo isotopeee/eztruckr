@@ -6,7 +6,8 @@ import {
   testUuid,
   withTriggersSuspended,
 } from '@eztruckr/db';
-import { CrewRole, LiquidationStatus, ShipmentStatus } from '@eztruckr/types';
+import { CrewRole, LiquidationStatus, ShipmentStatus, UserRole } from '@eztruckr/types';
+import type { RequestUser } from '../auth/request-user';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { LIQUIDATION_INCLUDE, toLiquidation } from '../liquidation/liquidation.service';
 import type { PrismaService } from '../prisma/prisma.service';
@@ -187,6 +188,16 @@ beforeEach(async () => {
 });
 
 const act = <T>(fn: () => Promise<T>): Promise<T> => withActor({ userId: adminId }, fn);
+
+/** Charges written by accounting count at once; that is what these suites assume. */
+const asAccounting = (): RequestUser => ({
+  id: adminId,
+  email: 'admin@eztruckr.ph',
+  name: 'Accounting',
+  role: UserRole.ACCOUNTING,
+  isActive: true,
+  staffId: null,
+});
 
 /**
  * The FIELD-LEVEL complaints inside a validation failure.
@@ -416,11 +427,15 @@ describe('recording a cost the company paid itself', () => {
     await setStatus(ShipmentStatus.LIQUIDATED);
 
     const charge = await act(() =>
-      charges.addAdditionalCharge(SHIPMENT_ID, {
-        description: 'Detention',
-        amount: '1000.00',
-        isCommissionable: false,
-      }),
+      charges.addAdditionalCharge(
+        SHIPMENT_ID,
+        {
+          description: 'Detention',
+          amount: '1000.00',
+          isCommissionable: false,
+        },
+        asAccounting(),
+      ),
     );
 
     expect(charge.description).toBe('Detention');
@@ -462,11 +477,15 @@ describe('recording a cost the company paid itself', () => {
     // The charge stops in the same place, now that it runs this far.
     await expect(
       act(() =>
-        charges.addAdditionalCharge(SHIPMENT_ID, {
-          description: 'Detention',
-          amount: '500.00',
-          isCommissionable: false,
-        }),
+        charges.addAdditionalCharge(
+          SHIPMENT_ID,
+          {
+            description: 'Detention',
+            amount: '500.00',
+            isCommissionable: false,
+          },
+          asAccounting(),
+        ),
       ),
     ).rejects.toThrow(/closed; its charges are now part of the record/i);
   });
@@ -486,17 +505,21 @@ describe('a billable expense carries what a company-paid one does', () => {
     if (!available) return;
 
     const expense = await act(() =>
-      charges.addBillableExpense(SHIPMENT_ID, {
-        expenseCategoryId: fuelCategoryId,
-        description: 'Crane hire, rebilled',
-        amount: '4500.00',
-        spentAt: '2026-08-11T00:00:00.000Z',
-        isCommissionable: false,
-        payeeId,
-        liquidationLineId: null,
-        referenceNumber: 'SI-88214',
-        receiptId: null,
-      }),
+      charges.addBillableExpense(
+        SHIPMENT_ID,
+        {
+          expenseCategoryId: fuelCategoryId,
+          description: 'Crane hire, rebilled',
+          amount: '4500.00',
+          spentAt: '2026-08-11T00:00:00.000Z',
+          isCommissionable: false,
+          payeeId,
+          liquidationLineId: null,
+          referenceNumber: 'SI-88214',
+          receiptId: null,
+        },
+        asAccounting(),
+      ),
     );
 
     expect(expense.spentAt).toBe('2026-08-11T00:00:00.000Z');
@@ -513,17 +536,21 @@ describe('a billable expense carries what a company-paid one does', () => {
 
     const errors = await validationErrors(() =>
       act(() =>
-        charges.addBillableExpense(SHIPMENT_ID, {
-          expenseCategoryId: toggleCategoryId,
-          description: null,
-          amount: '100.00',
-          spentAt: '2026-08-11T00:00:00.000Z',
-          isCommissionable: false,
-          payeeId: null,
-          liquidationLineId: null,
-          referenceNumber: null,
-          receiptId: null,
-        }),
+        charges.addBillableExpense(
+          SHIPMENT_ID,
+          {
+            expenseCategoryId: toggleCategoryId,
+            description: null,
+            amount: '100.00',
+            spentAt: '2026-08-11T00:00:00.000Z',
+            isCommissionable: false,
+            payeeId: null,
+            liquidationLineId: null,
+            referenceNumber: null,
+            receiptId: null,
+          },
+          asAccounting(),
+        ),
       ),
     );
 
@@ -541,17 +568,21 @@ describe('a billable expense carries what a company-paid one does', () => {
     if (!available) return;
 
     const expense = await act(() =>
-      charges.addBillableExpense(SHIPMENT_ID, {
-        expenseCategoryId: null,
-        description: 'Port charges, no category',
-        amount: '900.00',
-        spentAt: '2026-08-11T00:00:00.000Z',
-        isCommissionable: false,
-        payeeId: null,
-        liquidationLineId: null,
-        referenceNumber: null,
-        receiptId: null,
-      }),
+      charges.addBillableExpense(
+        SHIPMENT_ID,
+        {
+          expenseCategoryId: null,
+          description: 'Port charges, no category',
+          amount: '900.00',
+          spentAt: '2026-08-11T00:00:00.000Z',
+          isCommissionable: false,
+          payeeId: null,
+          liquidationLineId: null,
+          referenceNumber: null,
+          receiptId: null,
+        },
+        asAccounting(),
+      ),
     );
 
     expect(expense.expenseCategoryId).toBeNull();
@@ -668,18 +699,22 @@ describe('gross profit', () => {
     billedAmount?: string,
   ) {
     return act(() =>
-      charges.addBillableExpense(SHIPMENT_ID, {
-        expenseCategoryId: fuelCategoryId,
-        description: null,
-        amount,
-        billedAmount,
-        spentAt: '2026-08-11T00:00:00.000Z',
-        isCommissionable: false,
-        payeeId,
-        liquidationLineId,
-        referenceNumber: null,
-        receiptId: null,
-      }),
+      charges.addBillableExpense(
+        SHIPMENT_ID,
+        {
+          expenseCategoryId: fuelCategoryId,
+          description: null,
+          amount,
+          billedAmount,
+          spentAt: '2026-08-11T00:00:00.000Z',
+          isCommissionable: false,
+          payeeId,
+          liquidationLineId,
+          referenceNumber: null,
+          receiptId: null,
+        },
+        asAccounting(),
+      ),
     );
   }
 
@@ -687,26 +722,34 @@ describe('gross profit', () => {
     if (!available) return;
 
     await act(() =>
-      charges.addBillableExpense(SHIPMENT_ID, {
-        // Uncategorised, which is still legal for a rebill and is the case
-        // that freezes `payeeRequired` false with nothing to take a rule from.
-        expenseCategoryId: null,
-        description: 'Port charges, rebilled',
-        amount: '2000.00',
-        spentAt: '2026-08-11T00:00:00.000Z',
-        isCommissionable: false,
-        payeeId: null,
-        liquidationLineId: null,
-        referenceNumber: null,
-        receiptId: null,
-      }),
+      charges.addBillableExpense(
+        SHIPMENT_ID,
+        {
+          // Uncategorised, which is still legal for a rebill and is the case
+          // that freezes `payeeRequired` false with nothing to take a rule from.
+          expenseCategoryId: null,
+          description: 'Port charges, rebilled',
+          amount: '2000.00',
+          spentAt: '2026-08-11T00:00:00.000Z',
+          isCommissionable: false,
+          payeeId: null,
+          liquidationLineId: null,
+          referenceNumber: null,
+          receiptId: null,
+        },
+        asAccounting(),
+      ),
     );
     await act(() =>
-      charges.addAdditionalCharge(SHIPMENT_ID, {
-        description: 'Extra drop',
-        amount: '1500.00',
-        isCommissionable: false,
-      }),
+      charges.addAdditionalCharge(
+        SHIPMENT_ID,
+        {
+          description: 'Extra drop',
+          amount: '1500.00',
+          isCommissionable: false,
+        },
+        asAccounting(),
+      ),
     );
 
     const profit = await grossProfits.forShipment(SHIPMENT_ID);
@@ -851,7 +894,12 @@ describe('gross profit', () => {
     expect(miscounted.cost).toBe('9000.00');
 
     await act(() =>
-      charges.updateBillableExpense(SHIPMENT_ID, rebill.id, { liquidationLineId: account.lineId }),
+      charges.updateBillableExpense(
+        SHIPMENT_ID,
+        rebill.id,
+        { liquidationLineId: account.lineId },
+        asAccounting(),
+      ),
     );
 
     const corrected = await grossProfits.forShipment(SHIPMENT_ID);
@@ -937,7 +985,12 @@ describe('gross profit', () => {
     const line = await addBillableExpense('2000.00');
 
     await act(() =>
-      charges.updateBillableExpense(SHIPMENT_ID, line.id, { billedAmount: '1500.00' }),
+      charges.updateBillableExpense(
+        SHIPMENT_ID,
+        line.id,
+        { billedAmount: '1500.00' },
+        asAccounting(),
+      ),
     );
 
     const discounted = await grossProfits.forShipment(SHIPMENT_ID);
@@ -948,7 +1001,9 @@ describe('gross profit', () => {
 
     // And the reverse: correcting the cost leaves the agreed price alone,
     // which is the failure a service deriving one from the other would cause.
-    await act(() => charges.updateBillableExpense(SHIPMENT_ID, line.id, { amount: '2400.00' }));
+    await act(() =>
+      charges.updateBillableExpense(SHIPMENT_ID, line.id, { amount: '2400.00' }, asAccounting()),
+    );
 
     const costlier = await grossProfits.forShipment(SHIPMENT_ID);
 
@@ -979,7 +1034,9 @@ describe('gross profit', () => {
     expect(over.liquidationVariance).toBe('400.00');
 
     // Sign says which way round it is, so a reader is never left guessing.
-    await act(() => charges.updateBillableExpense(SHIPMENT_ID, over.id, { amount: '1500.00' }));
+    await act(() =>
+      charges.updateBillableExpense(SHIPMENT_ID, over.id, { amount: '1500.00' }, asAccounting()),
+    );
 
     const rows = await charges.listBillableExpenses(SHIPMENT_ID);
     const under = rows.find((row) => row.id === over.id);
@@ -1039,7 +1096,7 @@ describe('gross profit', () => {
     const account = await addLiquidation(staffId, '2000.0000');
     const first = await addBillableExpense('2000.00', account.lineId);
 
-    await act(() => charges.removeBillableExpense(SHIPMENT_ID, first.id));
+    await act(() => charges.removeBillableExpense(SHIPMENT_ID, first.id, asAccounting()));
 
     const replacement = await addBillableExpense('2000.00', account.lineId, '1500.00');
 

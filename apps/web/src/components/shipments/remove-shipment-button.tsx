@@ -55,10 +55,7 @@ export function RemoveShipmentButton({ shipment }: { shipment: Shipment }) {
   });
 
   const isAdministrator = user?.role === UserRole.ADMINISTRATOR;
-  const isDispatch =
-    user?.role === UserRole.OPERATIONS ||
-    user?.role === UserRole.DISPATCH_MANAGER ||
-    user?.role === UserRole.DISPATCHER;
+  const isDispatch = user?.role === UserRole.DISPATCH_MANAGER;
   const isDraft = isShipmentRemovableByDispatch(shipment.status);
 
   if (!isAdministrator && !(isDispatch && isDraft)) {

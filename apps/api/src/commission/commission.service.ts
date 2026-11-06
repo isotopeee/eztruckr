@@ -22,6 +22,7 @@ import { computeCommissionChain, type CommissionChain } from './commission-chain
 import { CommissionComputationError } from './commission-errors';
 import { runCommissionStrategy, type StrategyRule } from './commission-strategies';
 import { resolveCommissionRule } from './rule-resolver';
+import { COUNTED_CHARGE } from '../shipments/shipment-revenue';
 
 /**
  * THE single source of truth for commission arithmetic.
@@ -45,8 +46,12 @@ const SHIPMENT_INCLUDE = {
   // is something the client is charged. What a rebill cost is irrelevant to
   // what the crew earn on it, and paying commission on the outlay rather than
   // the recovery would pay the crew a share of money that never came in.
-  billableExpenses: { select: { billedAmount: true, isCommissionable: true } },
-  additionalCharges: { select: { amount: true, isCommissionable: true } },
+  // Approved lines only — see `COUNTED_CHARGE`.
+  billableExpenses: {
+    where: COUNTED_CHARGE,
+    select: { billedAmount: true, isCommissionable: true },
+  },
+  additionalCharges: { where: COUNTED_CHARGE, select: { amount: true, isCommissionable: true } },
   liquidations: { select: { status: true } },
   commissions: { select: { id: true, payoutLineId: true, role: true } },
 } satisfies Prisma.ShipmentInclude;

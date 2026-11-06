@@ -8,8 +8,10 @@ import {
   createShipmentSchema,
   markThirdPartyCommissionPaidSchema,
   returnClientPaymentSchema,
+  returnShipmentChargeSchema,
   recordClientPaymentSchema,
   setGasRateOverrideSchema,
+  shipmentChargeQueueQuerySchema,
   shipmentListQuerySchema,
   transitionShipmentSchema,
   updateAdditionalChargeSchema,
@@ -46,6 +48,8 @@ export class CreateBillableExpenseDto extends createZodDto(createBillableExpense
 export class UpdateBillableExpenseDto extends createZodDto(updateBillableExpenseSchema) {}
 export class CreateAdditionalChargeDto extends createZodDto(createAdditionalChargeSchema) {}
 export class UpdateAdditionalChargeDto extends createZodDto(updateAdditionalChargeSchema) {}
+export class ReturnShipmentChargeDto extends createZodDto(returnShipmentChargeSchema) {}
+export class ShipmentChargeQueueQueryDto extends createZodDto(shipmentChargeQueueQuerySchema) {}
 
 export class CreateCompanyPaidExpenseDto extends createZodDto(createCompanyPaidExpenseSchema) {}
 export class UpdateCompanyPaidExpenseDto extends createZodDto(updateCompanyPaidExpenseSchema) {}

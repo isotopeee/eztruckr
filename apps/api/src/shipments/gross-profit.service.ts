@@ -9,6 +9,7 @@ import {
 } from '@eztruckr/types';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  COUNTED_CHARGE,
   revenueAsStrings,
   revenueOf,
   type AdditionalChargeRow,
@@ -58,11 +59,11 @@ export class GrossProfitService {
         // same read supplies the billable total the cost side needs, so the
         // two halves cannot disagree about which rebills exist.
         this.prisma.client.billableExpense.findMany({
-          where: { shipmentId },
+          where: { shipmentId, ...COUNTED_CHARGE },
           select: { amount: true, billedAmount: true, liquidationId: true },
         }),
         this.prisma.client.additionalCharge.findMany({
-          where: { shipmentId },
+          where: { shipmentId, ...COUNTED_CHARGE },
           select: { amount: true },
         }),
         this.prisma.client.companyPaidExpense.findMany({

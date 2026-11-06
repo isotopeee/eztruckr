@@ -5,7 +5,8 @@ import {
   withTriggersSuspended,
   type ExtendedPrismaClient,
 } from '@eztruckr/db';
-import { CrewRole, LiquidationStatus, ShipmentStatus } from '@eztruckr/types';
+import { CrewRole, LiquidationStatus, ShipmentStatus, UserRole } from '@eztruckr/types';
+import type { RequestUser } from '../auth/request-user';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { OperationExpensesService } from '../operation-expenses/operation-expenses.service';
 import type { PrismaService } from '../prisma/prisma.service';
@@ -223,6 +224,16 @@ async function book(
 
 const act = <T>(fn: () => Promise<T>): Promise<T> => withActor({ userId: adminId }, fn);
 
+/** Charges written by accounting count at once; that is what these suites assume. */
+const asAccounting = (): RequestUser => ({
+  id: adminId,
+  email: 'admin@eztruckr.ph',
+  name: 'Accounting',
+  role: UserRole.ACCOUNTING,
+  isActive: true,
+  staffId: null,
+});
+
 const report = (window: { from?: string; to?: string } = AUGUST) =>
   act(() => profitAndLoss.report(window));
 
@@ -326,26 +337,34 @@ function recordOverhead(amount: string, spentAt: string) {
  */
 async function furnish(shipmentId: string): Promise<void> {
   await act(() =>
-    charges.addAdditionalCharge(shipmentId, {
-      description: 'Detention',
-      amount: '2000.00',
-      isCommissionable: false,
-    }),
+    charges.addAdditionalCharge(
+      shipmentId,
+      {
+        description: 'Detention',
+        amount: '2000.00',
+        isCommissionable: false,
+      },
+      asAccounting(),
+    ),
   );
 
   await act(() =>
-    charges.addBillableExpense(shipmentId, {
-      expenseCategoryId: CATEGORY_ID,
-      description: 'Crane hire, rebilled short',
-      amount: '4500.00',
-      billedAmount: '3000.00',
-      spentAt: IN_AUGUST,
-      isCommissionable: false,
-      payeeId: PAYEE_ID,
-      liquidationLineId: null,
-      referenceNumber: null,
-      receiptId: null,
-    }),
+    charges.addBillableExpense(
+      shipmentId,
+      {
+        expenseCategoryId: CATEGORY_ID,
+        description: 'Crane hire, rebilled short',
+        amount: '4500.00',
+        billedAmount: '3000.00',
+        spentAt: IN_AUGUST,
+        isCommissionable: false,
+        payeeId: PAYEE_ID,
+        liquidationLineId: null,
+        referenceNumber: null,
+        receiptId: null,
+      },
+      asAccounting(),
+    ),
   );
 
   await act(() =>
@@ -736,11 +755,15 @@ describe('how final the figure is', () => {
     // answered here off rows already loaded rather than by a query per trip,
     // which is exactly why the rule is a shared predicate.
     await act(() =>
-      charges.addAdditionalCharge(AUGUST_TRIP, {
-        description: 'Port fee, discovered late',
-        amount: '800.00',
-        isCommissionable: true,
-      }),
+      charges.addAdditionalCharge(
+        AUGUST_TRIP,
+        {
+          description: 'Port fee, discovered late',
+          amount: '800.00',
+          isCommissionable: true,
+        },
+        asAccounting(),
+      ),
     );
 
     const trip = await grossProfits.forShipment(AUGUST_TRIP);

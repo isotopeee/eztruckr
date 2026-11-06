@@ -1,5 +1,33 @@
-import { money, sum, toDecimalString, type Money } from '@eztruckr/types';
+import {
+  money,
+  PaymentVerificationStatus,
+  sum,
+  toDecimalString,
+  type Money,
+} from '@eztruckr/types';
 import type { PrismaService } from '../prisma/prisma.service';
+
+/**
+ * The charge lines that COUNT: approved ones. Spread into the `where` of every
+ * read that adds charges up — the amount due, the receivables list, gross
+ * profit, the P&L and the commission chain — so that a line a dispatcher added
+ * and accounting has not approved, or has returned, reaches none of them.
+ *
+ * One constant rather than five spellings, because the five have to agree: a
+ * pending charge on the invoice but not in the margin is the defect this file
+ * exists to refuse.
+ */
+export const COUNTED_CHARGE = { verificationStatus: PaymentVerificationStatus.VERIFIED } as const;
+
+/**
+ * The lines whose change makes computed commissions stale: anything but a
+ * line still waiting. Approving one, returning an approved one, or accounting
+ * editing one all move the base; a dispatcher adding or editing a pending line
+ * does not.
+ */
+export const CHARGE_MAY_HAVE_MOVED_BASE = {
+  verificationStatus: { not: PaymentVerificationStatus.UNVERIFIED },
+} as const;
 
 /**
  * What the trip earned, and therefore what the client owes for it.
@@ -95,10 +123,13 @@ export async function shipmentRevenue(
 ): Promise<ShipmentRevenue> {
   const [billable, additional] = await Promise.all([
     prisma.client.billableExpense.findMany({
-      where: { shipmentId },
+      where: { shipmentId, ...COUNTED_CHARGE },
       select: { amount: true, billedAmount: true, liquidationId: true },
     }),
-    prisma.client.additionalCharge.findMany({ where: { shipmentId }, select: { amount: true } }),
+    prisma.client.additionalCharge.findMany({
+      where: { shipmentId, ...COUNTED_CHARGE },
+      select: { amount: true },
+    }),
   ]);
 
   return revenueOf(grossRate, billable, additional);

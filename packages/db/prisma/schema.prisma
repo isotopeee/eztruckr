@@ -212,6 +212,7 @@ model User {
   billableExpensesCreated BillableExpense[] @relation("BillableExpenseCreatedBy")
   billableExpensesUpdated BillableExpense[] @relation("BillableExpenseUpdatedBy")
   billableExpensesDeleted BillableExpense[] @relation("BillableExpenseDeletedBy")
+  billableExpensesVerified BillableExpense[] @relation("BillableExpenseVerifiedBy")
 
   companyPaidExpensesCreated CompanyPaidExpense[] @relation("CompanyPaidExpenseCreatedBy")
   companyPaidExpensesUpdated CompanyPaidExpense[] @relation("CompanyPaidExpenseUpdatedBy")
@@ -224,6 +225,7 @@ model User {
   additionalChargesCreated AdditionalCharge[] @relation("AdditionalChargeCreatedBy")
   additionalChargesUpdated AdditionalCharge[] @relation("AdditionalChargeUpdatedBy")
   additionalChargesDeleted AdditionalCharge[] @relation("AdditionalChargeDeletedBy")
+  additionalChargesVerified AdditionalCharge[] @relation("AdditionalChargeVerifiedBy")
 
   clientPaymentsCreated ClientPayment[] @relation("ClientPaymentCreatedBy")
   clientPaymentsUpdated ClientPayment[] @relation("ClientPaymentUpdatedBy")
@@ -1823,6 +1825,24 @@ model BillableExpense {
   receiptId String?  @db.Uuid
   receipt   Receipt? @relation(fields: [receiptId], references: [id], onDelete: SetNull)
 
+  /// Code set: PaymentVerificationStatus (1 UNVERIFIED, 2 VERIFIED, 3 RETURNED).
+  ///
+  /// A dispatcher may add this line; accounting approves it. ONLY A VERIFIED
+  /// ROW COUNTS — toward the client's amount due, the commission base, gross
+  /// profit and the P&L. Unlike a client payment, an unverified charge counts
+  /// for nothing: what the client owes is accounting's decision. Rows written by
+  /// accounting or an administrator are VERIFIED on the spot, stamped to them.
+  ///
+  /// DEFAULTS TO VERIFIED because every row before this column was accounting's.
+  /// A VERIFIED row with no `verifiedBy` predates approval; the service always
+  /// stamps one.
+  verificationStatus Int       @default(2) @db.SmallInt
+  verifiedBy         String?   @db.Uuid
+  verifiedByUser     User?     @relation("BillableExpenseVerifiedBy", fields: [verifiedBy], references: [id], onDelete: Restrict)
+  verifiedAt         DateTime? @db.Timestamptz(6)
+  /// Why accounting returned it. Required on RETURNED and forbidden otherwise.
+  verificationNote   String?
+
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
   createdBy     String?   @db.Uuid
@@ -1838,6 +1858,7 @@ model BillableExpense {
   @@index([expenseCategoryId])
   @@index([payeeId])
   @@index([deletedAt])
+  @@index([verificationStatus])
   @@map("billable_expense")
 }
 
@@ -2005,6 +2026,24 @@ model AdditionalCharge {
   amount           Decimal @db.Decimal(15, 4)
   isCommissionable Boolean @default(false)
 
+  /// Code set: PaymentVerificationStatus (1 UNVERIFIED, 2 VERIFIED, 3 RETURNED).
+  ///
+  /// A dispatcher may add this line; accounting approves it. ONLY A VERIFIED
+  /// ROW COUNTS — toward the client's amount due, the commission base, gross
+  /// profit and the P&L. Unlike a client payment, an unverified charge counts
+  /// for nothing: what the client owes is accounting's decision. Rows written by
+  /// accounting or an administrator are VERIFIED on the spot, stamped to them.
+  ///
+  /// DEFAULTS TO VERIFIED because every row before this column was accounting's.
+  /// A VERIFIED row with no `verifiedBy` predates approval; the service always
+  /// stamps one.
+  verificationStatus Int       @default(2) @db.SmallInt
+  verifiedBy         String?   @db.Uuid
+  verifiedByUser     User?     @relation("AdditionalChargeVerifiedBy", fields: [verifiedBy], references: [id], onDelete: Restrict)
+  verifiedAt         DateTime? @db.Timestamptz(6)
+  /// Why accounting returned it. Required on RETURNED and forbidden otherwise.
+  verificationNote   String?
+
   createdAt     DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(6)
   createdBy     String?   @db.Uuid
@@ -2017,6 +2056,7 @@ model AdditionalCharge {
 
   @@index([shipmentId])
   @@index([deletedAt])
+  @@index([verificationStatus])
   @@map("additional_charge")
 }
 

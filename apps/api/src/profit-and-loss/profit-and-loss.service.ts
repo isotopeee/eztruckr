@@ -13,6 +13,7 @@ import {
 import { OperationExpensesService } from '../operation-expenses/operation-expenses.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { grossProfitOf } from '../shipments/gross-profit.service';
+import { CHARGE_MAY_HAVE_MOVED_BASE, COUNTED_CHARGE } from '../shipments/shipment-revenue';
 import { computationIsStale } from '../shipments/shipments.service';
 
 /**
@@ -100,11 +101,14 @@ export class ProfitAndLossService {
             // after commissions were computed. `isComputationStale` answers that
             // with a query per trip; here the rows are already in hand.
             updatedAt: true,
+            // Every status is loaded, because staleness asks about returned
+            // lines too; only VERIFIED ones are summed — see `counted`.
+            verificationStatus: true,
           },
         }),
         this.prisma.client.additionalCharge.findMany({
           where: { shipmentId: { in: shipmentIds } },
-          select: { shipmentId: true, amount: true, updatedAt: true },
+          select: { shipmentId: true, amount: true, updatedAt: true, verificationStatus: true },
         }),
         this.prisma.client.companyPaidExpense.findMany({
           where: { shipmentId: { in: shipmentIds } },
@@ -135,8 +139,8 @@ export class ProfitAndLossService {
       const profit = grossProfitOf(shipment.id, {
         grossRate: shipment.grossRate,
         tpcAmount: shipment.tpcAmount,
-        billable: shipmentBillable,
-        additional: shipmentAdditional,
+        billable: counted(shipmentBillable),
+        additional: counted(shipmentAdditional),
         companyPaid: companyPaidBy.get(shipment.id) ?? [],
         commissions: commissionsBy.get(shipment.id) ?? [],
         liquidations: liquidationsBy.get(shipment.id) ?? [],
@@ -276,18 +280,30 @@ function groupByShipment<T extends { shipmentId: string }>(rows: readonly T[]): 
   return grouped;
 }
 
-/** A charge on this trip moved after its commissions were computed. */
+/**
+ * The approved lines — `COUNTED_CHARGE`, applied in memory because this report
+ * loads every status for the staleness rule below.
+ */
+function counted<T extends { verificationStatus: number }>(rows: readonly T[]): T[] {
+  return rows.filter((row) => row.verificationStatus === COUNTED_CHARGE.verificationStatus);
+}
+
+/**
+ * A charge on this trip moved after its commissions were computed. A line
+ * still waiting on accounting moves nothing — `CHARGE_MAY_HAVE_MOVED_BASE`.
+ */
 function changedSince(
   computedAt: Date | null,
-  billable: readonly { updatedAt: Date }[],
-  additional: readonly { updatedAt: Date }[],
+  billable: readonly { updatedAt: Date; verificationStatus: number }[],
+  additional: readonly { updatedAt: Date; verificationStatus: number }[],
 ): boolean {
   if (computedAt === null) return false;
 
-  return (
-    billable.some((row) => row.updatedAt > computedAt) ||
-    additional.some((row) => row.updatedAt > computedAt)
-  );
+  const moved = (row: { updatedAt: Date; verificationStatus: number }) =>
+    row.updatedAt > computedAt &&
+    row.verificationStatus !== CHARGE_MAY_HAVE_MOVED_BASE.verificationStatus.not;
+
+  return billable.some(moved) || additional.some(moved);
 }
 
 /**

@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
-import { UserRole, type Liquidation, type LiquidationLine } from '@eztruckr/types';
+import { seesOnlyOwnFloat, type Liquidation, type LiquidationLine } from '@eztruckr/types';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import type { RequestUser } from '../auth/request-user';
 import {
@@ -51,8 +51,8 @@ export class LiquidationController {
   // --- through the trip ------------------------------------------------
 
   /**
-   * Every account on the trip — except to a crew member, who sees only their
-   * own.
+   * Every account on the trip — except to a crew member or a dispatcher, who
+   * see only their own.
    *
    * A LIQUIDATION IS ONE PERSON'S ACCOUNT OF CASH THEY HELD, and a crew member
    * has no more claim to a colleague's than to their commission: it names what
@@ -76,7 +76,7 @@ export class LiquidationController {
 
     const accounts = await this.liquidations.listForShipment(shipmentId);
 
-    if (user.role !== UserRole.CREW) {
+    if (!seesOnlyOwnFloat(user.role)) {
       return accounts;
     }
 

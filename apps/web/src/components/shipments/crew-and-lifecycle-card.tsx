@@ -62,10 +62,7 @@ export function CrewAndLifecycleCard({ shipment }: { shipment: Shipment }) {
    * they copy.
    */
   const canDispatch =
-    user?.role === UserRole.ADMINISTRATOR ||
-    user?.role === UserRole.OPERATIONS ||
-    user?.role === UserRole.DISPATCH_MANAGER ||
-    user?.role === UserRole.DISPATCHER;
+    user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.DISPATCH_MANAGER;
   const canClose = user?.role === UserRole.ADMINISTRATOR || user?.role === UserRole.ACCOUNTING;
 
   useEffect(() => {

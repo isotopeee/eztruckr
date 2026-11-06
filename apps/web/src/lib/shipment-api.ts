@@ -22,6 +22,8 @@ import type {
   RecordClientPaymentInput,
   RuleCoverageReport,
   Shipment,
+  ShipmentChargeKind,
+  ShipmentChargeQueueItem,
   ShipmentSortField,
   ShipmentStatus,
   SortDirection,
@@ -51,6 +53,7 @@ export const shipmentKeys = {
   payments: (id: string) => ['shipments', id, 'payments'] as const,
   /** Accounting's queue across every trip, keyed by the status it is showing. */
   paymentQueue: (status: number) => ['shipments', 'payments', 'queue', status] as const,
+  chargeQueue: (status: number) => ['shipments', 'charges', 'queue', status] as const,
   grossProfit: (id: string) => ['shipments', id, 'gross-profit'] as const,
   commissions: (id: string) => ['shipments', id, 'commissions'] as const,
   crewPay: (id: string) => ['shipments', id, 'crew-pay'] as const,
@@ -334,6 +337,37 @@ export function returnClientPaymentForCorrection(
   reason: string,
 ): Promise<ClientPayment> {
   return apiFetch<ClientPayment>(`/client-payments/${paymentId}/return`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+/** Charges awaiting (or returned by) accounting, across every trip. */
+export function listShipmentChargeQueue(
+  verificationStatus: number,
+): Promise<ShipmentChargeQueueItem[]> {
+  return apiFetch<ShipmentChargeQueueItem[]>(
+    `/shipment-charges${queryString({ verificationStatus })}`,
+  );
+}
+
+/** Approving one: from now on it counts toward the trip's money. */
+export function approveShipmentCharge(
+  shipmentId: string,
+  kind: ShipmentChargeKind,
+  lineId: string,
+): Promise<unknown> {
+  return apiFetch(`/shipments/${shipmentId}/${kind}s/${lineId}/approve`, { method: 'POST' });
+}
+
+/** Handing one back, with the reason. */
+export function returnShipmentCharge(
+  shipmentId: string,
+  kind: ShipmentChargeKind,
+  lineId: string,
+  reason: string,
+): Promise<unknown> {
+  return apiFetch(`/shipments/${shipmentId}/${kind}s/${lineId}/return`, {
     method: 'POST',
     body: JSON.stringify({ reason }),
   });
