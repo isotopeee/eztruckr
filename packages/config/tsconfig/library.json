@@ -4,6 +4,7 @@
   "extends": "./base.json",
   "compilerOptions": {
     "composite": false,
+    "incremental": false,
     "rootDir": "src",
     "outDir": "dist"
   }

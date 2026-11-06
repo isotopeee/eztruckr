@@ -63,6 +63,7 @@ export const shipmentKeys = {
 
 export interface ShipmentFilters {
   page: number;
+  pageSize: number;
   search: string;
   status?: ShipmentStatus;
   /** Ordering, applied by the API — the list is paginated, so it has to be. */
@@ -74,6 +75,7 @@ export function listShipments(filters: ShipmentFilters): Promise<Page<Shipment>>
   return apiFetch<Page<Shipment>>(
     `/shipments${queryString({
       page: filters.page,
+      pageSize: filters.pageSize,
       search: filters.search,
       status: filters.status,
       sort: filters.sort,

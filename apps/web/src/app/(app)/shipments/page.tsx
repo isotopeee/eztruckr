@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SHIPMENT_STATUS_CODES,
   SHIPMENT_STATUS_LABELS,
@@ -18,6 +18,7 @@ import {
 } from '@eztruckr/types';
 import { ArrowDown, ArrowUp, ChevronsUpDown, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { ListPager } from '@/components/list-pager';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -79,6 +80,8 @@ export default function Page() {
   const [status, setStatus] = useState<string>(ALL);
   const [sort, setSort] = useState<ShipmentSortField>('date');
   const [direction, setDirection] = useState<SortDirection>('desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   /**
    * The money columns are dropped for crew rather than shown empty.
@@ -91,7 +94,8 @@ export default function Page() {
   const showRevenue = user?.role !== UserRole.CREW;
 
   const filters = {
-    page: 1,
+    page,
+    pageSize,
     search,
     status: status === ALL ? undefined : (Number(status) as ShipmentStatus),
     sort,
@@ -107,6 +111,9 @@ export default function Page() {
    * however many match, and label the result "by net rate".
    */
   const sortBy = (field: ShipmentSortField) => {
+    // A new ordering is a new list; page 3 of it is not where the reader was.
+    setPage(1);
+
     if (field === sort) {
       setDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
       return;
@@ -119,7 +126,18 @@ export default function Page() {
   const shipments = useQuery({
     queryKey: shipmentKeys.list(filters),
     queryFn: () => listShipments(filters),
+    // Keep the current page on screen while the next one loads, rather than
+    // collapsing the table to "Loading…" on every click of Next.
+    placeholderData: keepPreviousData,
   });
+
+  // Removals elsewhere can leave the reader on a page past the end, which would
+  // otherwise read "No shipments match" over a list that still has trips.
+  const total = shipments.data?.total ?? 0;
+  const lastPage = Math.max(1, Math.ceil(total / (shipments.data?.pageSize ?? 1)));
+  useEffect(() => {
+    if (shipments.data && page > lastPage) setPage(lastPage);
+  }, [shipments.data, page, lastPage]);
 
   // Mirrors `CAN_WRITE_SHIPMENTS`. The dispatcher books nothing.
   const canCreate =
@@ -148,12 +166,21 @@ export default function Page() {
               id="search"
               placeholder="Number, container, origin or destination"
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
             />
           </div>
           <div className="w-full space-y-1 sm:w-56">
             <Label htmlFor="status">Status</Label>
-            <Select value={status} onValueChange={setStatus}>
+            <Select
+              value={status}
+              onValueChange={(value) => {
+                setStatus(value);
+                setPage(1);
+              }}
+            >
               <SelectTrigger id="status">
                 <SelectValue />
               </SelectTrigger>
@@ -307,6 +334,20 @@ export default function Page() {
               </TableBody>
             </Table>
           )}
+          {shipments.data ? (
+            <ListPager
+              page={shipments.data.page}
+              pageSize={shipments.data.pageSize}
+              total={shipments.data.total}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                // Page 4 of 25-row pages is not page 4 of 100-row pages; start over.
+                setPageSize(size);
+                setPage(1);
+              }}
+              busy={shipments.isPlaceholderData}
+            />
+          ) : null}
         </CardContent>
       </Card>
     </div>
